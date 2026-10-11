@@ -64,8 +64,4 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   transition: background 0.1s ease;
 }
 .export-item:hover { background: var(--bg-hover); }
-.btn { border-radius: 7px; padding: 6px 14px; font-size: 13px; cursor: pointer; border: 1px solid transparent; transition: background 0.15s ease, opacity 0.15s ease; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
 </style>

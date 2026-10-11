@@ -103,7 +103,7 @@ function emptyText(): string {
 
     <div v-if="error" class="msg err" data-test="lag-error">{{ error }}</div>
 
-    <table class="table" data-test="global-lag-table">
+    <table class="table data-table" data-test="global-lag-table">
       <thead>
         <tr>
           <th>Group</th>
@@ -141,28 +141,16 @@ function emptyText(): string {
   border-radius: 7px; padding: 6px 9px; font-size: 13px; width: 220px;
   transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
-.search-input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--accent-soft); }
+.search-input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: var(--focus-ring); }
 .search-input::placeholder { color: var(--text-tertiary); }
-.btn {
-  border-radius: 7px; padding: 6px 13px; font-size: 13px; cursor: pointer;
-  border: 1px solid transparent;
-  transition: background 0.15s ease, opacity 0.15s ease;
-}
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
 .msg { padding: 8px 10px; font-size: 13px; margin-top: 10px; border-radius: 7px; }
 .msg.err { background: var(--danger-soft); color: var(--danger); }
+/* 表基座走全局 .data-table;这里留卡片化容器差异。 */
 .table {
-  margin-top: 12px; width: 100%; border-collapse: collapse; font-size: 13px;
+  margin-top: 12px;
   background: var(--bg-elevated); border: 1px solid var(--border);
   border-radius: var(--radius-md); overflow: hidden;
 }
-.table th {
-  text-align: left; padding: 8px 12px; color: var(--text-secondary);
-  font-weight: 600; border-bottom: 1px solid var(--border); background: var(--bg-subtle);
-}
-.table td { padding: 6px 12px; border-bottom: 1px solid var(--border); }
 .row.clickable { cursor: pointer; }
 .row.clickable:hover td { background: var(--bg-hover); }
 .mono { font-family: var(--mono); }

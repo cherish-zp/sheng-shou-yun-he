@@ -729,7 +729,7 @@ function nextPage(): void {
   gap: 10px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--topbar-bg);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
 }
@@ -835,10 +835,6 @@ function nextPage(): void {
   transition: background 0.1s ease, color 0.1s ease;
 }
 .fav-remove:hover { background: var(--danger-soft); color: var(--danger); }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
-.btn { border-radius: 9px; padding: 9px 20px; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid transparent; transition: background 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.primary { background: var(--accent); color: #fff; box-shadow: 0 1px 2px rgba(0, 113, 227, 0.3); }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
+/* 基座走全局 .btn;控制台执行按钮为大号圆角(局部修饰)。 */
+.btn { border-radius: 9px; padding: 9px 20px; font-weight: 500; }
 </style>

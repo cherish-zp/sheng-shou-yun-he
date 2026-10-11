@@ -13,9 +13,9 @@ export function ApplyUpdate(arg1:backend.ApplyUpdateRequest):Promise<void>;
 
 export function CHDeleteRow(arg1:service.CHDeleteRowRequest):Promise<void>;
 
-export function CHExecute(arg1:backend.CHExecuteRequest):Promise<Array<model.CHStatementResult>>;
+export function CHExecute(arg1:backend.ExecuteRequest):Promise<Array<model.CHStatementResult>>;
 
-export function CHPageRows(arg1:backend.CHPageRowsRequest):Promise<model.CHPageRowsResult>;
+export function CHPageRows(arg1:backend.PageRowsRequest):Promise<model.CHPageRowsResult>;
 
 export function CHPreviewCellUpdate(arg1:model.CHCellUpdateRequest):Promise<model.CHCellUpdatePreview>;
 
@@ -67,7 +67,7 @@ export function ESDeleteDoc(arg1:backend.EsDeleteDocRequest):Promise<void>;
 
 export function ESDsl(arg1:backend.EsDslRequest):Promise<model.EsDslResult>;
 
-export function ESExecute(arg1:backend.EsExecuteRequest):Promise<Array<model.EsStatementResult>>;
+export function ESExecute(arg1:backend.ExecuteRequest):Promise<Array<model.EsStatementResult>>;
 
 export function ESGetDoc(arg1:backend.EsGetDocRequest):Promise<model.EsDoc>;
 
@@ -105,7 +105,7 @@ export function HiveDeleteRow(arg1:model.HiveDeleteRowRequest):Promise<void>;
 
 export function HiveDropTable(arg1:backend.HiveTableRequest):Promise<void>;
 
-export function HiveExecute(arg1:backend.HiveExecuteRequest):Promise<Array<model.HiveStatementResult>>;
+export function HiveExecute(arg1:backend.DatabaseExecuteRequest):Promise<Array<model.HiveStatementResult>>;
 
 export function HiveExportTable(arg1:backend.HiveTableRequest):Promise<service.HiveExportTableResult>;
 
@@ -169,11 +169,11 @@ export function MysqlDeleteRow(arg1:service.MysqlDeleteRowRequest):Promise<void>
 
 export function MysqlDropTable(arg1:backend.MysqlDropTableRequest):Promise<void>;
 
-export function MysqlExecute(arg1:backend.MysqlExecuteRequest):Promise<Array<model.MysqlStatementResult>>;
+export function MysqlExecute(arg1:backend.DatabaseExecuteRequest):Promise<Array<model.MysqlStatementResult>>;
 
 export function MysqlExportTable(arg1:backend.MysqlExportTableRequest):Promise<service.MysqlExportTableResult>;
 
-export function MysqlPageRows(arg1:backend.MysqlPageRowsRequest):Promise<model.MysqlPageRowsResult>;
+export function MysqlPageRows(arg1:backend.PageRowsRequest):Promise<model.MysqlPageRowsResult>;
 
 export function MysqlPreviewCellUpdate(arg1:model.MysqlCellUpdateRequest):Promise<model.MysqlCellUpdatePreview>;
 

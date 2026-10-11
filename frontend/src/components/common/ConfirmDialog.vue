@@ -57,18 +57,15 @@ function onConfirm(): void {
 </template>
 
 <style scoped>
+/* 遮罩/容器/按钮基座走全局 .modal-backdrop/.modal/.btn;这里只留差异:
+   确认框层级更低、轻模糊,按钮为加大号(9px 圆角、加粗)。 */
 .modal-backdrop {
-  position: fixed; inset: 0; z-index: 100;
-  background: rgba(0, 0, 0, 0.32);
+  z-index: 100;
   -webkit-backdrop-filter: blur(2px);
   backdrop-filter: blur(2px);
-  display: flex; align-items: center; justify-content: center;
 }
 .modal {
   width: 380px; max-width: calc(100vw - 48px);
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
-  overflow: hidden;
 }
 .modal-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -80,12 +77,5 @@ function onConfirm(): void {
 .modal-body { padding: 18px; }
 .message { font-size: 13px; color: var(--text); line-height: 1.6; margin: 0; white-space: pre-wrap; word-break: break-all; }
 .modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 0 18px 16px; }
-.btn { border-radius: 9px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid transparent; transition: background 0.15s ease, opacity 0.15s ease; }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover { background: var(--bg-hover); }
-.btn.primary { background: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn.primary:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn.primary.danger { background: var(--danger); }
-.btn.primary.danger:hover:not(:disabled) { background: var(--danger-hover, var(--danger)); }
+.btn { border-radius: 9px; padding: 8px 16px; font-weight: 500; }
 </style>

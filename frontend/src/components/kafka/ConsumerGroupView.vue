@@ -269,7 +269,7 @@ onMounted(refresh)
         <input v-model.number="timestampMs" data-test="input-reset-timestamp" type="number" class="input" />
       </label>
       <button
-        class="btn danger"
+        class="btn warn"
         type="button"
         data-test="btn-dry-run"
         :disabled="!selectedGroup || !selectedTopic || st.resetting"
@@ -290,13 +290,7 @@ onMounted(refresh)
   border-radius: 7px; padding: 6px 9px; font-size: 13px; min-width: 160px;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
-.input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--accent-soft); }
-.btn { border-radius: 7px; padding: 6px 14px; font-size: 13px; cursor: pointer; border: 1px solid transparent; transition: background 0.15s ease, opacity 0.15s ease; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
-.btn.danger { background: var(--warn-soft); color: var(--warn); border: 1px solid transparent; }
-.btn.danger:hover:not(:disabled) { background: rgba(217, 119, 6, 0.2); }
+.input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: var(--focus-ring); }
 .msg { padding: 8px 10px; font-size: 13px; margin-top: 8px; border-radius: 7px; }
 .msg.err { background: var(--danger-soft); color: var(--danger); }
 .msg.warn { background: var(--warn-soft); color: var(--warn); margin-top: 10px; }

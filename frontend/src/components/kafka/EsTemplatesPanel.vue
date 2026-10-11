@@ -419,15 +419,7 @@ async function doDelete(): Promise<void> {
   border-radius: 7px; padding: 8px 10px; font-size: 12px; line-height: 1.5;
   font-family: var(--mono);
 }
-.json-editor:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.json-editor:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
 .actions { display: flex; gap: 8px; margin-top: 10px; flex: none; }
 .hint { margin-top: 8px; font-size: 11px; color: var(--text-tertiary); flex: none; }
-.btn { border-radius: 7px; padding: 6px 13px; font-size: 13px; cursor: pointer; border: 1px solid transparent; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
-.btn.ghost.danger { color: var(--danger); border-color: var(--danger); }
-.btn.ghost.danger:hover:not(:disabled) { background: var(--danger-soft); }
-.btn.primary { background: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
 </style>

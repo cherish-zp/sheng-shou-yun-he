@@ -965,10 +965,9 @@ export interface EsPutDocRequest {
   connection_id: string
   index: string
   id: string
-  // 注意:前端绑定(与 spec 契约)发送 doc_json;后端 Go 结构体字段标签为
-  // json:"doc" —— 两侧字段名漂移为既有现状,前端按既有 wire 原样保留,
-  // 待绑定重新生成时统一。
-  doc_json: string
+  // 完整 _source 的 JSON 文本。历史上前端误发 doc_json 而后端 tag 是 doc，
+  // 导致整文档覆盖保存静默落空；已统一为 doc（与后端 EsPutDocRequest 一致）。
+  doc: string
 }
 
 // 新增文档:id 留空 = POST /{index}/_doc 由 ES 自动生成;非空 = PUT

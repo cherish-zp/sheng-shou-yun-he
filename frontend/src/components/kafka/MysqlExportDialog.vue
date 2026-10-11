@@ -205,7 +205,7 @@ async function doExport(): Promise<void> {
 <style scoped>
 .me-backdrop {
   position: fixed; inset: 0; z-index: 100;
-  background: rgba(0, 0, 0, 0.32);
+  background: var(--overlay);
   -webkit-backdrop-filter: blur(2px);
   backdrop-filter: blur(2px);
   display: flex; align-items: center; justify-content: center;
@@ -234,10 +234,6 @@ async function doExport(): Promise<void> {
 .me-error { color: var(--danger); font-size: 12px; }
 .me-actions { display: flex; align-items: center; gap: 8px; }
 .me-flex { flex: 1; }
-.btn { border-radius: 7px; padding: 4px 12px; font-size: 12px; cursor: pointer; border: 1px solid transparent; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.primary { background: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
+/* 基座走全局 .btn;导出弹窗按钮为小号(局部修饰)。 */
+.btn { padding: 4px 12px; font-size: 12px; }
 </style>

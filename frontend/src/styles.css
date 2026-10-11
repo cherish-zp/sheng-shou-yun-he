@@ -61,8 +61,8 @@
   --cm-cursor: #1d1d1f;
   --cm-selection: rgba(0, 113, 227, 0.15);
 
-  /* 表格斑马纹(pink 为极浅粉,light/dark 透明)与页面背景光晕 */
-  --zebra: transparent;
+  /* 表格斑马纹(沿用现斑马底色,pink 换极浅粉)与页面背景光晕 */
+  --zebra: #f0f0f2;
   --body-glow-a: rgba(0, 113, 227, 0.06);
   --body-glow-b: rgba(10, 132, 255, 0.04);
 
@@ -136,7 +136,7 @@
   --cm-gutter-bg: #121a24;
   --cm-cursor: #e6e6ec;
   --cm-selection: rgba(110, 168, 254, 0.3);
-  --zebra: transparent;
+  --zebra: #121a24;
   --body-glow-a: rgba(31, 111, 235, 0.08);
   --body-glow-b: rgba(110, 168, 254, 0.05);
   --radius: 10px;
@@ -278,6 +278,9 @@ input, select, textarea { font-family: inherit; }
 .btn.ghost.danger:hover:not(:disabled) { background: var(--danger-soft); }
 .btn.primary.danger { background: var(--danger); }
 .btn.primary.danger:hover:not(:disabled) { background: var(--danger-hover); filter: none; }
+/* 琥珀警示变体(重置位移等不可逆操作的次级警示):soft 底 + 深琥珀字 */
+.btn.warn { background: var(--warn-soft); color: var(--warn); }
+.btn.warn:hover:not(:disabled) { background: var(--warn-soft); filter: brightness(0.95); }
 
 /* 数据表格基座:常规浏览表(组件含滚动/粘性表头等差异时在 scoped 覆盖)。 */
 .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }

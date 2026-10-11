@@ -14,7 +14,7 @@ function formatTime(ms: number): string {
 <template>
   <div class="producers-panel" data-test="producers-panel">
     <div class="producers-title">活跃生产者</div>
-    <table class="table" data-test="producers-table">
+    <table class="table data-table" data-test="producers-table">
       <thead>
         <tr>
           <th>Partition</th>
@@ -46,9 +46,6 @@ function formatTime(ms: number): string {
 <style scoped>
 .producers-panel { margin-top: 14px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
 .producers-title { font-weight: 600; color: var(--text); padding: 10px 12px; border-bottom: 1px solid var(--border); }
-.table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.table th { text-align: left; padding: 8px 12px; color: var(--text-secondary); font-weight: 600; border-bottom: 1px solid var(--border); background: var(--bg-subtle); }
-.table td { padding: 6px 12px; border-bottom: 1px solid var(--border); }
 .mono { font-family: var(--mono); }
 .empty { text-align: center; color: var(--text-tertiary); padding: 20px; }
 .note { text-align: center; color: var(--warn); padding: 14px; font-size: 12px; }

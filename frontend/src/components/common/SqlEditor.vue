@@ -145,17 +145,18 @@ const extraKeywordCompletion = EditorState.languageData.of(() => [
   { autocomplete: extraKeywordCompletionSource() },
 ])
 
-// 主题色全部走 CSS 变量,自动跟随 [data-theme] 深浅色切换。
+// 主题色全部走 CSS 变量,自动跟随 [data-theme] 深浅色/少女粉切换。
 const editorTheme = EditorView.theme({
   '&': { height: '100%', fontSize: '13px', backgroundColor: 'transparent' },
   '.cm-scroller': { fontFamily: 'var(--mono)', lineHeight: '1.5', overflow: 'auto' },
   '.cm-content': { padding: '8px 10px 10px 0' },
   '&.cm-focused': { outline: 'none' },
-  '.cm-gutters': { backgroundColor: 'transparent', border: 'none', color: 'var(--text-tertiary)' },
+  '.cm-gutters': { backgroundColor: 'var(--cm-gutter-bg)', border: 'none', color: 'var(--text-tertiary)' },
   '.cm-activeLine': { backgroundColor: 'var(--bg-hover)' },
   '.cm-activeLineGutter': { backgroundColor: 'var(--bg-hover)', color: 'var(--text-secondary)' },
   '.cm-placeholder': { color: 'var(--text-tertiary)' },
-  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--text)' },
+  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--cm-cursor)' },
+  '.cm-selectionBackground': { backgroundColor: 'var(--cm-selection)' },
   '.cm-tooltip': {
     backgroundColor: 'var(--bg-elevated)',
     border: '1px solid var(--border)',
@@ -598,7 +599,7 @@ defineExpose({ focus, getValue, getSelection })
   position: relative;
   border: 1px solid var(--border);
   border-radius: 7px;
-  background: var(--bg-subtle);
+  background: var(--editor-bg);
   overflow: hidden;
   transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
@@ -606,7 +607,7 @@ defineExpose({ focus, getValue, getSelection })
   outline: none;
   border-color: var(--accent);
   background: var(--bg-elevated);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: var(--focus-ring);
 }
 .editor-host :deep(.cm-editor) { height: 100%; }
 /* 右键执行菜单:自绘,主题变量跟随深浅色 */

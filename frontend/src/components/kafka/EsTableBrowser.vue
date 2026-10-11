@@ -372,7 +372,7 @@ async function saveJson(): Promise<void> {
         await getApi().esCreateDoc?.({ connection_id: props.connectionId, index: props.index, doc_json: jsonDraft.value })
       }
     } else {
-      await getApi().esPutDoc?.({ connection_id: props.connectionId, index: props.index, id: jsonId.value, doc_json: jsonDraft.value })
+      await getApi().esPutDoc?.({ connection_id: props.connectionId, index: props.index, id: jsonId.value, doc: jsonDraft.value })
     }
     jsonOpen.value = false
     if (jsonMode.value === 'create') toast.show('文档已创建')
@@ -686,25 +686,14 @@ async function doClear(): Promise<void> {
 .empty-hint { font-size: 11px; margin-top: 4px; color: var(--text-tertiary); }
 .pager { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .page-label { font-size: 12px; color: var(--text-secondary); }
-.btn { border-radius: 7px; padding: 6px 13px; font-size: 13px; cursor: pointer; border: 1px solid transparent; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
-.btn.danger { color: var(--danger); border-color: var(--danger); }
-.btn.danger:hover:not(:disabled) { background: var(--danger-soft); }
-/* JSON 编辑弹窗:与 ConfirmDialog 同一视觉语言,弹窗更宽以容纳文档。 */
+/* JSON 编辑弹窗:基座走全局 .modal-backdrop/.modal(层级/模糊对齐 ConfirmDialog)。 */
 .modal-backdrop {
-  position: fixed; inset: 0; z-index: 100;
-  background: rgba(0, 0, 0, 0.32);
+  z-index: 100;
   -webkit-backdrop-filter: blur(2px);
   backdrop-filter: blur(2px);
-  display: flex; align-items: center; justify-content: center;
 }
 .modal {
   width: 380px; max-width: calc(100vw - 48px);
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
-  overflow: hidden;
 }
 .json-modal { width: 640px; }
 .modal-header {
@@ -723,7 +712,7 @@ async function doClear(): Promise<void> {
   border-radius: 7px; padding: 8px 10px; font-size: 12px; line-height: 1.5;
   font-family: var(--mono);
 }
-.json-editor:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.json-editor:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
 .json-hint { margin-top: 8px; font-size: 11px; color: var(--text-tertiary); }
 /* 弹窗内错误:与页面错误区同一视觉语言,置于弹窗体顶部(错误即点可见)。 */
 .json-error { margin: 0 0 8px; }
@@ -735,7 +724,5 @@ async function doClear(): Promise<void> {
   background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
   border-radius: 7px; padding: 5px 9px; font-size: 13px; font-family: var(--mono);
 }
-.doc-id-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.btn.primary { background: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
+.doc-id-input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
 </style>

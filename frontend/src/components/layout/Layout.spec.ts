@@ -923,8 +923,10 @@ describe('Layout', () => {
     const { wrapper } = mountLayout([mysqlConn('m1')])
     const tabs = useTabsStore()
     tabs.openMysqlSql('m1', 'shop')
-    await nextTick()
-    expect(wrapper.find('[data-test="mysql-sql-console"]').exists()).toBe(true)
+    // 控制台为异步组件(defineAsyncComponent 分包):等模块解析完成再断言。
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="mysql-sql-console"]').exists()).toBe(true)
+    })
     const console_ = wrapper.findComponent(MysqlSqlConsole)
     expect(console_.props('tabId')).toBe(tabs.openTabs[0].id)
     expect(console_.props('connectionId')).toBe('m1')
@@ -977,8 +979,10 @@ describe('Layout', () => {
     const { wrapper } = mountLayout([hiveConn('h1')])
     const tabs = useTabsStore()
     tabs.openHiveSql('h1', 'ods')
-    await nextTick()
-    expect(wrapper.find('[data-test="hive-sql-console"]').exists()).toBe(true)
+    // 控制台为异步组件(defineAsyncComponent 分包):等模块解析完成再断言。
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="hive-sql-console"]').exists()).toBe(true)
+    })
     const console_ = wrapper.findComponent(HiveSqlConsole)
     expect(console_.props('tabId')).toBe(tabs.openTabs[0].id)
     expect(console_.props('connectionId')).toBe('h1')
@@ -1019,7 +1023,9 @@ describe('Layout', () => {
     expect(tabs.openTabs.map((t) => t.kind)).toEqual(['hive-sql'])
     expect(tabs.openTabs[0].connectionId).toBe('h1')
     expect(fileAppMocks.ReadQueryFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'hv.sql' }))
-    expect(wrapper.find('[data-test="hive-sql-console"]').exists()).toBe(true)
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="hive-sql-console"]').exists()).toBe(true)
+    })
     wrapper.unmount()
     await drainPendingEdits()
   })
@@ -1055,8 +1061,10 @@ describe('Layout', () => {
     const { wrapper } = mountLayout([esConn('e1')])
     const tabs = useTabsStore()
     tabs.openEsSql('e1')
-    await nextTick()
-    expect(wrapper.find('[data-test="es-sql-console"]').exists()).toBe(true)
+    // 控制台为异步组件(defineAsyncComponent 分包):等模块解析完成再断言。
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="es-sql-console"]').exists()).toBe(true)
+    })
     const console_ = wrapper.findComponent(EsSqlConsole)
     expect(console_.props('tabId')).toBe(tabs.openTabs[0].id)
     expect(console_.props('connectionId')).toBe('e1')
@@ -1245,8 +1253,11 @@ describe('Layout', () => {
     const tabs = useTabsStore()
     expect(tabs.openTabs.map((t) => t.kind)).toEqual(['sql'])
     expect(tabs.openTabs[0].connectionId).toBe('k1')
-    expect(fileAppMocks.ReadQueryFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'a.sql' }))
-    expect(wrapper.find('[data-test="sql-console"]').exists()).toBe(true)
+    // 控制台为异步分包组件:等它挂载并补载文件后再断言。
+    await vi.waitFor(() => {
+      expect(fileAppMocks.ReadQueryFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'a.sql' }))
+      expect(wrapper.find('[data-test="sql-console"]').exists()).toBe(true)
+    })
     wrapper.unmount()
     await drainPendingEdits()
   })
@@ -1261,10 +1272,13 @@ describe('Layout', () => {
     const tabs = useTabsStore()
     expect(tabs.openTabs.map((t) => t.kind)).toEqual(['ch-sql'])
     expect(tabs.openTabs[0].connectionId).toBe('c1')
-    // CHSqlConsole 携带 tab id,控制台据此把 tab 标题改为当前文件名。
-    expect(wrapper.findComponent(CHSqlConsole).props('tabId')).toBe(tabs.openTabs[0].id)
-    expect(fileAppMocks.ReadQueryFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'ch.sql' }))
-    expect(wrapper.find('[data-test="ch-sql-console"]').exists()).toBe(true)
+    // 异步分包控制台:等挂载完成再断言 props 与文件载入。
+    await vi.waitFor(() => {
+      // CHSqlConsole 携带 tab id,控制台据此把 tab 标题改为当前文件名。
+      expect(wrapper.findComponent(CHSqlConsole).props('tabId')).toBe(tabs.openTabs[0].id)
+      expect(fileAppMocks.ReadQueryFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'ch.sql' }))
+      expect(wrapper.find('[data-test="ch-sql-console"]').exists()).toBe(true)
+    })
     wrapper.unmount()
     await drainPendingEdits()
   })
@@ -1279,8 +1293,10 @@ describe('Layout', () => {
     const tabs = useTabsStore()
     expect(tabs.openTabs.map((t) => t.kind)).toEqual(['mysql-sql'])
     expect(tabs.openTabs[0].connectionId).toBe('m1')
-    expect(fileAppMocks.ReadQueryFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'my.sql' }))
-    expect(wrapper.find('[data-test="mysql-sql-console"]').exists()).toBe(true)
+    await vi.waitFor(() => {
+      expect(fileAppMocks.ReadQueryFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'my.sql' }))
+      expect(wrapper.find('[data-test="mysql-sql-console"]').exists()).toBe(true)
+    })
     wrapper.unmount()
     await drainPendingEdits()
   })
@@ -1295,8 +1311,10 @@ describe('Layout', () => {
     const tabs = useTabsStore()
     expect(tabs.openTabs.map((t) => t.kind)).toEqual(['mysql-sql'])
     expect(tabs.openTabs[0].connectionId).toBe('t1')
-    expect(fileAppMocks.ReadQueryFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'ti.sql' }))
-    expect(wrapper.find('[data-test="mysql-sql-console"]').exists()).toBe(true)
+    await vi.waitFor(() => {
+      expect(fileAppMocks.ReadQueryFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'ti.sql' }))
+      expect(wrapper.find('[data-test="mysql-sql-console"]').exists()).toBe(true)
+    })
     wrapper.unmount()
     await drainPendingEdits()
   })
@@ -1311,8 +1329,10 @@ describe('Layout', () => {
     const tabs = useTabsStore()
     expect(tabs.openTabs.map((t) => t.kind)).toEqual(['es-sql'])
     expect(tabs.openTabs[0].connectionId).toBe('e1')
-    expect(fileAppMocks.ReadQueryFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'es.sql' }))
-    expect(wrapper.find('[data-test="es-sql-console"]').exists()).toBe(true)
+    await vi.waitFor(() => {
+      expect(fileAppMocks.ReadQueryFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'es.sql' }))
+      expect(wrapper.find('[data-test="es-sql-console"]').exists()).toBe(true)
+    })
     wrapper.unmount()
     await drainPendingEdits()
   })

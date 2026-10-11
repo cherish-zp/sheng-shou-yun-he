@@ -257,10 +257,4 @@ function colTitle(c: HiveColumn): string {
 }
 .pager { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .page-label { font-size: 12px; color: var(--text-secondary); }
-.btn { border-radius: 7px; padding: 6px 13px; font-size: 13px; cursor: pointer; border: 1px solid transparent; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
-.btn.danger { color: var(--danger); border-color: var(--danger); }
-.btn.danger:hover:not(:disabled) { background: var(--danger-soft); }
 </style>

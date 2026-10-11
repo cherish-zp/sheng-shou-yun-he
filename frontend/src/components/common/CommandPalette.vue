@@ -274,7 +274,7 @@ watch([activeIndex, results, open], async () => {
   /* Sits above every other overlay (drawers 1000, modals 900) so the palette
      stays visible — and dismissible — even with a drawer or modal open. */
   position: fixed; inset: 0; z-index: 1100;
-  background: rgba(0, 0, 0, 0.32);
+  background: var(--overlay);
   -webkit-backdrop-filter: blur(2px);
   backdrop-filter: blur(2px);
   display: flex; align-items: flex-start; justify-content: center;

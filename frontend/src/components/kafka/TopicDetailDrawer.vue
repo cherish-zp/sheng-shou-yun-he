@@ -156,7 +156,7 @@ function listText(nums: number[]): string {
           <span class="stat"><span class="stat-num">{{ detail.partitions.length }}</span> 分区</span>
         </div>
         <h3 class="section-title">分区拓扑</h3>
-        <table class="table" data-test="topo-table">
+        <table class="table data-table" data-test="topo-table">
           <thead>
             <tr>
               <th>分区</th>
@@ -188,7 +188,7 @@ function listText(nums: number[]): string {
           </button>
         </div>
         <template v-if="editing">
-          <table class="table" data-test="cfg-table">
+          <table class="table data-table" data-test="cfg-table">
             <thead>
               <tr>
                 <th>配置项</th>
@@ -215,7 +215,7 @@ function listText(nums: number[]): string {
           </div>
         </template>
         <template v-else>
-          <table v-if="detail.configs.length" class="table" data-test="cfg-table">
+          <table v-if="detail.configs.length" class="table data-table" data-test="cfg-table">
             <thead>
               <tr>
                 <th>配置项</th>
@@ -282,16 +282,13 @@ function listText(nums: number[]): string {
   text-transform: uppercase; letter-spacing: 0.04em; margin: 14px 0 8px;
 }
 .section-title:first-child { margin-top: 0; }
+/* 表基座走全局 .data-table;这里留卡片化容器与紧凑 padding 差异。 */
 .table {
-  width: 100%; border-collapse: collapse; font-size: 13px;
   background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: var(--radius-md, 10px); overflow: hidden;
+  border-radius: var(--radius-md); overflow: hidden;
 }
-.table th {
-  text-align: left; padding: 7px 12px; color: var(--text-secondary);
-  font-weight: 600; border-bottom: 1px solid var(--border); background: var(--bg-subtle);
-}
-.table td { padding: 5px 12px; border-bottom: 1px solid var(--border); }
+.table th { padding: 7px 12px; }
+.table td { padding: 5px 12px; }
 .mono { font-family: var(--mono); }
 .cfg-input {
   width: 100%; box-sizing: border-box;
@@ -300,16 +297,10 @@ function listText(nums: number[]): string {
   padding: 4px 8px; font-size: 13px; font-family: var(--mono);
   transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
-.cfg-input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--accent-soft); }
+.cfg-input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: var(--focus-ring); }
 .cfg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
 .cfg-error { margin-top: 10px; }
 .state { color: var(--text-secondary); font-size: 13px; padding: 4px 0; }
 .state.err { color: var(--danger); }
-.btn { border-radius: 7px; padding: 7px 14px; font-size: 13px; cursor: pointer; border: 1px solid transparent; transition: background 0.15s ease, opacity 0.15s ease; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.small { padding: 4px 12px; font-size: 12px; }
-.btn.primary { background: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
+.btn { padding: 7px 14px; }
 </style>

@@ -217,7 +217,7 @@ onMounted(runQuery)
     <div v-if="st.error" class="msg err" data-test="browse-error">{{ st.error }}</div>
 
     <div ref="tableWrap" class="table-wrap" data-test="browse-table">
-      <table class="table">
+      <table class="table data-table">
         <thead>
           <tr>
             <th>Partition</th>
@@ -277,19 +277,12 @@ onMounted(runQuery)
   border-radius: 7px; padding: 6px 9px; font-size: 13px;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
-.input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--accent-soft); }
-.btn { border-radius: 7px; padding: 6px 14px; font-size: 13px; cursor: pointer; border: 1px solid transparent; transition: background 0.15s ease, opacity 0.15s ease; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.primary { background: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
+.input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: var(--focus-ring); }
 .msg { padding: 8px 16px; font-size: 13px; }
 .msg.err { background: var(--danger-soft); color: var(--danger); }
 .table-wrap { flex: 1; overflow: auto; background: var(--bg-elevated); }
-.table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.table th { position: sticky; top: 0; background: var(--bg-subtle); text-align: left; padding: 8px 12px; color: var(--text-secondary); font-weight: 600; border-bottom: 1px solid var(--border); z-index: 1; }
-.table td { padding: 6px 12px; border-bottom: 1px solid var(--border); }
+/* 表基座走全局 .data-table;这里只留粘性表头差异。 */
+.table th { position: sticky; top: 0; z-index: 1; }
 .row { cursor: pointer; transition: background 0.1s ease; }
 .row:hover { background: var(--bg-hover); }
 .row--target { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }

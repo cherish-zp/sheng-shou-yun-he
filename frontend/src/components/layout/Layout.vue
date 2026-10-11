@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useTabsStore, type Tab } from '@/store/tabs'
 import type { Connection } from '@/api/types'
 import ConnectionTree from '@/components/common/ConnectionTree.vue'
@@ -8,20 +8,22 @@ import BrandLogo from '@/components/common/BrandLogo.vue'
 import MessageBrowser from '@/components/kafka/MessageBrowser.vue'
 import ConsumerGroupView from '@/components/kafka/ConsumerGroupView.vue'
 import ProducerPanel from '@/components/kafka/ProducerPanel.vue'
-import SqlConsole from '@/components/kafka/SqlConsole.vue'
+// SQL 控制台携带 CodeMirror 编辑器体系,体积大且非首屏必需:异步分包,
+// 首次打开对应 tab 时按需加载(props/事件接线与静态导入完全一致)。
+const SqlConsole = defineAsyncComponent(() => import('@/components/kafka/SqlConsole.vue'))
+const CHSqlConsole = defineAsyncComponent(() => import('@/components/kafka/CHSqlConsole.vue'))
+const MysqlSqlConsole = defineAsyncComponent(() => import('@/components/kafka/MysqlSqlConsole.vue'))
+const PostgresSqlConsole = defineAsyncComponent(() => import('@/components/kafka/PostgresSqlConsole.vue'))
+const EsSqlConsole = defineAsyncComponent(() => import('@/components/kafka/EsSqlConsole.vue'))
+const HiveSqlConsole = defineAsyncComponent(() => import('@/components/kafka/HiveSqlConsole.vue'))
 import GlobalLagView from '@/components/kafka/GlobalLagView.vue'
 import RedisKeysView from '@/components/kafka/RedisKeysView.vue'
 import ClusterHealthPanel from '@/components/kafka/ClusterHealthPanel.vue'
 import CHTableBrowser from '@/components/kafka/CHTableBrowser.vue'
-import CHSqlConsole from '@/components/kafka/CHSqlConsole.vue'
 import MysqlTableBrowser from '@/components/kafka/MysqlTableBrowser.vue'
-import MysqlSqlConsole from '@/components/kafka/MysqlSqlConsole.vue'
 import PostgresTableBrowser from '@/components/kafka/PostgresTableBrowser.vue'
-import PostgresSqlConsole from '@/components/kafka/PostgresSqlConsole.vue'
 import HiveTableBrowser from '@/components/kafka/HiveTableBrowser.vue'
-import HiveSqlConsole from '@/components/kafka/HiveSqlConsole.vue'
 import EsTableBrowser from '@/components/kafka/EsTableBrowser.vue'
-import EsSqlConsole from '@/components/kafka/EsSqlConsole.vue'
 import EsTemplatesPanel from '@/components/kafka/EsTemplatesPanel.vue'
 import EsClusterMonitor from '@/components/kafka/EsClusterMonitor.vue'
 import SettingsPanel from '@/components/settings/SettingsPanel.vue'
@@ -213,9 +215,16 @@ async function openQueryFileFromPanel(name: string, connectionId: string): Promi
     // Kafka 不带 topic:通用「SQL 查询」tab,表名写在 SQL 的 FROM 子句里。
     tabs.openSql(connectionId, '', [])
   }
-  // 等 tab 切换后控制台组件挂载完成,再取它暴露的 API 载入文件。
+  // 等 tab 切换后控制台组件挂载完成,再取它暴露的 API 载入文件。控制台为
+  // 异步分包组件,首次打开时模块尚在加载、ref 还拿不到:把文件挂起,待
+  // activeConsoleApi 就绪(见下方 watch)后补载,保证首次打开也不丢载入。
   await nextTick()
-  activeConsoleApi.value?.loadQueryFile(name)
+  const api = activeConsoleApi.value
+  if (api) {
+    api.loadQueryFile(name)
+  } else {
+    pendingQueryFile = name
+  }
 }
 
 function startFilesResize(e: MouseEvent): void {
@@ -260,6 +269,14 @@ const activeConsoleApi = computed<SqlConsoleApi | null>(() => {
   if (a.kind === 'es-sql') return esSqlConsoleRef.value
   if (a.kind === 'hive-sql') return hiveSqlConsoleRef.value
   return null
+})
+
+// SQL文件面板的待载入文件(挂起补载);同名场景后者覆盖前者(与点击语义一致)。
+let pendingQueryFile: string | null = null
+watch(activeConsoleApi, (api) => {
+  if (!api || !pendingQueryFile) return
+  api.loadQueryFile(pendingQueryFile)
+  pendingQueryFile = null
 })
 
 // 顶栏「新建查询」:Kafka 系 tab 打开 SQL 控制台(topic tab 预选 topic),
@@ -875,7 +892,7 @@ function onTabDragEnd(): void {
   gap: 8px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--topbar-bg);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
   z-index: 10;
@@ -883,15 +900,7 @@ function onTabDragEnd(): void {
 .brand { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
 .brand-logo { width: 18px; height: 18px; color: var(--accent); flex-shrink: 0; }
 .spacer { flex: 1; }
-.btn {
-  border-radius: 7px;
-  padding: 6px 13px;
-  font-size: 13px;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: background 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
-}
-.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* .btn 基座/变体走全局基类;这里只留顶栏图标的局部修饰。 */
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; padding: 6px 8px; position: relative; }
 /* 更新红点:8px 圆点叠在图标右上角,2px 描边与底色同色用于分隔,pulse 克制(缩放+微降透明度)。 */
 .icon-btn.has-update .update-dot {
@@ -909,18 +918,6 @@ function onTabDragEnd(): void {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(0.82); opacity: 0.55; }
 }
-.btn.primary {
-  background: var(--accent);
-  color: #fff;
-  box-shadow: 0 1px 2px rgba(0, 113, 227, 0.3);
-}
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn.ghost {
-  background: transparent;
-  color: var(--text);
-  border-color: var(--border-strong);
-}
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
 .body { flex: 1; display: flex; min-height: 0; }
 .sidebar {
   width: 336px;

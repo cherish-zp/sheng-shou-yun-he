@@ -501,7 +501,7 @@ describe('EsTableBrowser', () => {
         connection_id: 'es1',
         index: 'users-index',
         id: 'doc-1',
-        doc_json: '{"name":"alice2"}',
+        doc: '{"name":"alice2"}',
       })
     })
     // 保存成功后刷新当前页并关闭弹窗。

@@ -268,7 +268,7 @@ function close(): void {
 <style scoped>
 .hs-backdrop {
   position: fixed; inset: 0; z-index: 100;
-  background: rgba(0, 0, 0, 0.32);
+  background: var(--overlay);
   -webkit-backdrop-filter: blur(2px);
   backdrop-filter: blur(2px);
   display: flex; align-items: center; justify-content: center;
@@ -317,10 +317,6 @@ function close(): void {
   background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 8px;
   max-height: 200px; overflow: auto; white-space: pre; color: var(--text);
 }
-.btn { border-radius: 7px; padding: 4px 12px; font-size: 12px; cursor: pointer; border: 1px solid transparent; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.primary { background: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover { background: var(--bg-hover); }
+/* 基座走全局 .btn;结构面板按钮为小号(局部修饰)。 */
+.btn { padding: 4px 12px; font-size: 12px; }
 </style>

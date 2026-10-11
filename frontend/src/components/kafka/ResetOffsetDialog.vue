@@ -281,7 +281,7 @@ async function confirmReset(): Promise<void> {
             </button>
           </div>
 
-          <table v-if="previewRows" class="table" data-test="reset-preview-table">
+          <table v-if="previewRows" class="table data-table" data-test="reset-preview-table">
             <thead>
               <tr>
                 <th>Partition</th>
@@ -338,7 +338,7 @@ async function confirmReset(): Promise<void> {
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.32);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -372,28 +372,19 @@ async function confirmReset(): Promise<void> {
   border-radius: 7px; padding: 6px 9px; font-size: 13px; width: 100%; box-sizing: border-box;
 }
 .input.num { padding: 3px 6px; }
-.input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
 .msg { font-size: 13px; padding: 8px 10px; border-radius: 7px; }
 .msg.err { background: var(--danger-soft); color: var(--danger); }
 .msg.warn { background: var(--warn-soft); color: var(--warn); }
+/* 表基座走全局 .data-table;这里留容器与紧凑 padding 差异。 */
 .table {
-  width: 100%; border-collapse: collapse; font-size: 13px;
   background: var(--bg-subtle); border: 1px solid var(--border);
   border-radius: 9px; overflow: hidden;
 }
-.table th {
-  text-align: left; padding: 6px 10px; color: var(--text-secondary);
-  font-weight: 600; border-bottom: 1px solid var(--border); background: var(--bg-hover);
-}
-.table td { padding: 4px 10px; border-bottom: 1px solid var(--border); }
+.table th { padding: 6px 10px; background: var(--bg-hover); }
+.table td { padding: 4px 10px; }
 .mono { font-family: var(--mono); }
 .delta { color: var(--text-secondary); }
 .empty { text-align: center; color: var(--text-tertiary); padding: 12px; }
 .actions { display: flex; justify-content: flex-end; gap: 8px; }
-.btn { border-radius: 7px; padding: 6px 14px; font-size: 13px; cursor: pointer; border: 1px solid transparent; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
-.btn.danger { background: var(--danger); color: #fff; }
-.btn.danger:hover:not(:disabled) { background: var(--danger-hover, var(--danger)); filter: brightness(1.08); }
 </style>

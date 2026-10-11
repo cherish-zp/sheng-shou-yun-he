@@ -71,7 +71,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.32);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;

@@ -154,7 +154,7 @@ const emptyColspan = computed(() => props.columns.length + (props.rowActions ? 1
 </script>
 
 <template>
-  <table class="table" :data-test="`${testPrefix}-grid`">
+  <table class="table data-table" :data-test="`${testPrefix}-grid`">
     <thead>
       <tr>
         <!-- 行首操作列:每行挂删除按钮(悬停行显现)。 -->
@@ -264,16 +264,16 @@ const emptyColspan = computed(() => props.columns.length + (props.rowActions ? 1
 </template>
 
 <style scoped>
+/* 基础表样式(width/border-collapse/th·td 通用属性/hover)走全局 .data-table 基座,
+   这里只保留差异:max-content 宽度、粘性表头、紧凑 padding、斑马纹与单元格编辑。 */
 .table {
   /* width:max-content:列数多时按内容自然宽度横向滚动,而不是把列头
      压成竖排文字;min-width:100% 保证列少时仍铺满容器。 */
-  width: max-content; min-width: 100%;
-  border-collapse: collapse; font-size: 13px;
+  width: max-content; min-width: 100%; font-size: 13px;
 }
 .table th {
   position: sticky; top: 0; z-index: 1;
-  text-align: left; padding: 7px 10px; background: var(--bg-subtle);
-  border-bottom: 1px solid var(--border); user-select: none; white-space: nowrap;
+  padding: 7px 10px; user-select: none;
 }
 /* 可排序列头(除 Hive 只读外):指针 + 悬停反馈。 */
 .table th.th-sort { cursor: pointer; transition: background 0.12s ease; }
@@ -289,9 +289,8 @@ const emptyColspan = computed(() => props.columns.length + (props.rowActions ? 1
 .col-arrow { color: var(--accent); font-size: 11px; }
 /* 第三行:字段描述(comment),灰色小字;超长省略,悬停 title 已含全文。 */
 .col-comment { font-size: 10px; color: var(--text-tertiary); max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
-.table tbody tr:nth-child(even) td { background: var(--bg-subtle); }
-.table tbody tr:hover td { background: var(--bg-hover); }
-.table td { padding: 5px 10px; border-bottom: 1px solid var(--border); word-break: break-all; max-width: 420px; }
+.table tbody tr:nth-child(even) td { background: var(--zebra); }
+.table td { padding: 5px 10px; word-break: break-all; max-width: 420px; }
 .cell-null { color: var(--text-tertiary); font-style: italic; }
 .cell-trunc { color: var(--text-secondary); }
 /* 只读单元格:不出现文本光标,提示走 title。 */

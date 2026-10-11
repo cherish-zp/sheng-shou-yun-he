@@ -220,7 +220,7 @@ const statusText = computed(() => {
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.32);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -262,9 +262,4 @@ const statusText = computed(() => {
 }
 .bar-fill { height: 100%; background: var(--accent); transition: width 0.2s ease; }
 .actions { display: flex; justify-content: flex-end; gap: 8px; }
-.btn { border-radius: 7px; padding: 6px 14px; font-size: 13px; cursor: pointer; border: 1px solid transparent; }
-.btn.primary { background: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
 </style>

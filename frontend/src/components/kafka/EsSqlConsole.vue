@@ -932,11 +932,6 @@ onMounted(() => {
   font-size: 11px; color: var(--text-tertiary); font-family: var(--mono);
 }
 
-.btn { border-radius: 7px; padding: 7px 14px; font-size: 13px; cursor: pointer; border: 1px solid transparent; transition: background 0.15s ease, opacity 0.15s ease; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.primary { background: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-
 /* SQL/DSL 分段按钮。 */
 .mode-switch { display: flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
 .mode-switch button {

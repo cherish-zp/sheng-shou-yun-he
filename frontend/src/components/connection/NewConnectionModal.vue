@@ -789,7 +789,7 @@ function close(): void {
         <div v-if="saveError" class="msg err" data-test="save-error">{{ saveError }}</div>
       </div>
       <div class="modal-footer">
-        <button v-if="editing" class="btn danger" type="button" data-test="btn-delete-connection" @click="askDeleteConnection">
+        <button v-if="editing" class="btn ghost danger delete-entry" type="button" data-test="btn-delete-connection" @click="askDeleteConnection">
           删除连接
         </button>
         <button class="btn ghost" type="button" data-test="btn-test" :disabled="testing || targetInvalid" @click="runTest">
@@ -810,7 +810,7 @@ function close(): void {
           <div v-if="deleteError" class="msg err" data-test="delete-error">{{ deleteError }}</div>
           <div class="delete-confirm-footer">
             <button class="btn ghost" type="button" data-test="delete-confirm-cancel" @click="cancelDeleteConnection">取消</button>
-            <button class="btn danger-solid" type="button" data-test="delete-confirm-ok" :disabled="deleting" @click="confirmDeleteConnection">删除</button>
+            <button class="btn danger" type="button" data-test="delete-confirm-ok" :disabled="deleting" @click="confirmDeleteConnection">删除</button>
           </div>
         </div>
       </div>
@@ -819,20 +819,9 @@ function close(): void {
 </template>
 
 <style scoped>
-.modal-backdrop {
-  position: fixed; inset: 0;
-  background: rgba(0, 0, 0, 0.22);
-  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-  display: flex; align-items: center; justify-content: center; z-index: 900;
-}
+/* 遮罩/容器/按钮基座走全局 .modal-backdrop/.modal/.btn;这里只留尺寸与覆盖。 */
 .modal {
   width: 460px; max-width: 92vw; max-height: 88vh; overflow: auto;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  color: var(--text);
-  font-family: var(--font);
 }
 .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--border); }
 .modal-title { font-weight: 600; font-size: 15px; }
@@ -852,7 +841,7 @@ function close(): void {
 .type-card:hover { border-color: var(--accent); background: var(--bg-elevated); }
 .type-card.active {
   border-color: var(--accent); background: var(--bg-elevated);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: var(--focus-ring);
 }
 .type-card-icon { font-size: 20px; line-height: 1; }
 .type-card-label { font-size: 12px; font-weight: 500; }
@@ -863,7 +852,7 @@ function close(): void {
   color: var(--text); padding: 8px 10px; font-size: 13px;
   transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
-.input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--accent-soft); }
+.input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: var(--focus-ring); }
 .textarea { resize: vertical; }
 .checkbox-label { font-size: 13px; color: var(--text); display: flex; gap: 6px; align-items: center; }
 .hint { display: block; font-size: 12px; color: var(--text-tertiary); margin-top: 4px; }
@@ -872,13 +861,13 @@ function close(): void {
 .msg.ok { background: var(--ok-soft); color: var(--ok); }
 .msg.err { background: var(--danger-soft); color: var(--danger); }
 .modal-footer { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 18px; border-top: 1px solid var(--border); }
-/* 编辑模式的删除入口:推到 footer 最左,与右侧的测试/取消/保存保持距离。 */
-.btn.danger { margin-right: auto; background: transparent; color: var(--danger); border-color: var(--danger); }
-.btn.danger:hover:not(:disabled) { background: var(--danger-soft); }
+/* 编辑模式的删除入口:推到 footer 最左,与右侧的测试/取消/保存保持距离
+   (红边幽灵样式走全局 .btn.ghost.danger)。 */
+.delete-entry { margin-right: auto; }
 /* 删除确认层:盖过 z-index 900 的弹窗本体,样式对齐 ConfirmDialog。 */
 .delete-confirm-backdrop {
   position: fixed; inset: 0; z-index: 1200;
-  background: rgba(0, 0, 0, 0.32);
+  background: var(--overlay);
   display: flex; align-items: center; justify-content: center;
 }
 .delete-confirm {
@@ -890,12 +879,4 @@ function close(): void {
 .delete-confirm-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
 .delete-confirm-message { font-size: 13px; color: var(--text); line-height: 1.6; margin: 0; }
 .delete-confirm-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-.btn.danger-solid { background: var(--danger); color: #fff; }
-.btn.danger-solid:hover:not(:disabled) { background: var(--danger-hover, var(--danger)); }
-.btn { border-radius: 7px; padding: 7px 14px; font-size: 13px; cursor: pointer; border: 1px solid transparent; transition: background 0.15s ease, opacity 0.15s ease; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.primary { background: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
 </style>

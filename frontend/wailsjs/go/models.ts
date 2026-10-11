@@ -114,50 +114,6 @@ export namespace backend {
 		    return a;
 		}
 	}
-	export class CHExecuteRequest {
-	    connection_id: string;
-	    sql: string;
-	    limit?: number;
-	    offset?: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new CHExecuteRequest(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.connection_id = source["connection_id"];
-	        this.sql = source["sql"];
-	        this.limit = source["limit"];
-	        this.offset = source["offset"];
-	    }
-	}
-	export class CHPageRowsRequest {
-	    connection_id: string;
-	    database: string;
-	    table: string;
-	    where?: string;
-	    order_by?: string;
-	    asc: boolean;
-	    limit: number;
-	    offset: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new CHPageRowsRequest(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.connection_id = source["connection_id"];
-	        this.database = source["database"];
-	        this.table = source["table"];
-	        this.where = source["where"];
-	        this.order_by = source["order_by"];
-	        this.asc = source["asc"];
-	        this.limit = source["limit"];
-	        this.offset = source["offset"];
-	    }
-	}
 	export class CHTablesRequest {
 	    connection_id: string;
 	    database: string;
@@ -242,6 +198,26 @@ export namespace backend {
 	        this.topic = source["topic"];
 	        this.partitions = source["partitions"];
 	        this.replication_factor = source["replication_factor"];
+	    }
+	}
+	export class DatabaseExecuteRequest {
+	    connection_id: string;
+	    database?: string;
+	    sql: string;
+	    limit?: number;
+	    offset?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DatabaseExecuteRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connection_id = source["connection_id"];
+	        this.database = source["database"];
+	        this.sql = source["sql"];
+	        this.limit = source["limit"];
+	        this.offset = source["offset"];
 	    }
 	}
 	export class DeleteConsumerGroupRequest {
@@ -478,24 +454,6 @@ export namespace backend {
 	        this.body = source["body"];
 	    }
 	}
-	export class EsExecuteRequest {
-	    connection_id: string;
-	    sql: string;
-	    limit?: number;
-	    offset?: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new EsExecuteRequest(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.connection_id = source["connection_id"];
-	        this.sql = source["sql"];
-	        this.limit = source["limit"];
-	        this.offset = source["offset"];
-	    }
-	}
 	export class EsGetDocRequest {
 	    connection_id: string;
 	    index: string;
@@ -628,6 +586,24 @@ export namespace backend {
 	        this.settings_json = source["settings_json"];
 	    }
 	}
+	export class ExecuteRequest {
+	    connection_id: string;
+	    sql: string;
+	    limit?: number;
+	    offset?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExecuteRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connection_id = source["connection_id"];
+	        this.sql = source["sql"];
+	        this.limit = source["limit"];
+	        this.offset = source["offset"];
+	    }
+	}
 	export class HiveAlterTableRequest {
 	    connection_id: string;
 	    database: string;
@@ -667,26 +643,6 @@ export namespace backend {
 		    }
 		    return a;
 		}
-	}
-	export class HiveExecuteRequest {
-	    connection_id: string;
-	    sql: string;
-	    database?: string;
-	    limit?: number;
-	    offset?: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new HiveExecuteRequest(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.connection_id = source["connection_id"];
-	        this.sql = source["sql"];
-	        this.database = source["database"];
-	        this.limit = source["limit"];
-	        this.offset = source["offset"];
-	    }
 	}
 	export class HivePageRowsRequest {
 	    connection_id: string;
@@ -808,26 +764,6 @@ export namespace backend {
 	        this.table = source["table"];
 	    }
 	}
-	export class MysqlExecuteRequest {
-	    connection_id: string;
-	    database?: string;
-	    sql: string;
-	    limit?: number;
-	    offset?: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new MysqlExecuteRequest(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.connection_id = source["connection_id"];
-	        this.database = source["database"];
-	        this.sql = source["sql"];
-	        this.limit = source["limit"];
-	        this.offset = source["offset"];
-	    }
-	}
 	export class MysqlExportTableRequest {
 	    connection_id: string;
 	    database: string;
@@ -856,32 +792,6 @@ export namespace backend {
 	        this.drop_table_if_exists = source["drop_table_if_exists"];
 	        this.strip_auto_increment = source["strip_auto_increment"];
 	        this.include_create_db = source["include_create_db"];
-	    }
-	}
-	export class MysqlPageRowsRequest {
-	    connection_id: string;
-	    database: string;
-	    table: string;
-	    where?: string;
-	    order_by?: string;
-	    asc: boolean;
-	    limit: number;
-	    offset: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new MysqlPageRowsRequest(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.connection_id = source["connection_id"];
-	        this.database = source["database"];
-	        this.table = source["table"];
-	        this.where = source["where"];
-	        this.order_by = source["order_by"];
-	        this.asc = source["asc"];
-	        this.limit = source["limit"];
-	        this.offset = source["offset"];
 	    }
 	}
 	export class MysqlTableColumnsRequest {
@@ -928,6 +838,32 @@ export namespace backend {
 	        this.connection_id = source["connection_id"];
 	        this.database = source["database"];
 	        this.table = source["table"];
+	    }
+	}
+	export class PageRowsRequest {
+	    connection_id: string;
+	    database: string;
+	    table: string;
+	    where?: string;
+	    order_by?: string;
+	    asc: boolean;
+	    limit: number;
+	    offset: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PageRowsRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connection_id = source["connection_id"];
+	        this.database = source["database"];
+	        this.table = source["table"];
+	        this.where = source["where"];
+	        this.order_by = source["order_by"];
+	        this.asc = source["asc"];
+	        this.limit = source["limit"];
+	        this.offset = source["offset"];
 	    }
 	}
 	export class PostgresExecuteRequest {

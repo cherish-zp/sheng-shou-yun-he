@@ -439,7 +439,7 @@ const ttlOfSelected = computed(() => value.value?.ttl_seconds ?? -1)
             </div>
           </template>
           <template v-else-if="value.type === 'hash'">
-            <table class="table">
+            <table class="table data-table">
               <thead><tr><th>Field</th><th>Value</th><th></th></tr></thead>
               <tbody>
                 <tr v-for="(f, i) in value.hash" :key="f.field" data-test="redis-hash-row">
@@ -523,7 +523,7 @@ const ttlOfSelected = computed(() => value.value?.ttl_seconds ?? -1)
             </div>
           </template>
           <template v-else-if="value.type === 'zset'">
-            <table class="table">
+            <table class="table data-table">
               <thead><tr><th>Score</th><th>Member</th><th></th></tr></thead>
               <tbody>
                 <tr v-for="(z, i) in value.zset" :key="z.member" data-test="redis-zset-row">
@@ -633,9 +633,9 @@ const ttlOfSelected = computed(() => value.value?.ttl_seconds ?? -1)
 .input:focus { outline: none; border-color: var(--accent); }
 .textarea { width: 100%; box-sizing: border-box; resize: vertical; }
 .mono { font-family: var(--mono); }
-.table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.table th { text-align: left; padding: 6px 10px; background: var(--bg-subtle); border-bottom: 1px solid var(--border); }
-.table td { padding: 5px 10px; border-bottom: 1px solid var(--border); word-break: break-all; }
+/* 表基座走全局 .data-table;这里留紧凑 padding 差异。 */
+.table th { padding: 6px 10px; }
+.table td { padding: 5px 10px; word-break: break-all; }
 .coll { list-style: none; margin: 0; padding: 0; font-size: 13px; }
 .coll li { padding: 4px 6px; border-bottom: 1px solid var(--border); word-break: break-all; }
 .coll-row { display: flex; align-items: center; gap: 8px; }
@@ -655,12 +655,6 @@ td .edit-area { width: 100%; min-height: 90px; resize: vertical; }
 .msg { padding: 8px 10px; font-size: 13px; border-radius: 7px; margin: 8px 0; }
 .msg.err { background: var(--danger-soft); color: var(--danger); }
 .msg.warn { background: var(--warn-soft); color: var(--warn); display: flex; gap: 8px; align-items: center; }
-.btn { border-radius: 7px; padding: 6px 13px; font-size: 13px; cursor: pointer; border: 1px solid transparent; }
-.btn.small { padding: 3px 9px; font-size: 12px; }
-.btn.primary { background: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
-.btn.danger { color: var(--danger); border-color: var(--danger); }
-.btn.danger:hover { background: var(--danger-soft); }
+/* 基座走全局 .btn;键值编辑小按钮更紧凑(局部修饰)。红边删除按钮走全局 ghost.danger。 */
+.btn.small { padding: 3px 9px; }
 </style>

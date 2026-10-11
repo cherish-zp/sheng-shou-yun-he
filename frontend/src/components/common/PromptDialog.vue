@@ -83,7 +83,7 @@ function onKeydown(e: KeyboardEvent): void {
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.32);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -111,13 +111,7 @@ function onKeydown(e: KeyboardEvent): void {
   border-radius: 7px; padding: 6px 9px; font-size: 13px; font-family: var(--mono);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
 .hint { font-size: 12px; color: var(--text-tertiary); }
 .actions { display: flex; justify-content: flex-end; gap: 8px; }
-.btn { border-radius: 7px; padding: 6px 14px; font-size: 13px; cursor: pointer; border: 1px solid transparent; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.primary { background: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
 </style>
