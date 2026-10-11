@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, onUnmounted, reactive, ref, watch, type ComputedRef, type Ref } from 'vue'
+import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { getApi } from '@/api/client'
 import type { Connection, Topic, ConsumerGroup, TopicMessageCounts, RedisDBInfo, CHTableInfo, MysqlTableInfo, PostgresRelationInfo, EsIndexInfo, EsTemplateInfo, HiveTableInfo } from '@/api/types'
 import { fuzzyFilter } from '@/utils/fuzzy'
 import { formatCount } from '@/utils/format'
 import { formatBytes } from '@/utils/bytes'
 import { CSV_MIME, exportCsv, saveFile, type ExportColumn } from '@/utils/export'
+// keyedComputed/useDebouncedRef 为过滤性能基建(与三棵二级树共用),原实现
+// 在本文件,随二级树收敛迁至 useLazySubtree.ts,语义不变。
+import { keyedComputed, useDebouncedRef, useLazySubtree } from '@/composables/useLazySubtree'
 import { moveId, reorderIds } from './connReorder'
 import { useConnectionsStore, type ConnectionStatus } from '@/store/connections'
 import { useToastStore } from '@/store/toast'
@@ -134,25 +137,8 @@ function collectionsOf(type: string): ObjectCollection[] {
 const expanded = ref<Record<string, boolean>>({})
 const topicsByConn = ref<Record<string, Topic[]>>({})
 const redisDBs = ref<Record<string, RedisDBInfo[]>>({})
-const chDBs = ref<Record<string, string[]>>({})
-// 键为 `${connId}/${db}`:每个数据库节点独立缓存表清单与展开状态。
-const chTablesByDb = ref<Record<string, CHTableInfo[]>>({})
-const chTableLoadingByDb = ref<Record<string, boolean>>({})
-const chExpandedByDb = ref<Record<string, boolean>>({})
-// 键同 chDbKey:每个数据库节点独立的表名模糊过滤词。
-const chTableFilterByDb = ref<Record<string, string>>({})
-// --- MySQL / TiDB 二级树(与 ClickHouse 同构:库 → 表,懒加载表清单) ---
-const mysqlDBs = ref<Record<string, string[]>>({})
-const mysqlTablesByDb = ref<Record<string, MysqlTableInfo[]>>({})
-const mysqlTableLoadingByDb = ref<Record<string, boolean>>({})
-const mysqlExpandedByDb = ref<Record<string, boolean>>({})
-const mysqlTableFilterByDb = ref<Record<string, string>>({})
-// --- Hive 二级树(与 MySQL 同构:库 → 表,懒加载表清单;表节点仅名称) ---
-const hiveDBs = ref<Record<string, string[]>>({})
-const hiveTablesByDb = ref<Record<string, HiveTableInfo[]>>({})
-const hiveTableLoadingByDb = ref<Record<string, boolean>>({})
-const hiveExpandedByDb = ref<Record<string, boolean>>({})
-const hiveTableFilterByDb = ref<Record<string, string>>({})
+// --- MySQL / TiDB、Hive 二级树:与 ClickHouse 同构(库 → 表),状态由
+// useLazySubtree 实例持有,见下方各自实例化处 ---
 // --- PostgreSQL 三级树:数据库 → schema → relation(逐级懒加载并缓存) ---
 const pgDBs = ref<Record<string, string[]>>({})
 // 键 `${connId}/${db}`:每个数据库节点独立的 schema 清单与展开状态。
@@ -183,51 +169,13 @@ const activeSectionByConn = ref<Record<string, string>>({})
 // 生产构建保持 150ms 防抖,渲染输出不受影响。
 const SEARCH_DEBOUNCE_MS = import.meta.env.MODE === 'test' ? 0 : 150
 
-// useDebouncedRef 返回跟随 source 的防抖只读副本:source 内任一键变化都会
-// 重置同一计时器,到点整体快照一次;组件卸载时清理未触发的定时器。
-function useDebouncedRef<T extends Record<string, unknown>>(source: Ref<T>, delayMs: number): Readonly<Ref<T>> {
-  const debounced = ref({ ...source.value }) as Ref<T>
-  let timer: ReturnType<typeof setTimeout> | null = null
-  watch(source, () => {
-    if (delayMs <= 0) {
-      debounced.value = { ...source.value }
-      return
-    }
-    if (timer !== null) clearTimeout(timer)
-    timer = setTimeout(() => {
-      timer = null
-      debounced.value = { ...source.value }
-    }, delayMs)
-  }, { deep: true })
-  onUnmounted(() => {
-    if (timer !== null) clearTimeout(timer)
-  })
-  return debounced
-}
+// useDebouncedRef / keyedComputed 已迁至 @/composables/useLazySubtree.ts 并
+// 原样导出:三棵二级树(库 → 表)与下方搜索框共用同一实现。
 
 const debouncedSearchByConn = useDebouncedRef(searchByConn, SEARCH_DEBOUNCE_MS)
 const debouncedGroupSearchByConn = useDebouncedRef(groupSearchByConn, SEARCH_DEBOUNCE_MS)
-const debouncedChTableFilterByDb = useDebouncedRef(chTableFilterByDb, SEARCH_DEBOUNCE_MS)
-const debouncedMysqlTableFilterByDb = useDebouncedRef(mysqlTableFilterByDb, SEARCH_DEBOUNCE_MS)
-const debouncedHiveTableFilterByDb = useDebouncedRef(hiveTableFilterByDb, SEARCH_DEBOUNCE_MS)
 const debouncedPgRelationFilterBySchema = useDebouncedRef(pgRelationFilterBySchema, SEARCH_DEBOUNCE_MS)
 const debouncedEsIndexFilterByConn = useDebouncedRef(esIndexFilterByConn, SEARCH_DEBOUNCE_MS)
-
-// keyedComputed 按 key 惰性创建并缓存 computed:过滤结果以「connId / db /
-// schema 组合 key」为维度各缓存一份,同一 key 在同一次渲染里被 v-for、空态
-// 与计数徽标多次读取时只求值一次,跨渲染依赖未变也直接复用,替代原先每次
-// 读取都全量 map/filter/sort 的普通函数。
-function keyedComputed<T>(compute: (key: string) => T): (key: string) => T {
-  const cache = new Map<string, ComputedRef<T>>()
-  return (key: string) => {
-    let entry = cache.get(key)
-    if (!entry) {
-      entry = computed(() => compute(key))
-      cache.set(key, entry)
-    }
-    return entry.value
-  }
-}
 
 function isExpanded(id: string): boolean {
   return !!expanded.value[id]
@@ -248,7 +196,7 @@ async function toggle(conn: Connection): Promise<void> {
     void loadEsTemplates(id)
   }
   if (
-    !topicsByConn.value[id] && !redisDBs.value[id] && !chDBs.value[id] && !mysqlDBs.value[id] && !esIndices.value[id] && !pgDBs.value[id] && !hiveDBs.value[id]
+    !topicsByConn.value[id] && !redisDBs.value[id] && !chSub.dbsOf(id) && !mysqlSub.dbsOf(id) && !esIndices.value[id] && !pgDBs.value[id] && !hiveSub.dbsOf(id)
     && (conn.type === 'kafka' || conn.type === 'redis' || conn.type === 'clickhouse'
       || conn.type === 'mysql' || conn.type === 'tidb' || conn.type === 'es' || conn.type === 'postgres' || conn.type === 'hive')
   ) {
@@ -267,15 +215,15 @@ async function load(connId: string): Promise<void> {
       connStore.setStatus(connId, 'connected')
     } else if (type === 'clickhouse') {
       // 后端默认已过滤系统库。
-      chDBs.value[connId] = await getApi().listCHDatabases(connId)
+      chSub.setDbs(connId, await getApi().listCHDatabases(connId))
       connStore.setStatus(connId, 'connected')
     } else if (type === 'mysql' || type === 'tidb') {
       // 后端默认已过滤系统库(information_schema/performance_schema 等)。
-      mysqlDBs.value[connId] = (await getApi().listMysqlDatabases?.(connId)) ?? []
+      mysqlSub.setDbs(connId, (await getApi().listMysqlDatabases?.(connId)) ?? [])
       connStore.setStatus(connId, 'connected')
     } else if (type === 'hive') {
       // 后端默认已过滤系统库(default 保留)。
-      hiveDBs.value[connId] = (await getApi().listHiveDatabases?.(connId)) ?? []
+      hiveSub.setDbs(connId, (await getApi().listHiveDatabases?.(connId)) ?? [])
       connStore.setStatus(connId, 'connected')
     } else if (type === 'es') {
       // 后端默认已过滤系统索引(.kibana* 等)。
@@ -305,156 +253,48 @@ async function load(connId: string): Promise<void> {
   void loadCounts(connId)
 }
 
-// --- ClickHouse 二级树:数据库 → 表 ---
+// --- ClickHouse 二级树:数据库 → 表(懒加载/过滤/计数徽标统一走 useLazySubtree) ---
 
-function chDbKey(connId: string, db: string): string {
-  return `${connId}/${db}`
-}
+const chSub = useLazySubtree<CHTableInfo>({
+  // 后端不含 system 库表;CH 的表清单接口必在,无需可选链兜底。
+  listTables: (connId, db) => getApi().listCHTables({
+    connection_id: connId,
+    database: db,
+    show_system: false,
+  }),
+  onError: (connId, message) => { errorByConn.value[connId] = message },
+  debounceMs: SEARCH_DEBOUNCE_MS,
+})
+// 过滤词 ref 解构回父级顶层命名,模板 v-model 继续直接写它(自动解包)。
+const { filterByDb: chTableFilterByDb } = chSub
 
-function isChDbExpanded(connId: string, db: string): boolean {
-  return !!chExpandedByDb.value[chDbKey(connId, db)]
-}
+// --- MySQL / TiDB 二级树:数据库 → 表(展开库节点时懒加载表清单,统一走 useLazySubtree) ---
 
-async function toggleChDb(connId: string, db: string): Promise<void> {
-  const key = chDbKey(connId, db)
-  chExpandedByDb.value[key] = !chExpandedByDb.value[key]
-  if (!chExpandedByDb.value[key] || chTablesByDb.value[key]) return
-  // 首次展开懒加载表清单(不含 system 库表)。
-  chTableLoadingByDb.value[key] = true
-  try {
-    chTablesByDb.value[key] = await getApi().listCHTables({
-      connection_id: connId,
-      database: db,
-      show_system: false,
-    })
-  } catch (e) {
-    errorByConn.value[connId] = e instanceof Error ? e.message : String(e)
-  } finally {
-    chTableLoadingByDb.value[key] = false
-  }
-}
+const mysqlSub = useLazySubtree<MysqlTableInfo>({
+  // 系统库表由后端过滤;接口为可选成员,缺失时兜底空清单。
+  listTables: async (connId, db) => (await getApi().listMysqlTables?.({
+    connection_id: connId,
+    database: db,
+  })) ?? [],
+  onError: (connId, message) => { errorByConn.value[connId] = message },
+  debounceMs: SEARCH_DEBOUNCE_MS,
+})
+// 过滤词 ref 解构回父级顶层命名,模板 v-model 继续直接写它(自动解包)。
+const { filterByDb: mysqlTableFilterByDb } = mysqlSub
 
-function chTableFilterOf(connId: string, db: string): string {
-  // 读防抖副本,与 filteredChTables/徽标共用同一份生效过滤词。
-  return (debouncedChTableFilterByDb.value[chDbKey(connId, db)] ?? '').trim()
-}
+// --- Hive 二级树:数据库 → 表(展开库节点时懒加载表清单,统一走 useLazySubtree) ---
 
-// filteredChTables 对表名做本地模糊过滤(fuzzyFilter),按相关度排序。结果
-// 按 db key 缓存为 computed:v-for、空态与计数徽标共享同一份,不再重复排序。
-const filteredChTablesByKey = keyedComputed((key: string): CHTableInfo[] =>
-  fuzzyFilter(chTablesByDb.value[key] ?? [], debouncedChTableFilterByDb.value[key] ?? '', (t) => t.name),
-)
-function filteredChTables(connId: string, db: string): CHTableInfo[] {
-  return filteredChTablesByKey(chDbKey(connId, db))
-}
-
-// chDbCountLabel 数据库节点的表计数徽标:未过滤显示总数,过滤中显示「可见/总数」。
-function chDbCountLabel(connId: string, db: string): string {
-  const total = (chTablesByDb.value[chDbKey(connId, db)] ?? []).length
-  const q = chTableFilterOf(connId, db)
-  if (!q) return String(total)
-  return `${filteredChTables(connId, db).length}/${total}`
-}
-
-// --- MySQL / TiDB 二级树:数据库 → 表(展开库节点时懒加载表清单) ---
-
-function mysqlDbKey(connId: string, db: string): string {
-  return `${connId}/${db}`
-}
-
-function isMysqlDbExpanded(connId: string, db: string): boolean {
-  return !!mysqlExpandedByDb.value[mysqlDbKey(connId, db)]
-}
-
-async function toggleMysqlDb(connId: string, db: string): Promise<void> {
-  const key = mysqlDbKey(connId, db)
-  mysqlExpandedByDb.value[key] = !mysqlExpandedByDb.value[key]
-  if (!mysqlExpandedByDb.value[key] || mysqlTablesByDb.value[key]) return
-  // 首次展开懒加载表清单(系统库由后端过滤)。
-  mysqlTableLoadingByDb.value[key] = true
-  try {
-    mysqlTablesByDb.value[key] = (await getApi().listMysqlTables?.({
-      connection_id: connId,
-      database: db,
-    })) ?? []
-  } catch (e) {
-    errorByConn.value[connId] = e instanceof Error ? e.message : String(e)
-  } finally {
-    mysqlTableLoadingByDb.value[key] = false
-  }
-}
-
-function mysqlTableFilterOf(connId: string, db: string): string {
-  // 读防抖副本,与 filteredMysqlTables/徽标共用同一份生效过滤词。
-  return (debouncedMysqlTableFilterByDb.value[mysqlDbKey(connId, db)] ?? '').trim()
-}
-
-// filteredMysqlTables 对表名做本地模糊过滤(fuzzyFilter),按相关度排序。
-// 结果按库 key 缓存为 computed(与 filteredChTables 同构)。
-const filteredMysqlTablesByKey = keyedComputed((key: string): MysqlTableInfo[] =>
-  fuzzyFilter(mysqlTablesByDb.value[key] ?? [], debouncedMysqlTableFilterByDb.value[key] ?? '', (t) => t.name),
-)
-function filteredMysqlTables(connId: string, db: string): MysqlTableInfo[] {
-  return filteredMysqlTablesByKey(mysqlDbKey(connId, db))
-}
-
-// mysqlDbCountLabel 数据库节点的表计数徽标:未过滤显示总数,过滤中显示「可见/总数」。
-function mysqlDbCountLabel(connId: string, db: string): string {
-  const total = (mysqlTablesByDb.value[mysqlDbKey(connId, db)] ?? []).length
-  const q = mysqlTableFilterOf(connId, db)
-  if (!q) return String(total)
-  return `${filteredMysqlTables(connId, db).length}/${total}`
-}
-
-// --- Hive 二级树:数据库 → 表(展开库节点时懒加载表清单) ---
-
-function hiveDbKey(connId: string, db: string): string {
-  return `${connId}/${db}`
-}
-
-function isHiveDbExpanded(connId: string, db: string): boolean {
-  return !!hiveExpandedByDb.value[hiveDbKey(connId, db)]
-}
-
-async function toggleHiveDb(connId: string, db: string): Promise<void> {
-  const key = hiveDbKey(connId, db)
-  hiveExpandedByDb.value[key] = !hiveExpandedByDb.value[key]
-  if (!hiveExpandedByDb.value[key] || hiveTablesByDb.value[key]) return
-  // 首次展开懒加载表清单(系统库表由后端过滤)。
-  hiveTableLoadingByDb.value[key] = true
-  try {
-    hiveTablesByDb.value[key] = (await getApi().listHiveTables?.({
-      connection_id: connId,
-      database: db,
-    })) ?? []
-  } catch (e) {
-    errorByConn.value[connId] = e instanceof Error ? e.message : String(e)
-  } finally {
-    hiveTableLoadingByDb.value[key] = false
-  }
-}
-
-function hiveTableFilterOf(connId: string, db: string): string {
-  // 读防抖副本,与 filteredHiveTables/徽标共用同一份生效过滤词。
-  return (debouncedHiveTableFilterByDb.value[hiveDbKey(connId, db)] ?? '').trim()
-}
-
-// filteredHiveTables 对表名做本地模糊过滤(fuzzyFilter),按相关度排序。
-// 结果按库 key 缓存为 computed(与 filteredChTables 同构)。
-const filteredHiveTablesByKey = keyedComputed((key: string): HiveTableInfo[] =>
-  fuzzyFilter(hiveTablesByDb.value[key] ?? [], debouncedHiveTableFilterByDb.value[key] ?? '', (t) => t.name),
-)
-function filteredHiveTables(connId: string, db: string): HiveTableInfo[] {
-  return filteredHiveTablesByKey(hiveDbKey(connId, db))
-}
-
-// hiveDbCountLabel 数据库节点的表计数徽标:未过滤显示总数,过滤中显示「可见/总数」。
-function hiveDbCountLabel(connId: string, db: string): string {
-  const total = (hiveTablesByDb.value[hiveDbKey(connId, db)] ?? []).length
-  const q = hiveTableFilterOf(connId, db)
-  if (!q) return String(total)
-  return `${filteredHiveTables(connId, db).length}/${total}`
-}
+const hiveSub = useLazySubtree<HiveTableInfo>({
+  // 系统库表由后端过滤;接口为可选成员,缺失时兜底空清单。
+  listTables: async (connId, db) => (await getApi().listHiveTables?.({
+    connection_id: connId,
+    database: db,
+  })) ?? [],
+  onError: (connId, message) => { errorByConn.value[connId] = message },
+  debounceMs: SEARCH_DEBOUNCE_MS,
+})
+// 过滤词 ref 解构回父级顶层命名,模板 v-model 继续直接写它(自动解包)。
+const { filterByDb: hiveTableFilterByDb } = hiveSub
 
 // --- PostgreSQL 三级树:数据库 → schema → relation ---
 
@@ -523,7 +363,7 @@ function openPgRelation(connId: string, db: string, r: PostgresRelationInfo): vo
 }
 
 // filteredPgRelations 对 relation 名做本地模糊过滤(fuzzyFilter),按相关度
-// 排序。结果按 schema key 缓存为 computed(与 filteredChTables 同构)。
+// 排序。结果按 schema key 缓存为 computed(与 useLazySubtree 内 filtered 同构)。
 const filteredPgRelationsByKey = keyedComputed((key: string): PostgresRelationInfo[] =>
   fuzzyFilter(pgRelationsBySchema.value[key] ?? [], debouncedPgRelationFilterBySchema.value[key] ?? '', (r) => r.relation),
 )
@@ -548,7 +388,7 @@ function esIndexFilterOf(connId: string): string {
 }
 
 // filteredEsIndices 对索引名做本地模糊过滤(fuzzyFilter),按相关度排序。
-// 结果按连接 key 缓存为 computed(与 filteredChTables 同构)。
+// 结果按连接 key 缓存为 computed(与 useLazySubtree 内 filtered 同构)。
 const filteredEsIndicesByKey = keyedComputed((key: string): EsIndexInfo[] =>
   fuzzyFilter(esIndices.value[key] ?? [], debouncedEsIndexFilterByConn.value[key] ?? '', (i) => i.name),
 )
@@ -1148,25 +988,6 @@ function askMysqlTableConfirm(connId: string, db: string, table: string, action:
   confirm.value = { connId, kind: 'mysql-table', name: table, action, db }
 }
 
-// reloadMysqlTables 重置某库的表清单缓存;库节点仍展开时立即重新拉取,
-// 让删除/截断后的树立即反映新状态(与 toggleMysqlDb 的懒加载逻辑一致)。
-async function reloadMysqlTables(connId: string, db: string): Promise<void> {
-  const key = mysqlDbKey(connId, db)
-  delete mysqlTablesByDb.value[key]
-  if (!isMysqlDbExpanded(connId, db)) return
-  mysqlTableLoadingByDb.value[key] = true
-  try {
-    mysqlTablesByDb.value[key] = (await getApi().listMysqlTables?.({
-      connection_id: connId,
-      database: db,
-    })) ?? []
-  } catch (e) {
-    errorByConn.value[connId] = e instanceof Error ? e.message : String(e)
-  } finally {
-    mysqlTableLoadingByDb.value[key] = false
-  }
-}
-
 // --- Hive 表节点动作:结构编辑弹窗 / 导出表结构 / 截断(仅内部表)与删除 ---
 
 // hiveStructureMeta holds the hive table whose structure-editing dialog is open.
@@ -1206,25 +1027,6 @@ async function askHiveTableConfirm(connId: string, db: string, table: string, ac
     return
   }
   confirm.value = { connId, kind: 'hive-table', name: table, action, db }
-}
-
-// reloadHiveTables 重置某库的表清单缓存;库节点仍展开时立即重新拉取,
-// 让删除/截断后的树立即反映新状态(与 reloadMysqlTables 同构)。
-async function reloadHiveTables(connId: string, db: string): Promise<void> {
-  const key = hiveDbKey(connId, db)
-  delete hiveTablesByDb.value[key]
-  if (!isHiveDbExpanded(connId, db)) return
-  hiveTableLoadingByDb.value[key] = true
-  try {
-    hiveTablesByDb.value[key] = (await getApi().listHiveTables?.({
-      connection_id: connId,
-      database: db,
-    })) ?? []
-  } catch (e) {
-    errorByConn.value[connId] = e instanceof Error ? e.message : String(e)
-  } finally {
-    hiveTableLoadingByDb.value[key] = false
-  }
 }
 
 // expandMeta drives the 扩充分区 prompt, prefilled with the current count.
@@ -1377,7 +1179,7 @@ async function executeDelete(): Promise<void> {
         // pinia 未激活时忽略提示,不能中断后续刷新
       }
       // 删除/截断成功后只刷新该库的表清单,不动整棵连接树。
-      await reloadMysqlTables(pending.connId, db)
+      await mysqlSub.reload(pending.connId, db)
       return
     } else if (pending.kind === 'hive-table') {
       const db = pending.db ?? ''
@@ -1398,7 +1200,7 @@ async function executeDelete(): Promise<void> {
         // pinia 未激活时忽略提示,不能中断后续刷新
       }
       // 删除/截断成功后只刷新该库的表清单,不动整棵连接树。
-      await reloadHiveTables(pending.connId, db)
+      await hiveSub.reload(pending.connId, db)
       return
     } else if (pending.kind === 'es-index') {
       await getApi().esDeleteIndex?.({ connection_id: pending.connId, index: pending.name })
@@ -1768,24 +1570,24 @@ function exportTopics(conn: Connection): void {
         <div v-if="loadingByConn[conn.id]" class="conn-loading" data-test="tree-loading">加载中…</div>
         <div v-else-if="errorByConn[conn.id]" class="conn-error" data-test="tree-error">{{ errorByConn[conn.id] }}</div>
         <template v-else>
-          <template v-for="db in chDBs[conn.id] ?? []" :key="db">
-            <div class="leaf ch-db-node" data-test="ch-db-node" :title="`数据库 ${db}`" @click="toggleChDb(conn.id, db)">
-              <span class="caret" :class="{ open: isChDbExpanded(conn.id, db) }" data-test="ch-db-caret">
+          <template v-for="db in chSub.dbsOf(conn.id) ?? []" :key="db">
+            <div class="leaf ch-db-node" data-test="ch-db-node" :title="`数据库 ${db}`" @click="chSub.toggleDb(conn.id, db)">
+              <span class="caret" :class="{ open: chSub.isDbExpanded(conn.id, db) }" data-test="ch-db-caret">
                 <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
                   <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </span>
               <span class="leaf-name" data-test="ch-db-name">{{ db }}</span>
               <span
-                v-if="chTablesByDb[chDbKey(conn.id, db)]"
+                v-if="chSub.isLoaded(conn.id, db)"
                 class="leaf-badge"
                 data-test="ch-db-count"
-              >{{ chDbCountLabel(conn.id, db) }}</span>
+              >{{ chSub.countLabel(conn.id, db) }}</span>
             </div>
-            <template v-if="isChDbExpanded(conn.id, db)">
+            <template v-if="chSub.isDbExpanded(conn.id, db)">
               <div class="ch-table-filter">
                 <input
-                  v-model="chTableFilterByDb[chDbKey(conn.id, db)]"
+                  v-model="chTableFilterByDb[chSub.keyOf(conn.id, db)]"
                   class="search-input ch-filter-input"
                   type="search"
                   data-test="ch-table-filter"
@@ -1797,13 +1599,13 @@ function exportTopics(conn: Connection): void {
                 />
               </div>
               <div
-                v-if="chTableLoadingByDb[chDbKey(conn.id, db)]"
+                v-if="chSub.isLoading(conn.id, db)"
                 class="leaf muted"
                 data-test="ch-tables-loading"
               >加载中…</div>
               <template v-else>
                 <div
-                  v-for="t in filteredChTables(conn.id, db)"
+                  v-for="t in chSub.filtered(conn.id, db)"
                   :key="t.name"
                   class="leaf ch-table"
                   data-test="ch-table-node"
@@ -1815,38 +1617,38 @@ function exportTopics(conn: Connection): void {
                   <span class="leaf-badge" data-test="ch-table-rows">{{ formatBytes(t.total_rows) }}</span>
                 </div>
                 <div
-                  v-if="filteredChTables(conn.id, db).length === 0"
+                  v-if="chSub.filtered(conn.id, db).length === 0"
                   class="leaf muted"
                   data-test="ch-table-empty"
-                >{{ (chTablesByDb[chDbKey(conn.id, db)] ?? []).length === 0 ? '（无表）' : '无匹配表' }}</div>
+                >{{ chSub.isEmpty(conn.id, db) ? '（无表）' : '无匹配表' }}</div>
               </template>
             </template>
           </template>
-          <div v-if="(chDBs[conn.id] ?? []).length === 0" class="leaf muted" data-test="ch-db-empty">（无数据库）</div>
+          <div v-if="(chSub.dbsOf(conn.id) ?? []).length === 0" class="leaf muted" data-test="ch-db-empty">（无数据库）</div>
         </template>
       </div>
       <div v-else-if="isExpanded(conn.id) && (conn.type === 'mysql' || conn.type === 'tidb')" class="conn-children">
         <div v-if="loadingByConn[conn.id]" class="conn-loading" data-test="tree-loading">加载中…</div>
         <div v-else-if="errorByConn[conn.id]" class="conn-error" data-test="tree-error">{{ errorByConn[conn.id] }}</div>
         <template v-else>
-          <template v-for="db in mysqlDBs[conn.id] ?? []" :key="db">
-            <div class="leaf ch-db-node" data-test="mysql-db-node" :title="`数据库 ${db}`" @click="toggleMysqlDb(conn.id, db)">
-              <span class="caret" :class="{ open: isMysqlDbExpanded(conn.id, db) }" data-test="mysql-db-caret">
+          <template v-for="db in mysqlSub.dbsOf(conn.id) ?? []" :key="db">
+            <div class="leaf ch-db-node" data-test="mysql-db-node" :title="`数据库 ${db}`" @click="mysqlSub.toggleDb(conn.id, db)">
+              <span class="caret" :class="{ open: mysqlSub.isDbExpanded(conn.id, db) }" data-test="mysql-db-caret">
                 <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
                   <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </span>
               <span class="leaf-name" data-test="mysql-db-name">{{ db }}</span>
               <span
-                v-if="mysqlTablesByDb[mysqlDbKey(conn.id, db)]"
+                v-if="mysqlSub.isLoaded(conn.id, db)"
                 class="leaf-badge"
                 data-test="mysql-db-count"
-              >{{ mysqlDbCountLabel(conn.id, db) }}</span>
+              >{{ mysqlSub.countLabel(conn.id, db) }}</span>
             </div>
-            <template v-if="isMysqlDbExpanded(conn.id, db)">
+            <template v-if="mysqlSub.isDbExpanded(conn.id, db)">
               <div class="ch-table-filter">
                 <input
-                  v-model="mysqlTableFilterByDb[mysqlDbKey(conn.id, db)]"
+                  v-model="mysqlTableFilterByDb[mysqlSub.keyOf(conn.id, db)]"
                   class="search-input ch-filter-input"
                   type="search"
                   data-test="mysql-table-filter"
@@ -1858,13 +1660,13 @@ function exportTopics(conn: Connection): void {
                 />
               </div>
               <div
-                v-if="mysqlTableLoadingByDb[mysqlDbKey(conn.id, db)]"
+                v-if="mysqlSub.isLoading(conn.id, db)"
                 class="leaf muted"
                 data-test="mysql-tables-loading"
               >加载中…</div>
               <template v-else>
                 <div
-                  v-for="t in filteredMysqlTables(conn.id, db)"
+                  v-for="t in mysqlSub.filtered(conn.id, db)"
                   :key="t.name"
                   class="leaf ch-table"
                   data-test="mysql-table-node"
@@ -1877,38 +1679,38 @@ function exportTopics(conn: Connection): void {
                   <span v-if="t.table_rows !== null" class="leaf-badge" data-test="mysql-table-rows">{{ formatBytes(t.table_rows) }}</span>
                 </div>
                 <div
-                  v-if="filteredMysqlTables(conn.id, db).length === 0"
+                  v-if="mysqlSub.filtered(conn.id, db).length === 0"
                   class="leaf muted"
                   data-test="mysql-table-empty"
-                >{{ (mysqlTablesByDb[mysqlDbKey(conn.id, db)] ?? []).length === 0 ? '（无表）' : '无匹配表' }}</div>
+                >{{ mysqlSub.isEmpty(conn.id, db) ? '（无表）' : '无匹配表' }}</div>
               </template>
             </template>
           </template>
-          <div v-if="(mysqlDBs[conn.id] ?? []).length === 0" class="leaf muted" data-test="mysql-db-empty">（无数据库）</div>
+          <div v-if="(mysqlSub.dbsOf(conn.id) ?? []).length === 0" class="leaf muted" data-test="mysql-db-empty">（无数据库）</div>
         </template>
       </div>
       <div v-else-if="isExpanded(conn.id) && conn.type === 'hive'" class="conn-children">
         <div v-if="loadingByConn[conn.id]" class="conn-loading" data-test="tree-loading">加载中…</div>
         <div v-else-if="errorByConn[conn.id]" class="conn-error" data-test="tree-error">{{ errorByConn[conn.id] }}</div>
         <template v-else>
-          <template v-for="db in hiveDBs[conn.id] ?? []" :key="db">
-            <div class="leaf ch-db-node" data-test="hive-db-node" :title="`数据库 ${db}`" @click="toggleHiveDb(conn.id, db)">
-              <span class="caret" :class="{ open: isHiveDbExpanded(conn.id, db) }" data-test="hive-db-caret">
+          <template v-for="db in hiveSub.dbsOf(conn.id) ?? []" :key="db">
+            <div class="leaf ch-db-node" data-test="hive-db-node" :title="`数据库 ${db}`" @click="hiveSub.toggleDb(conn.id, db)">
+              <span class="caret" :class="{ open: hiveSub.isDbExpanded(conn.id, db) }" data-test="hive-db-caret">
                 <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
                   <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </span>
               <span class="leaf-name" data-test="hive-db-name">{{ db }}</span>
               <span
-                v-if="hiveTablesByDb[hiveDbKey(conn.id, db)]"
+                v-if="hiveSub.isLoaded(conn.id, db)"
                 class="leaf-badge"
                 data-test="hive-db-count"
-              >{{ hiveDbCountLabel(conn.id, db) }}</span>
+              >{{ hiveSub.countLabel(conn.id, db) }}</span>
             </div>
-            <template v-if="isHiveDbExpanded(conn.id, db)">
+            <template v-if="hiveSub.isDbExpanded(conn.id, db)">
               <div class="ch-table-filter">
                 <input
-                  v-model="hiveTableFilterByDb[hiveDbKey(conn.id, db)]"
+                  v-model="hiveTableFilterByDb[hiveSub.keyOf(conn.id, db)]"
                   class="search-input ch-filter-input"
                   type="search"
                   data-test="hive-table-filter"
@@ -1920,13 +1722,13 @@ function exportTopics(conn: Connection): void {
                 />
               </div>
               <div
-                v-if="hiveTableLoadingByDb[hiveDbKey(conn.id, db)]"
+                v-if="hiveSub.isLoading(conn.id, db)"
                 class="leaf muted"
                 data-test="hive-tables-loading"
               >加载中…</div>
               <template v-else>
                 <div
-                  v-for="t in filteredHiveTables(conn.id, db)"
+                  v-for="t in hiveSub.filtered(conn.id, db)"
                   :key="t.name"
                   class="leaf ch-table"
                   data-test="hive-table-node"
@@ -1937,14 +1739,14 @@ function exportTopics(conn: Connection): void {
                   <span class="leaf-name" data-test="hive-table-name">{{ t.name }}</span>
                 </div>
                 <div
-                  v-if="filteredHiveTables(conn.id, db).length === 0"
+                  v-if="hiveSub.filtered(conn.id, db).length === 0"
                   class="leaf muted"
                   data-test="hive-table-empty"
-                >{{ (hiveTablesByDb[hiveDbKey(conn.id, db)] ?? []).length === 0 ? '（无表）' : '无匹配表' }}</div>
+                >{{ hiveSub.isEmpty(conn.id, db) ? '（无表）' : '无匹配表' }}</div>
               </template>
             </template>
           </template>
-          <div v-if="(hiveDBs[conn.id] ?? []).length === 0" class="leaf muted" data-test="hive-db-empty">（无数据库）</div>
+          <div v-if="(hiveSub.dbsOf(conn.id) ?? []).length === 0" class="leaf muted" data-test="hive-db-empty">（无数据库）</div>
         </template>
       </div>
       <div v-else-if="isExpanded(conn.id) && conn.type === 'postgres'" class="conn-children">
@@ -2296,15 +2098,15 @@ function exportTopics(conn: Connection): void {
 .tree { padding: 10px 8px 12px; font-size: 13px; color: var(--text); font-family: var(--font); }
 .tree-new {
   width: 100%; box-sizing: border-box;
-  background: var(--accent); color: #fff; border: none;
+  background: var(--primary-gradient); color: var(--on-primary); border: none;
   border-radius: 9px; padding: 8px 10px; cursor: pointer; margin-bottom: 10px; font-size: 13px; font-weight: 500;
-  /* 层次:投影 + 顶部内高光;按下轻微缩放反馈。 */
-  box-shadow: 0 1px 2px rgba(0, 113, 227, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.14);
-  transition: background 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease;
+  /* 层次:强调投影(token)+ 顶部内高光;按下轻微缩放反馈。 */
+  box-shadow: var(--shadow-accent), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  transition: filter 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease;
 }
-.tree-new:hover { background: var(--accent-hover); }
-.tree-new:active { transform: scale(0.98); box-shadow: 0 1px 1px rgba(0, 113, 227, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.1); }
-.tree-new:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft), 0 1px 2px rgba(0, 113, 227, 0.3); }
+.tree-new:hover { filter: brightness(0.95); }
+.tree-new:active { transform: scale(0.98); box-shadow: var(--shadow-accent), inset 0 1px 0 rgba(255, 255, 255, 0.1); }
+.tree-new:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--shadow-accent); }
 .tree-empty {
   color: var(--text-tertiary); font-size: 12.5px; text-align: center;
   padding: 26px 12px; margin: 2px 2px 8px;
@@ -2505,18 +2307,14 @@ function exportTopics(conn: Connection): void {
   border-radius: 7px; padding: 5px 9px; font-size: 12px; width: 100%; box-sizing: border-box;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
 .create-row { display: flex; gap: 8px; }
 .create-field { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--text-secondary); flex: 1; }
 .input.num { width: 100%; }
 .create-error { color: var(--danger); font-size: 12px; }
 .create-actions { display: flex; gap: 8px; }
-.btn { border-radius: 7px; padding: 4px 12px; font-size: 12px; cursor: pointer; border: 1px solid transparent; transition: background 0.15s ease, opacity 0.15s ease; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.primary { background: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
-.btn.ghost:hover { background: var(--bg-hover); }
+/* 基座走全局 .btn;树内创建表单按钮为小号(局部修饰)。 */
+.btn { padding: 4px 12px; font-size: 12px; }
 .segmented {
   display: flex; gap: 2px; margin: 6px 0 8px; padding: 3px;
   background: var(--bg-subtle); border: 1px solid var(--border);
@@ -2557,7 +2355,7 @@ function exportTopics(conn: Connection): void {
 /* ES 修改索引设置弹窗:遮罩与卡片的风格对齐全局 ConfirmDialog。 */
 .es-settings-backdrop {
   position: fixed; inset: 0; z-index: 100;
-  background: rgba(0, 0, 0, 0.32);
+  background: var(--overlay);
   -webkit-backdrop-filter: blur(2px);
   backdrop-filter: blur(2px);
   display: flex; align-items: center; justify-content: center;
