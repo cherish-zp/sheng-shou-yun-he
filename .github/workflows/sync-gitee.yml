@@ -1,0 +1,31 @@
+# Gitee 同步手动重跑入口:release.yml 的 Gitee 同步是 best-effort(跨境网络
+# 可能慢/不通),失败时从这里按原 tag 重跑——直接复用已发布的 GitHub Release
+# 附件,不重新构建。
+#
+# 用法:Actions 页面选本 workflow → Run workflow → 填入 tag(如 v1.7.1)。
+# 与本机兜底等价:GITEE_TOKEN=<私人令牌> bash scripts/sync-gitee-release.sh <tag>
+name: Sync Gitee
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要同步的 tag(如 v1.7.1,GitHub Release 上必须已存在)'
+        required: true
+        type: string
+
+permissions: {} # 只读 GitHub Release,无需写权限
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4 # 拉取同步脚本本身
+
+      - name: Sync Gitee Release
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        # 手动重跑不加 continue-on-error:失败要失败得响亮,便于再排查。
+        run: bash scripts/sync-gitee-release.sh "$TAG"

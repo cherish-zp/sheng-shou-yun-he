@@ -707,17 +707,10 @@ func (c *HiveClient) countTableInto(ctx context.Context, database, table string,
 // --- SQL 控制台(逐语句;limit>0 服务端分页,对齐 mysql 语义) ---
 
 // hiveStatementReturnsRows reports whether the statement's first keyword
-// produces a result set (SELECT/SHOW/DESC/DESCRIBE/EXPLAIN/WITH)。
+// produces a result set。关键字集与 MySQL 完全一致(SELECT/SHOW/DESC/
+// DESCRIBE/EXPLAIN/WITH),共用 stdStatementReturnsRows 骨架。
 func hiveStatementReturnsRows(stmt string) bool {
-	first := stmt
-	if i := strings.IndexAny(stmt, " \t\n\r("); i >= 0 {
-		first = stmt[:i]
-	}
-	switch strings.ToUpper(first) {
-	case "SELECT", "SHOW", "DESC", "DESCRIBE", "EXPLAIN", "WITH":
-		return true
-	}
-	return false
+	return stdStatementReturnsRows(stmt)
 }
 
 // wrapHivePagedQuery renders the paged form of a wrappable statement:原文
@@ -1217,41 +1210,15 @@ func (c *HiveClient) DeleteRow(ctx context.Context, database, table string, wher
 // --- Service 层委托(危险操作的审计由 app 层落) ---
 
 // HiveTestConnection verifies connectivity to the given config without
-// persisting or pooling anything.
+// persisting or pooling anything. 连接测试骨架见 service.go 的 probeConnection。
 func (s *Service) HiveTestConnection(ctx context.Context, cfg model.HiveConfig) error {
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	client, err := NewHiveClient(cfg)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	return client.Connect(ctx)
+	return probeConnection(ctx, cfg, NewHiveClient)
 }
 
 // hive returns the pooled Hive client for the connection, auto-connecting
-// when the tree has not connected it yet.
+// when the tree has not connected it yet. 池解析骨架见 pooledSource。
 func (s *Service) hive(ctx context.Context, id string) (HiveDataSource, error) {
-	if ds, err := s.pool.Get(id); err == nil {
-		h, ok := ds.(HiveDataSource)
-		if !ok {
-			return nil, fmt.Errorf("connection %q is not a Hive source", id)
-		}
-		return h, nil
-	}
-	if err := s.ConnectConnection(ctx, id); err != nil {
-		return nil, err
-	}
-	ds, err := s.pool.Get(id)
-	if err != nil {
-		return nil, err
-	}
-	h, ok := ds.(HiveDataSource)
-	if !ok {
-		return nil, fmt.Errorf("connection %q is not a Hive source", id)
-	}
-	return h, nil
+	return pooledSource[HiveDataSource](s, ctx, id, "a Hive")
 }
 
 // HiveDatabases lists the databases of the connection's HiveServer2.

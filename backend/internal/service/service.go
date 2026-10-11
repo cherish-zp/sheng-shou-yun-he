@@ -231,27 +231,62 @@ func (s *Service) buildHiveClient(c *model.Connection) (*HiveClient, error) {
 	return NewHiveClient(cfg)
 }
 
-// redis returns the pooled Redis client for the connection, auto-connecting
-// when the tree has not connected it yet.
-func (s *Service) redis(ctx context.Context, id string) (RedisDataSource, error) {
+// pooledSource 是五个数据源(ch/mysql/postgres/es/hive/redis)共享的泛型池
+// 解析骨架:池命中且类型匹配直接返回;池命中但类型不匹配按 kind 文案报错;
+// 未命中先走 ConnectConnection 自动建连,再取一次并断言。kind 是错误文案里
+// 的冠词短语(如 "a ClickHouse"、"an Elasticsearch"),保证各源历史报错
+// 文案逐字不变。Kafka 的解析回退路径不同(buildClient 自建并入池),不经此
+// 骨架。
+func pooledSource[T any](s *Service, ctx context.Context, id, kind string) (T, error) {
+	var zero T
 	if ds, err := s.pool.Get(id); err == nil {
-		if rds, ok := ds.(RedisDataSource); ok {
-			return rds, nil
+		if v, ok := ds.(T); ok {
+			return v, nil
 		}
-		return nil, fmt.Errorf("connection %q is not a Redis source", id)
+		return zero, fmt.Errorf("connection %q is not %s source", id, kind)
 	}
 	if err := s.ConnectConnection(ctx, id); err != nil {
-		return nil, err
+		return zero, err
 	}
 	ds, err := s.pool.Get(id)
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
-	rds, ok := ds.(RedisDataSource)
+	v, ok := ds.(T)
 	if !ok {
-		return nil, fmt.Errorf("connection %q is not a Redis source", id)
+		return zero, fmt.Errorf("connection %q is not %s source", id, kind)
 	}
-	return rds, nil
+	return v, nil
+}
+
+// probeConnection 是连接测试的公共骨架:校验配置 → 构造客户端 → Connect
+// 探活 → 关闭,不落存储、不入池。CH/MySQL/PG/ES/Hive 五源的
+// Service.TestXxxConnection 完全同形;Kafka 走 factory 并包装错误、Redis 的
+// 探活(App 层直连)没有 Validate 步骤,均不经此骨架。P 约束以 *C 承载指针
+// 接收者的 Validate —— 与原方法内 cfg.Validate() 对可寻址参数自动取址的
+// 语义完全一致。
+func probeConnection[C any, P interface {
+	*C
+	Validate() error
+}, K interface {
+	Connect(context.Context) error
+	Close() error
+}](ctx context.Context, cfg C, newClient func(C) (K, error)) error {
+	if err := P(&cfg).Validate(); err != nil {
+		return err
+	}
+	client, err := newClient(cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return client.Connect(ctx)
+}
+
+// redis returns the pooled Redis client for the connection, auto-connecting
+// when the tree has not connected it yet. 池解析骨架见 pooledSource。
+func (s *Service) redis(ctx context.Context, id string) (RedisDataSource, error) {
+	return pooledSource[RedisDataSource](s, ctx, id, "a Redis")
 }
 
 // RedisDatabases lists the logical DBs of the connection's Redis.
@@ -426,41 +461,15 @@ func (s *Service) RedisServerInfo(ctx context.Context, id string) (model.RedisSe
 }
 
 // CHTestConnection verifies connectivity to the given config without
-// persisting or pooling anything (the client pings during construction).
+// persisting or pooling anything. 连接测试骨架见 probeConnection。
 func (s *Service) CHTestConnection(ctx context.Context, cfg model.ClickHouseConfig) error {
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	client, err := NewCHClient(cfg)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	return client.Connect(ctx)
+	return probeConnection(ctx, cfg, NewCHClient)
 }
 
 // ch returns the pooled ClickHouse client for the connection, auto-connecting
-// when the tree has not connected it yet.
+// when the tree has not connected it yet. 池解析骨架见 pooledSource。
 func (s *Service) ch(ctx context.Context, id string) (ClickHouseDataSource, error) {
-	if ds, err := s.pool.Get(id); err == nil {
-		ch, ok := ds.(ClickHouseDataSource)
-		if !ok {
-			return nil, fmt.Errorf("connection %q is not a ClickHouse source", id)
-		}
-		return ch, nil
-	}
-	if err := s.ConnectConnection(ctx, id); err != nil {
-		return nil, err
-	}
-	ds, err := s.pool.Get(id)
-	if err != nil {
-		return nil, err
-	}
-	ch, ok := ds.(ClickHouseDataSource)
-	if !ok {
-		return nil, fmt.Errorf("connection %q is not a ClickHouse source", id)
-	}
-	return ch, nil
+	return pooledSource[ClickHouseDataSource](s, ctx, id, "a ClickHouse")
 }
 
 // CHDatabases lists the user databases of the connection's ClickHouse server.
@@ -511,40 +520,16 @@ func (s *Service) CHExecute(ctx context.Context, id, sqlText string, limit, offs
 
 // EsTestConnection verifies connectivity to the given config without
 // persisting or pooling anything (the client pings GET / during construction).
+// 连接测试骨架见 probeConnection。
 func (s *Service) EsTestConnection(ctx context.Context, cfg model.EsConfig) error {
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	client, err := NewEsClient(cfg)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	return client.Connect(ctx)
+	return probeConnection(ctx, cfg, NewEsClient)
 }
 
 // es returns the pooled Elasticsearch client for the connection,
 // auto-connecting when the tree has not connected it yet.
+// 池解析骨架见 pooledSource。
 func (s *Service) es(ctx context.Context, id string) (EsDataSource, error) {
-	if ds, err := s.pool.Get(id); err == nil {
-		e, ok := ds.(EsDataSource)
-		if !ok {
-			return nil, fmt.Errorf("connection %q is not an Elasticsearch source", id)
-		}
-		return e, nil
-	}
-	if err := s.ConnectConnection(ctx, id); err != nil {
-		return nil, err
-	}
-	ds, err := s.pool.Get(id)
-	if err != nil {
-		return nil, err
-	}
-	e, ok := ds.(EsDataSource)
-	if !ok {
-		return nil, fmt.Errorf("connection %q is not an Elasticsearch source", id)
-	}
-	return e, nil
+	return pooledSource[EsDataSource](s, ctx, id, "an Elasticsearch")
 }
 
 // EsListIndices lists the user indices (system indices filtered client-side).
@@ -735,76 +720,28 @@ func (s *Service) EsUpdateIndexSettings(ctx context.Context, id, index, settings
 
 // MysqlTestConnection verifies connectivity to the given config without
 // persisting or pooling anything (the client pings during construction).
+// 连接测试骨架见 probeConnection。
 func (s *Service) MysqlTestConnection(ctx context.Context, cfg model.MysqlConfig) error {
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	client, err := NewMysqlClient(cfg)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	return client.Connect(ctx)
+	return probeConnection(ctx, cfg, NewMysqlClient)
 }
 
 // mysql returns the pooled MySQL/TiDB client for the connection,
 // auto-connecting when the tree has not connected it yet.
+// 池解析骨架见 pooledSource。
 func (s *Service) mysql(ctx context.Context, id string) (MysqlDataSource, error) {
-	if ds, err := s.pool.Get(id); err == nil {
-		m, ok := ds.(MysqlDataSource)
-		if !ok {
-			return nil, fmt.Errorf("connection %q is not a MySQL source", id)
-		}
-		return m, nil
-	}
-	if err := s.ConnectConnection(ctx, id); err != nil {
-		return nil, err
-	}
-	ds, err := s.pool.Get(id)
-	if err != nil {
-		return nil, err
-	}
-	m, ok := ds.(MysqlDataSource)
-	if !ok {
-		return nil, fmt.Errorf("connection %q is not a MySQL source", id)
-	}
-	return m, nil
+	return pooledSource[MysqlDataSource](s, ctx, id, "a MySQL")
 }
 
 // PostgresTestConnection validates and pings a PostgreSQL configuration.
+// 连接测试骨架见 probeConnection。
 func (s *Service) PostgresTestConnection(ctx context.Context, cfg model.PostgresConfig) error {
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	client, err := NewPostgresClient(cfg)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	return client.Connect(ctx)
+	return probeConnection(ctx, cfg, NewPostgresClient)
 }
 
 // postgres returns the pooled PostgreSQL client, auto-connecting on first use.
+// 池解析骨架见 pooledSource。
 func (s *Service) postgres(ctx context.Context, id string) (PostgresDataSource, error) {
-	if ds, err := s.pool.Get(id); err == nil {
-		pg, ok := ds.(PostgresDataSource)
-		if !ok {
-			return nil, fmt.Errorf("connection %q is not a PostgreSQL source", id)
-		}
-		return pg, nil
-	}
-	if err := s.ConnectConnection(ctx, id); err != nil {
-		return nil, err
-	}
-	ds, err := s.pool.Get(id)
-	if err != nil {
-		return nil, err
-	}
-	pg, ok := ds.(PostgresDataSource)
-	if !ok {
-		return nil, fmt.Errorf("connection %q is not a PostgreSQL source", id)
-	}
-	return pg, nil
+	return pooledSource[PostgresDataSource](s, ctx, id, "a PostgreSQL")
 }
 
 // PostgresDatabases lists the PostgreSQL databases visible to the connection.

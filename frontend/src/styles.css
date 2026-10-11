@@ -1,4 +1,6 @@
 /* Apple-style design system for the DB client. */
+/* token 分三主题:默认(:root)= 浅色,[data-theme="dark"] 深色,[data-theme="pink"] 少女粉。
+   主题无关常量(--font/--mono/--glass-blur/--radius-sm|md|lg)只在 :root 定义一次。 */
 :root {
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
@@ -26,6 +28,7 @@
   --accent-soft: rgba(0, 113, 227, 0.1);
 
   --danger: #ff3b30;
+  --danger-hover: #e0352b;
   --danger-soft: rgba(255, 59, 48, 0.1);
   --warn: #d97706;
   --warn-soft: rgba(255, 149, 0, 0.14);
@@ -33,6 +36,35 @@
   --ok-soft: rgba(52, 199, 89, 0.14);
   --info: #0a84ff;
   --info-soft: rgba(10, 132, 255, 0.12);
+
+  /* 主色语义 token:light/dark 与 --accent 同值(实底),pink 为莓粉;
+     --primary-gradient 在 light/dark 退化为实底色,pink 为渐变。 */
+  --primary: #0071e3;
+  --primary-hover: #0077ed;
+  --primary-weak: rgba(0, 113, 227, 0.1);
+  --primary-gradient: #0071e3;
+  --on-primary: #ffffff;
+  /* 状态色语义别名(与 --ok/--warn 同值):pink 主题按 AA 对比度单独取深值。 */
+  --success: #248a3d;
+  --warning: #d97706;
+
+  /* 焦点环 / 强调阴影 / 滚动条拇指 / 顶栏玻璃底 / 弹窗遮罩 */
+  --focus-ring: 0 0 0 3px rgba(0, 113, 227, 0.22);
+  --shadow-accent: 0 1px 2px rgba(0, 113, 227, 0.3);
+  --scrollbar-thumb: #d9d9de;
+  --topbar-bg: rgba(255, 255, 255, 0.72);
+  --overlay: rgba(0, 0, 0, 0.32);
+
+  /* CodeMirror 编辑器:容器底 / 行号槽底 / 光标 / 选区(沿用 CSS 变量跟随主题) */
+  --editor-bg: #f0f0f2;
+  --cm-gutter-bg: #f0f0f2;
+  --cm-cursor: #1d1d1f;
+  --cm-selection: rgba(0, 113, 227, 0.15);
+
+  /* 表格斑马纹(pink 为极浅粉,light/dark 透明)与页面背景光晕 */
+  --zebra: transparent;
+  --body-glow-a: rgba(0, 113, 227, 0.06);
+  --body-glow-b: rgba(10, 132, 255, 0.04);
 
   /* 数据源品牌色(连接树):--type-x 为字母徽标实底主色,-contrast 为徽标
      字色(白/深按对比度选),-soft 为类型文字徽标的柔和底色(写死的 rgba,
@@ -58,6 +90,8 @@
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
+  /* 通用控件圆角(light/dark 与 --radius-md 同值,pink 提到 12px 更圆润) */
+  --radius: 10px;
 }
 
 [data-theme="dark"] {
@@ -78,6 +112,7 @@
   --accent-hover: #3b82f6;
   --accent-soft: rgba(31, 111, 235, 0.18);
   --danger: #ff8f8a;
+  --danger-hover: #ffa19b;
   --danger-soft: rgba(248, 81, 73, 0.18);
   --warn: #e3b341;
   --warn-soft: rgba(210, 153, 34, 0.18);
@@ -85,6 +120,26 @@
   --ok-soft: rgba(63, 185, 80, 0.18);
   --info: #6ea8fe;
   --info-soft: rgba(110, 168, 254, 0.16);
+  --primary: #1f6feb;
+  --primary-hover: #3b82f6;
+  --primary-weak: rgba(31, 111, 235, 0.18);
+  --primary-gradient: #1f6feb;
+  --on-primary: #ffffff;
+  --success: #56d364;
+  --warning: #e3b341;
+  --focus-ring: 0 0 0 3px rgba(59, 130, 246, 0.4);
+  --shadow-accent: 0 1px 2px rgba(31, 111, 235, 0.45);
+  --scrollbar-thumb: #33404f;
+  --topbar-bg: rgba(23, 31, 41, 0.72);
+  --overlay: rgba(0, 0, 0, 0.5);
+  --editor-bg: #121a24;
+  --cm-gutter-bg: #121a24;
+  --cm-cursor: #e6e6ec;
+  --cm-selection: rgba(110, 168, 254, 0.3);
+  --zebra: transparent;
+  --body-glow-a: rgba(31, 111, 235, 0.08);
+  --body-glow-b: rgba(110, 168, 254, 0.05);
+  --radius: 10px;
   /* 数据源品牌色(dark):主色整体提亮一档、字色换深色保持对比,
      柔和底色的透明度略高于 light 以在深底上可辨。 */
   --type-kafka: #f59e4c;      --type-kafka-contrast: #3a1c00;   --type-kafka-soft: rgba(245, 158, 76, 0.2);
@@ -104,12 +159,78 @@
   --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.5), 0 14px 40px rgba(0, 0, 0, 0.5);
 }
 
+/* 少女粉主题:浅玫瑰底 + 莓粉主色。文字/状态色相对任务基线整体加深一档,
+   以满足白字/彩字对各自底色的 WCAG AA(≥4.5:1)对比纪律。 */
+[data-theme="pink"] {
+  --bg: #fff5f9;
+  --bg-elevated: #fffdfd;
+  --bg-subtle: #fdeef5;
+  --bg-hover: #fce9f2;
+  --bg-active: #f9dded;
+  --sidebar-bg: rgba(255, 240, 247, 0.68);
+  --glass-bg: rgba(255, 251, 253, 0.88);
+  --glass-shadow: -12px 0 40px rgba(233, 120, 177, 0.16);
+  --border: #ffd9e9;
+  --border-strong: #ffc3dd;
+  --text: #472a3a;
+  --text-secondary: #8f5a74;
+  --text-tertiary: #96607a;
+  --accent: #cc337d;
+  --accent-hover: #b62a6c;
+  --accent-soft: rgba(204, 51, 125, 0.12);
+  --danger: #d02f5c;
+  --danger-hover: #b8284e;
+  --danger-soft: rgba(208, 47, 92, 0.12);
+  --warn: #96591a;
+  --warn-soft: rgba(150, 89, 26, 0.12);
+  --ok: #1e7a5f;
+  --ok-soft: rgba(30, 122, 95, 0.12);
+  --info: #8250df;
+  --info-soft: rgba(130, 80, 223, 0.12);
+  --primary: #cc337d;
+  --primary-hover: #b62a6c;
+  --primary-weak: #ffd9e9;
+  --primary-gradient: linear-gradient(135deg, #d13a86, #b62a6c);
+  --on-primary: #ffffff;
+  --success: #1e7a5f;
+  --warning: #96591a;
+  --focus-ring: 0 0 0 3px rgba(229, 86, 156, 0.35);
+  --shadow-accent: 0 4px 16px rgba(239, 95, 164, 0.22);
+  --scrollbar-thumb: #f3b1d1;
+  --topbar-bg: rgba(255, 251, 253, 0.75);
+  --overlay: rgba(88, 38, 63, 0.3);
+  --editor-bg: #fffafc;
+  --cm-gutter-bg: #fdeef5;
+  --cm-cursor: #cc337d;
+  --cm-selection: #f9a8c9;
+  --zebra: #fef3f8;
+  --body-glow-a: rgba(244, 127, 184, 0.1);
+  --body-glow-b: rgba(239, 95, 164, 0.07);
+  --radius: 12px;
+  /* 数据源品牌色(pink):浅粉底与浅色底明度接近,沿用 light 值即可辨。 */
+  --type-kafka: #e8710a;      --type-kafka-contrast: #ffffff;   --type-kafka-soft: rgba(232, 113, 10, 0.12);
+  --type-mysql: #0868a8;      --type-mysql-contrast: #ffffff;   --type-mysql-soft: rgba(8, 104, 168, 0.12);
+  --type-redis: #d82c20;      --type-redis-contrast: #ffffff;   --type-redis-soft: rgba(216, 44, 32, 0.12);
+  --type-es: #ddb100;         --type-es-contrast: #3d3000;      --type-es-soft: rgba(221, 177, 0, 0.16);
+  --type-tidb: #d4111e;       --type-tidb-contrast: #ffffff;    --type-tidb-soft: rgba(212, 17, 30, 0.12);
+  --type-clickhouse: #d9a400; --type-clickhouse-contrast: #3d3000; --type-clickhouse-soft: rgba(217, 164, 0, 0.16);
+  --type-postgres: #2c8c99;   --type-postgres-contrast: #ffffff; --type-postgres-soft: rgba(44, 140, 153, 0.13);
+  --type-hive: #d99a13;       --type-hive-contrast: #3a2a00;    --type-hive-soft: rgba(217, 154, 19, 0.16);
+  --json-key: #0550ae;
+  --json-string: #116329;
+  --json-number: #953800;
+  --json-boolean: #8250df;
+  --json-null: #57606a;
+  --shadow-sm: 0 1px 2px rgba(233, 120, 177, 0.1);
+  --shadow-md: 0 2px 8px rgba(233, 120, 177, 0.14), 0 14px 40px rgba(233, 120, 177, 0.16);
+}
+
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; margin: 0; }
 body {
   background:
-    radial-gradient(1100px 520px at 8% -10%, rgba(0, 113, 227, 0.06), transparent 60%),
-    radial-gradient(900px 500px at 100% 0%, rgba(10, 132, 255, 0.04), transparent 55%),
+    radial-gradient(1100px 520px at 8% -10%, var(--body-glow-a), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, var(--body-glow-b), transparent 55%),
     var(--bg);
   color: var(--text);
   font-family: var(--font);
@@ -121,15 +242,75 @@ body {
 button { font-family: inherit; }
 input, select, textarea { font-family: inherit; }
 
+/* ---------------------------------------------------------------------------
+ * 公共控件基类(任务 B1):按钮 / 数据表格 / 弹窗。
+ * 组件 scoped 样式只保留差异(尺寸、布局、语义变体),通用规则一律删掉,
+ * 模板类名沿用「共享基类 + 局部修饰」:class="btn primary" 等。
+ * ------------------------------------------------------------------------- */
+
+/* 按钮:.btn 基座 + primary/ghost/small/danger 变体。
+   primary 用主题渐变(pink 渐变粉,light/dark 退化为实底),hover 统一压暗。 */
+.btn {
+  border-radius: 7px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-family: var(--font);
+  cursor: pointer;
+  border: 1px solid transparent;
+  color: var(--text);
+  background: transparent;
+  transition: background 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, filter 0.15s ease;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn.primary {
+  background: var(--primary-gradient);
+  color: var(--on-primary);
+  box-shadow: var(--shadow-accent);
+}
+.btn.primary:hover:not(:disabled) { filter: brightness(0.95); }
+.btn.ghost { border-color: var(--border-strong); }
+.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
+.btn.small { padding: 4px 12px; font-size: 12px; }
+.btn.danger { background: var(--danger); color: var(--on-primary); }
+.btn.danger:hover:not(:disabled) { background: var(--danger-hover); filter: none; }
+/* 红边幽灵变体(ghost.danger)与实底红叠 primary(primary.danger) */
+.btn.ghost.danger { background: transparent; color: var(--danger); border-color: var(--danger); box-shadow: none; }
+.btn.ghost.danger:hover:not(:disabled) { background: var(--danger-soft); }
+.btn.primary.danger { background: var(--danger); }
+.btn.primary.danger:hover:not(:disabled) { background: var(--danger-hover); filter: none; }
+
+/* 数据表格基座:常规浏览表(组件含滚动/粘性表头等差异时在 scoped 覆盖)。 */
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table th {
+  text-align: left; font-weight: 600; color: var(--text-secondary);
+  background: var(--bg-subtle); padding: 8px 12px;
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.data-table td { padding: 6px 12px; border-bottom: 1px solid var(--border); }
+.data-table tbody tr:hover td { background: var(--bg-hover); }
+
+/* 弹窗基座:遮罩 + 容器;尺寸与层级差异留在组件 scoped。 */
+.modal-backdrop {
+  position: fixed; inset: 0; background: var(--overlay);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  display: flex; align-items: center; justify-content: center; z-index: 900;
+}
+.modal {
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  color: var(--text); font-family: var(--font);
+}
+
 /* 侧栏(连接树/SQL文件栏)细滚动条:透明轨道 + 圆角细拇指,与整体克制的
    Apple 观感一致;WKWebView 走 webkit 前缀,标准属性兜底新内核。 */
 .sidebar, .files-sidebar {
   scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 .sidebar::-webkit-scrollbar, .files-sidebar::-webkit-scrollbar { width: 9px; }
 .sidebar::-webkit-scrollbar-thumb, .files-sidebar::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
+  background: var(--scrollbar-thumb);
   border-radius: 5px;
   border: 2px solid transparent;
   background-clip: content-box;

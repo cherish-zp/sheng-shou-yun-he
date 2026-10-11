@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch, type ComponentPublicInstance } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { getApi } from '@/api/client'
 import type { CHColumn, CHTableInfo, CHDeleteRowPreview, CHDeleteRowRequest } from '@/api/types'
 import { formatBytes } from '@/utils/bytes'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import TableDataGrid from '@/components/common/TableDataGrid.vue'
 import { useCHCellUpdate } from '@/composables/chCellUpdate'
+import { usePagedTable } from '@/composables/usePagedTable'
+import { useCellEdit } from '@/composables/useCellEdit'
+import { useRowDelete } from '@/composables/useRowDelete'
 
 const props = defineProps<{ connectionId: string; database: string; table: string }>()
 
@@ -25,26 +29,41 @@ const dbTables = ref<CHTableInfo[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
 
-const where = ref('')
-// 已应用的过滤条件:回车/按钮提交后才随请求下发。
-const appliedWhere = ref('')
-const orderBy = ref('')
-const asc = ref(true)
-const offset = ref(0)
-const confirmTruncate = ref(false)
-
 // --- 数据单元格行内编辑 ---
 // cu:单元格 UPDATE 的预览/确认/执行状态机(SQL 与弹窗开关由其管理)。
 const cu = useCHCellUpdate()
 // 后端 PageRows 返回的主键列名(按 position 序;空数组=无主键)。
 const primaryKey = ref<string[]>([])
-// 行内编辑态:同一时刻仅一个单元格可编辑,row/col 为行/列下标;
-// editValue 为输入框草稿,提交时空串按写 NULL 处理。
-const editing = ref<{ row: number; col: number } | null>(null)
-const editValue = ref('')
 
 const isDistributed = computed(() => engine.value.trim().toLowerCase() === 'distributed')
-const page = computed(() => Math.floor(offset.value / PAGE_SIZE) + 1)
+const confirmTruncate = ref(false)
+
+// --- 分页/过滤/排序:共用组合式承担状态与翻页动作,取数回调整体注入。 ---
+const {
+  where,
+  appliedWhere,
+  orderBy,
+  asc,
+  offset,
+  page,
+  applyWhere,
+  refresh,
+  sortBy,
+  nextPage,
+  prevPage,
+  resetFilters,
+} = usePagedTable({ pageSize: PAGE_SIZE, refetch: fetchPage })
+
+// --- 行内编辑态:共用组合式(CH 不设全表只读限制,canStart 走缺省)。 ---
+const {
+  editing,
+  editValue,
+  isEditing,
+  startEdit,
+  cancelEdit,
+  focusEditor,
+  discard: discardEdit,
+} = useCellEdit({ loading, rows, columns })
 
 // 切换器选项:接口清单缺当前表(未加载/失败)时兜底补一个当前表。
 const tableOptions = computed<CHTableInfo[]>(() => {
@@ -56,7 +75,7 @@ async function fetchPage(): Promise<void> {
   loading.value = true
   error.value = null
   // 换页/刷新后行集合将重建,未完成的行内编辑一并丢弃。
-  editing.value = null
+  discardEdit()
   try {
     const res = await getApi().chPageRows({
       connection_id: props.connectionId,
@@ -102,13 +121,10 @@ onMounted(() => {
   void loadTableList()
 })
 
-// resetForTableSwitch 换表后丢弃上一表的过滤/排序/分页状态,回到第一页。
+// resetForTableSwitch 换表后丢弃上一表的过滤/排序/分页状态(不触发取数),
+// 由调用方紧接着重拉第一页。
 function resetForTableSwitch(): void {
-  where.value = ''
-  appliedWhere.value = ''
-  orderBy.value = ''
-  asc.value = true
-  offset.value = 0
+  resetFilters()
 }
 
 // onSwitchTable 用户通过工具栏切换器换表。
@@ -127,39 +143,6 @@ watch(
     void fetchPage()
   },
 )
-
-// applyWhere 提交过滤条件并回到第一页重新请求。
-function applyWhere(): void {
-  appliedWhere.value = where.value.trim()
-  offset.value = 0
-  void fetchPage()
-}
-
-function refresh(): void {
-  void fetchPage()
-}
-
-// sortBy 点击列头排序:同一列翻转方向,新列默认升序;回第一页。
-function sortBy(col: string): void {
-  if (orderBy.value === col) {
-    asc.value = !asc.value
-  } else {
-    orderBy.value = col
-    asc.value = true
-  }
-  offset.value = 0
-  void fetchPage()
-}
-
-function nextPage(): void {
-  offset.value += PAGE_SIZE
-  void fetchPage()
-}
-
-function prevPage(): void {
-  offset.value = Math.max(0, offset.value - PAGE_SIZE)
-  void fetchPage()
-}
 
 // 清空数据:文案包含表名与引擎;Distributed 引擎追加 ON CLUSTER 提示。
 const truncateMessage = computed(() => {
@@ -205,28 +188,7 @@ function colTitle(c: CHColumn): string {
 }
 
 // --- 单元格行内编辑:双击 → 输入 → 回车 → 预览确认 → 执行并刷新。 ---
-
-function isEditing(ri: number, ci: number): boolean {
-  return editing.value?.row === ri && editing.value?.col === ci
-}
-
-// startEdit 双击进入编辑:原始值取自 rows 内存(null 显示为空输入框);
-// loading 或已有单元格在编辑时忽略,避免并发编辑态。
-function startEdit(ri: number, ci: number): void {
-  if (loading.value || editing.value || !columns.value[ci]) return
-  editing.value = { row: ri, col: ci }
-  editValue.value = rows.value[ri]?.[ci] ?? ''
-}
-
-// focusEditor 编辑框渲染后自动聚焦(function ref 挂载时触发)。
-function focusEditor(el: Element | ComponentPublicInstance | null): void {
-  if (el) (el as HTMLInputElement).focus()
-}
-
-function cancelEdit(): void {
-  editing.value = null
-  editValue.value = ''
-}
+// (isEditing/startEdit/cancelEdit/focusEditor 来自 useCellEdit 组合式。)
 
 // buildTarget 组装更新请求:set 为编辑后的值(空串=写 NULL);where 一律用
 // 编辑前的原值快照——有主键仅取主键列,否则整行所有列兜底定位。
@@ -270,18 +232,26 @@ const cellUpdateOpen = computed(() => cu.confirmOpen.value)
 const cellUpdateError = computed(() => cu.error.value)
 
 // --- 按行删除:行首危险按钮 → 按主键原值预览 DELETE → 确认执行并刷新。 ---
-
-// 删除行 API:已在 Api 接口声明为可选成员,直接可选链调用。
-function deleteApi() {
-  return getApi()
-}
-
-const delError = ref<string | null>(null)
-const confirmDeleteOpen = ref(false)
-const delStatement = ref('')
-const delMatchedRows = ref(0)
-// 预览通过后暂存的待执行删除请求,确认时原样发给执行。
-let pendingDelete: CHDeleteRowRequest | null = null
+// 删除行 API:已在 Api 接口声明为可选成员,可选链调用;预览侧把「绑定缺失」
+// 归一为统一错误(与既有文案一致),三段式状态机由 useRowDelete 组合式承担。
+const {
+  error: delError,
+  confirmOpen: confirmDeleteOpen,
+  message: deleteMessage,
+  request: requestDeleteRow,
+  confirm: onDeleteRowConfirm,
+  cancel: onDeleteRowCancel,
+} = useRowDelete<CHDeleteRowRequest>({
+  preview: async (target) => {
+    const res = (await getApi().chPreviewDeleteRow?.(target)) as CHDeleteRowPreview | undefined
+    if (!res) throw new Error('当前环境不支持按行删除')
+    return res
+  },
+  execute: async (target) => {
+    await getApi().chDeleteRow?.(target)
+  },
+  refetch: fetchPage,
+})
 
 // 仅当有主键(排序键)时开放删除;无主键无法唯一定位行。
 const canDelete = computed(() => primaryKey.value.length > 0)
@@ -302,62 +272,10 @@ function buildDeleteTarget(ri: number): CHDeleteRowRequest {
   }
 }
 
-// askDeleteRow 点击行首删除:先预览拿语句全文与命中行数,成功才开确认
-// 弹窗;预览失败写入错误区,不弹框、不残留待执行目标。
+// askDeleteRow 点击行首删除:无主键直接忽略;预览/确认/执行交给组合式。
 async function askDeleteRow(ri: number): Promise<void> {
   if (!canDelete.value) return
-  const target = buildDeleteTarget(ri)
-  delError.value = null
-  pendingDelete = target
-  try {
-    const res = await deleteApi().chPreviewDeleteRow?.(target)
-    if (!res) throw new Error('当前环境不支持按行删除')
-    delStatement.value = res.statement
-    delMatchedRows.value = res.matched_rows
-    confirmDeleteOpen.value = true
-  } catch (e) {
-    delError.value = e instanceof Error ? e.message : String(e)
-    pendingDelete = null
-  }
-}
-
-// 弹窗文案:DELETE 语句全文 + 命中行数 + 不可恢复警示;命中多行说明主键
-// 定位不唯一,强警示并禁止执行。
-const deleteMessage = computed(() => {
-  const n = Number(delMatchedRows.value ?? 0)
-  const lines = [`将执行以下语句:\n${delStatement.value}`, `命中 ${n} 行`, '此操作不可恢复。']
-  if (n > 1) lines.push(`主键条件命中 ${n} 行,删除范围超出目标行,已禁止删除。`)
-  return lines.join('\n')
-})
-
-// onDeleteRowConfirm 确认执行:命中多行时直接禁止(弹窗保持,不执行);
-// 成功后关闭弹窗并刷新当前页;失败弹窗保持,错误同时进错误区。
-async function onDeleteRowConfirm(): Promise<void> {
-  if (Number(delMatchedRows.value) > 1) return
-  const target = pendingDelete
-  if (!target) {
-    confirmDeleteOpen.value = false
-    return
-  }
-  try {
-    await deleteApi().chDeleteRow?.(target)
-    pendingDelete = null
-    confirmDeleteOpen.value = false
-    delStatement.value = ''
-    delMatchedRows.value = 0
-    void fetchPage()
-  } catch (e) {
-    delError.value = e instanceof Error ? e.message : String(e)
-  }
-}
-
-// onDeleteRowCancel 取消:关闭弹窗并清空全部删除状态。
-function onDeleteRowCancel(): void {
-  pendingDelete = null
-  confirmDeleteOpen.value = false
-  delStatement.value = ''
-  delMatchedRows.value = 0
-  delError.value = null
+  await requestDeleteRow(buildDeleteTarget(ri))
 }
 
 // 弹窗文案:ALTER 语句全文 + 匹配行数;将波及多行时追加警示。
@@ -438,75 +356,27 @@ async function onCellUpdateConfirm(): Promise<void> {
     </div>
 
     <div v-else class="table-wrap">
-      <table class="table" data-test="ch-grid">
-        <thead>
-          <tr>
-            <!-- 行首操作列:每行挂删除按钮(悬停行显现)。 -->
-            <th class="row-action" aria-hidden="true"></th>
-            <th
-              v-for="c in columns"
-              :key="c.name"
-              data-test="ch-col"
-              :title="colTitle(c)"
-              @click="sortBy(c.name)"
-            >
-              <!-- 弹性布局只在内层 div:th 必须保持 table-cell,否则脱离
-                   表格列布局,WebKit 会把整行列头堆进一个匿名单元格。 -->
-              <div class="col-head">
-                <span class="col-name" data-test="ch-col-name">{{ c.name }}<span v-if="orderBy === c.name" class="col-arrow">{{ asc ? '↑' : '↓' }}</span></span>
-                <span class="col-type" data-test="ch-col-type">{{ c.type }}</span>
-                <span v-if="c.comment" class="col-comment" data-test="ch-col-comment">{{ c.comment }}</span>
-              </div>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(row, ri) in rows" :key="ri" data-test="ch-row">
-            <!-- 行首删除:危险色小按钮,无主键禁用并以 title 说明原因。 -->
-            <td class="row-action">
-              <button
-                class="mini-btn danger row-del"
-                type="button"
-                data-test="btn-row-delete"
-                :disabled="!canDelete"
-                :title="canDelete ? '删除此行' : '结果无主键,无法定位行'"
-                @click="askDeleteRow(ri)"
-              >
-                ✕
-              </button>
-            </td>
-            <td
-              v-for="(cell, ci) in row"
-              :key="ci"
-              class="mono cell"
-              :class="{ 'cell-null': cell === null && !isEditing(ri, ci), 'cell-trunc': isTruncated(cell) }"
-              :title="cellTitle(cell)"
-              data-test="ch-cell"
-              @dblclick="startEdit(ri, ci)"
-            >
-              <!-- 行内编辑:双击进入,Esc/blur 取消,回车提交预览。 -->
-              <input
-                v-if="isEditing(ri, ci)"
-                :ref="focusEditor"
-                v-model="editValue"
-                class="cell-editor"
-                data-test="ch-cell-editor"
-                @blur="cancelEdit"
-                @keydown.enter.prevent="submitEdit"
-                @keydown.esc.prevent="cancelEdit"
-              />
-              <template v-else>{{ cellDisplay(cell) }}</template>
-            </td>
-          </tr>
-          <tr v-if="rows.length === 0 && !loading">
-            <td :colspan="columns.length + 1" class="empty" data-test="ch-grid-empty">
-              <div class="empty-icon">◌</div>
-              <div>该表暂无数据</div>
-              <div class="empty-hint">数据写入后点击「刷新」查看</div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <!-- 共享表格网格:列头/行删除/行内编辑/空态由 TableDataGrid 承担
+           (CH 无主键角标,列注释行保留)。 -->
+      <TableDataGrid
+        v-model:edit-value="editValue"
+        test-prefix="ch"
+        :columns="columns"
+        :rows="rows"
+        :loading="loading"
+        :order-by="orderBy"
+        :asc="asc"
+        row-actions
+        :row-action-enabled="canDelete"
+        :editing="editing"
+        :col-title="colTitle"
+        :cell-title="cellTitle"
+        @sort="sortBy"
+        @start-edit="startEdit"
+        @submit-edit="submitEdit"
+        @cancel-edit="cancelEdit"
+        @row-delete="askDeleteRow"
+      />
     </div>
 
     <div class="pager" data-test="ch-pager">
@@ -574,49 +444,6 @@ async function onCellUpdateConfirm(): Promise<void> {
   margin-top: 10px; overflow: auto; max-height: calc(100vh - 320px);
   border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated);
 }
-.table {
-  /* width:max-content:列数多时按内容自然宽度横向滚动,而不是把列头
-     压成竖排文字;min-width:100% 保证列少时仍铺满容器。 */
-  width: max-content; min-width: 100%;
-  border-collapse: collapse; font-size: 13px;
-}
-.table th {
-  position: sticky; top: 0; z-index: 1;
-  text-align: left; padding: 7px 10px; background: var(--bg-subtle);
-  border-bottom: 1px solid var(--border); cursor: pointer; user-select: none;
-  transition: background 0.12s ease; white-space: nowrap;
-}
-.table th:hover { background: var(--bg-hover); }
-.col-head { display: flex; flex-direction: column; gap: 1px; white-space: nowrap; }
-.col-name { font-weight: 600; display: flex; align-items: center; gap: 4px; }
-.col-type { font-size: 10px; color: var(--text-tertiary); font-family: var(--mono); font-weight: 400; }
-.col-arrow { color: var(--accent); font-size: 11px; }
-/* 第三行:字段描述(comment),灰色小字;超长省略,悬停 title 已含全文。 */
-.col-comment { font-size: 10px; color: var(--text-tertiary); max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
-.table tbody tr:nth-child(even) td { background: var(--bg-subtle); }
-.table tbody tr:hover td { background: var(--bg-hover); }
-.table td { padding: 5px 10px; border-bottom: 1px solid var(--border); word-break: break-all; max-width: 420px; }
-.cell-null { color: var(--text-tertiary); font-style: italic; }
-.cell-trunc { color: var(--text-secondary); }
-/* 行首操作列:危险色删除小按钮,悬停所在行时显现(对齐 EsTableBrowser)。 */
-.table .row-action { width: 34px; padding: 4px 8px; text-align: center; }
-.mini-btn {
-  flex: none; font-size: 10px; line-height: 1;
-  padding: 2px 5px; border-radius: 4px; cursor: pointer;
-  background: transparent; color: var(--danger); border: 1px solid var(--danger);
-}
-.mini-btn.danger:hover:not(:disabled) { background: var(--danger-soft); }
-.mini-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-.row-del { opacity: 0; transition: opacity 0.12s ease; }
-.table tbody tr:hover .row-del { opacity: 1; }
-/* 行内编辑输入框:覆盖单元格内容,细边框紧凑,与表格行高一致。 */
-.cell-editor {
-  box-sizing: border-box; width: 100%; min-width: 80px;
-  background: var(--bg-elevated); color: var(--text);
-  border: 1px solid var(--accent); border-radius: 4px;
-  padding: 1px 6px; font-size: 13px; font-family: var(--mono);
-}
-.cell-editor:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-soft); }
 .mono { font-family: var(--mono); }
 .empty { text-align: center; color: var(--text-tertiary); padding: 28px 24px; }
 .empty-icon { font-size: 26px; margin-bottom: 6px; }

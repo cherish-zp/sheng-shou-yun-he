@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
+import { createPinia, setActivePinia } from 'pinia'
 import { setApi } from '@/api/client'
 import type { Api } from '@/api/client'
 import type { AuditEntry, Connection } from '@/api/types'
 import { APP_VERSION } from '@/version'
 import { DEFAULT_QUERY_DIR, QUERY_DIR_KEY } from '@/utils/queryDir'
+import { useToastStore } from '@/store/toast'
 import SettingsPanel from './SettingsPanel.vue'
 
 const KEY = 'dbclient-theme'
@@ -114,6 +117,8 @@ async function openTab(wrapper: ReturnType<typeof mount>, tab: 'audit' | 'driver
 describe('SettingsPanel', () => {
   let api: Api
   beforeEach(() => {
+    // 组件内使用 useToastStore(检查更新结果提示),mount 需要活跃 pinia。
+    setActivePinia(createPinia())
     localStorage.clear()
     document.documentElement.removeAttribute('data-theme')
     api = fakeApi()
@@ -125,10 +130,10 @@ describe('SettingsPanel', () => {
     expect(wrapper.find('[data-test="settings-panel"]').exists()).toBe(false)
   })
 
-  it('defaults to light theme and applies it on mount', () => {
+  it('defaults to pink theme and applies it on mount', () => {
     mountPanel()
-    expect(document.documentElement.getAttribute('data-theme')).toBe('light')
-    expect(localStorage.getItem(KEY)).toBe('light')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('pink')
+    expect(localStorage.getItem(KEY)).toBe('pink')
   })
 
   it('switching to light persists and applies the theme', async () => {
@@ -136,6 +141,15 @@ describe('SettingsPanel', () => {
     await wrapper.find('[data-test="select-theme"]').setValue('light')
     expect(document.documentElement.getAttribute('data-theme')).toBe('light')
     expect(localStorage.getItem(KEY)).toBe('light')
+  })
+
+  it('switching back to pink from a stored dark theme persists and applies', async () => {
+    localStorage.setItem(KEY, 'dark')
+    const wrapper = mountPanel()
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+    await wrapper.find('[data-test="select-theme"]').setValue('pink')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('pink')
+    expect(localStorage.getItem(KEY)).toBe('pink')
   })
 
   it('reads a previously stored theme', () => {
@@ -180,6 +194,11 @@ describe('SettingsPanel', () => {
   })
 
   it('shows version, author and a check-update button on the about tab and emits check-update', async () => {
+    ;(api.checkUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
+      has_update: true,
+      latest_version: 'v9.9.9',
+      download_url: 'http://x/mac.zip',
+    })
     const wrapper = mountPanel()
     await openTab(wrapper, 'about')
     const content = wrapper.find('[data-test="settings-tab-content"]')
@@ -189,7 +208,83 @@ describe('SettingsPanel', () => {
     expect(btn.exists()).toBe(true)
     expect(content.text()).toContain('将在 Gitee 检查最新版本')
     await btn.trigger('click')
-    expect(wrapper.emitted('check-update')).toBeTruthy()
+    await vi.waitFor(() => {
+      expect(wrapper.emitted('check-update')).toBeTruthy()
+    })
+  })
+
+  // --- 关于 tab:手动检查更新 ----------------------------------------------------
+
+  it('手动检查调用 checkUpdate 并携带当前版本', async () => {
+    const wrapper = mountPanel()
+    await openTab(wrapper, 'about')
+    await wrapper.find('[data-test="btn-about-check"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(api.checkUpdate).toHaveBeenCalledWith({ current_version: APP_VERSION })
+    })
+  })
+
+  it('已是最新时 toast 提示且不打开更新弹窗', async () => {
+    ;(api.checkUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
+      has_update: false,
+      latest_version: 'v1.7.1',
+    })
+    const wrapper = mountPanel()
+    await openTab(wrapper, 'about')
+    await wrapper.find('[data-test="btn-about-check"]').trigger('click')
+    const toast = useToastStore()
+    await vi.waitFor(() => {
+      expect(toast.message).toBe('当前已是最新版本 v1.7.1')
+    })
+    expect(wrapper.emitted('check-update')).toBeFalsy()
+  })
+
+  it('发现新版本时 emit check-update 打开弹窗,命中忽略的版本也不例外', async () => {
+    localStorage.setItem('update.ignoredVersion', 'v9.9.9')
+    ;(api.checkUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
+      has_update: true,
+      latest_version: 'v9.9.9',
+      download_url: 'http://x/mac.zip',
+    })
+    const wrapper = mountPanel()
+    await openTab(wrapper, 'about')
+    await wrapper.find('[data-test="btn-about-check"]').trigger('click')
+    // 手动检查不受「忽略此版本」限制:仍打开更新弹窗。
+    await vi.waitFor(() => {
+      expect(wrapper.emitted('check-update')).toBeTruthy()
+    })
+  })
+
+  it('检查期间按钮禁用,结束后恢复', async () => {
+    let resolve!: (v: { has_update: boolean; latest_version: string }) => void
+    ;(api.checkUpdate as ReturnType<typeof vi.fn>).mockImplementation(
+      () =>
+        new Promise((r) => {
+          resolve = r as typeof resolve
+        }),
+    )
+    const wrapper = mountPanel()
+    await openTab(wrapper, 'about')
+    await wrapper.find('[data-test="btn-about-check"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-test="btn-about-check"]').attributes('disabled')).toBeDefined()
+    resolve({ has_update: false, latest_version: 'v1.7.1' })
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="btn-about-check"]').attributes('disabled')).toBeUndefined()
+    })
+  })
+
+  it('检查失败时 toast 提示错误', async () => {
+    ;(api.checkUpdate as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('network down'))
+    const wrapper = mountPanel()
+    await openTab(wrapper, 'about')
+    await wrapper.find('[data-test="btn-about-check"]').trigger('click')
+    const toast = useToastStore()
+    await vi.waitFor(() => {
+      expect(toast.message).toContain('检查更新失败')
+      expect(toast.message).toContain('network down')
+    })
+    expect(wrapper.emitted('check-update')).toBeFalsy()
   })
 
   it('does not close when the backdrop is clicked', async () => {

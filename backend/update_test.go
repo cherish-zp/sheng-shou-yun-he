@@ -1,8 +1,14 @@
 package backend
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +18,17 @@ import (
 	"strings"
 	"testing"
 )
+
+// releaseAsset 是 giteeRelease.Assets 元素匿名结构的别名,便于构造测试数据。
+type releaseAsset = struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}
+
+// mkAsset 构造一个 release 资产条目。
+func mkAsset(name, url string) releaseAsset {
+	return releaseAsset{Name: name, BrowserDownloadURL: url}
+}
 
 func TestParseVersion(t *testing.T) {
 	cases := []struct {
@@ -424,5 +441,435 @@ func TestApplyUpdateWindowsRunsBat(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `copy /Y `) {
 		t.Fatalf("unexpected bat content:\n%s", data)
+	}
+}
+
+// --- 1. pickAssetURL 加固:安装器资产绝不被自动更新选中 ---
+
+// TestPickAssetURLSkipsInstaller 验证同一 release 同时提供 zip 与
+// *-installer.exe 时必须选 zip;只有 installer 时返回空;tar.gz 同样可选。
+func TestPickAssetURLSkipsInstaller(t *testing.T) {
+	both := giteeRelease{Assets: []releaseAsset{
+		mkAsset("ShengShouYunHe-v1.7.1-windows-amd64-installer.exe", "http://x/win-installer.exe"),
+		mkAsset("ShengShouYunHe-v1.7.1-windows-amd64.zip", "http://x/win.zip"),
+	}}
+	if got := pickAssetURL(both, "windows", "amd64"); got != "http://x/win.zip" {
+		t.Fatalf("must pick the zip over the installer, got %q", got)
+	}
+	installerOnly := giteeRelease{Assets: []releaseAsset{
+		mkAsset("ShengShouYunHe-v1.7.1-windows-amd64-installer.exe", "http://x/win-installer.exe"),
+	}}
+	if got := pickAssetURL(installerOnly, "windows", "amd64"); got != "" {
+		t.Fatalf("installer must never be auto-picked, got %q", got)
+	}
+	tgz := giteeRelease{Assets: []releaseAsset{
+		mkAsset("圣手运河-v1.7.1-linux-amd64.tar.gz", "http://x/linux.tar.gz"),
+	}}
+	if got := pickAssetURL(tgz, "linux", "amd64"); got != "http://x/linux.tar.gz" {
+		t.Fatalf("tar.gz must be selectable, got %q", got)
+	}
+}
+
+// --- 2. 双源回退:Gitee 挂了回退 GitHub,两边都挂才报错 ---
+
+// ghLatestPath 是 GitHub 回退源的 releases/latest 请求路径。
+const ghLatestPath = "/repos/cherish-zp/sheng-shou-yun-he/releases/latest"
+
+// newDualSourceApp 构造注入了 Gitee(主)与 GitHub(回退)两个源的 App。
+func newDualSourceApp(t *testing.T, gitee, gh *httptest.Server) *App {
+	t.Helper()
+	a := &App{}
+	a.baseURL.Store(gitee.URL)
+	a.fallbackURL.Store(gh.URL)
+	a.httpClient = gh.Client()
+	a.applyCmd = func(*exec.Cmd) error { return nil }
+	return a
+}
+
+func TestCheckUpdateFallsBackToGitHub(t *testing.T) {
+	gitee := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "gitee down", http.StatusBadGateway)
+	}))
+	defer gitee.Close()
+	var ghPaths []string
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ghPaths = append(ghPaths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{
+		  "tag_name": "v1.2.0",
+		  "body": "GitHub 镜像发布",
+		  "assets": [
+		    {"name": "ShengShouYunHe-v1.2.0-darwin-arm64.zip", "browser_download_url": "http://gh/mac.zip"}
+		  ]
+		}`)
+	}))
+	defer gh.Close()
+
+	setRuntime(t, "darwin", "arm64")
+	res, err := newDualSourceApp(t, gitee, gh).CheckUpdate(CheckUpdateRequest{CurrentVersion: "v1.0.0"})
+	if err != nil {
+		t.Fatalf("CheckUpdate: %v", err)
+	}
+	if !res.HasUpdate || res.LatestVersion != "v1.2.0" {
+		t.Fatalf("expected fallback update to v1.2.0, got %+v", res)
+	}
+	if len(ghPaths) != 1 || ghPaths[0] != ghLatestPath {
+		t.Fatalf("fallback must hit GitHub latest path %s, got %v", ghLatestPath, ghPaths)
+	}
+	if !strings.HasSuffix(res.DownloadURL, "mac.zip") {
+		t.Fatalf("expected darwin-arm64 asset from GitHub, got %q", res.DownloadURL)
+	}
+}
+
+// TestCheckUpdateFallsBackOnBadGiteePayload 验证 Gitee 返回 200 但内容不可用
+// (非法 JSON / 缺 tag_name / assets 为空)时同样回退 GitHub。
+func TestCheckUpdateFallsBackOnBadGiteePayload(t *testing.T) {
+	cases := []struct {
+		name      string
+		giteeBody string
+	}{
+		{"非法JSON", `not-json`},
+		{"缺tag_name", `{"assets":[{"name":"a.zip","browser_download_url":"u"}]}`},
+		{"assets为空", `{"tag_name":"v9.0.0","assets":[]}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			gitee := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, c.giteeBody)
+			}))
+			defer gitee.Close()
+			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				io.WriteString(w, `{"tag_name":"v1.3.0","assets":[{"name":"ShengShouYunHe-v1.3.0-darwin-arm64.zip","browser_download_url":"http://gh/mac.zip"}]}`)
+			}))
+			defer gh.Close()
+
+			setRuntime(t, "darwin", "arm64")
+			res, err := newDualSourceApp(t, gitee, gh).CheckUpdate(CheckUpdateRequest{CurrentVersion: "v1.0.0"})
+			if err != nil {
+				t.Fatalf("CheckUpdate: %v", err)
+			}
+			if !res.HasUpdate || res.LatestVersion != "v1.3.0" {
+				t.Fatalf("expected fallback update to v1.3.0, got %+v", res)
+			}
+		})
+	}
+}
+
+func TestCheckUpdateBothSourcesFail(t *testing.T) {
+	down := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	})
+	gitee := httptest.NewServer(down)
+	defer gitee.Close()
+	gh := httptest.NewServer(down)
+	defer gh.Close()
+
+	_, err := newDualSourceApp(t, gitee, gh).CheckUpdate(CheckUpdateRequest{CurrentVersion: "v1.0.0"})
+	if err == nil {
+		t.Fatal("both sources down must yield an error")
+	}
+}
+
+// --- 3. SHA256 校验链路 ---
+
+// TestCheckUpdateFetchesPlatformSHA256 验证 has_update 时从 release 的
+// sha256sums.txt 资产解析本平台哈希填入结果。
+func TestCheckUpdateFetchesPlatformSHA256(t *testing.T) {
+	const wantHash = "5cf1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1"
+	var srvURL string
+	mux := http.NewServeMux()
+	mux.HandleFunc(fmt.Sprintf("/repos/%s/%s/releases/latest", updateOwner, updateRepo), func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, fmt.Sprintf(`{
+		  "tag_name": "v1.7.1",
+		  "body": "新版本",
+		  "assets": [
+		    {"name": "圣手运河-v1.7.1-darwin-arm64.zip", "browser_download_url": "%s/mac.zip"},
+		    {"name": "sha256sums.txt", "browser_download_url": "%s/SHA256SUMS.txt"}
+		  ]
+		}`, srvURL, srvURL))
+	})
+	mux.HandleFunc("/SHA256SUMS.txt", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "linux-amd64: aaaa\n")
+		io.WriteString(w, "darwin-arm64: "+wantHash+"\n")
+	})
+	srv := httptest.NewServer(mux)
+	srvURL = srv.URL
+	defer srv.Close()
+
+	setRuntime(t, "darwin", "arm64")
+	res, err := newUpdateApp(t, srv).CheckUpdate(CheckUpdateRequest{CurrentVersion: "v1.0.0"})
+	if err != nil {
+		t.Fatalf("CheckUpdate: %v", err)
+	}
+	if res.SHA256 != wantHash {
+		t.Fatalf("expected platform hash %q, got %q", wantHash, res.SHA256)
+	}
+}
+
+// TestCheckUpdateSHA256Optional 验证优雅降级:旧版本 Release 无 sha256sums
+// 资产、或文件里没有本平台行时,SHA256 留空且不影响更新探测。
+func TestCheckUpdateSHA256Optional(t *testing.T) {
+	newSrv := func(sumsBody string) *httptest.Server {
+		var srvURL string
+		mux := http.NewServeMux()
+		mux.HandleFunc(fmt.Sprintf("/repos/%s/%s/releases/latest", updateOwner, updateRepo), func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, fmt.Sprintf(`{
+			  "tag_name": "v1.7.1",
+			  "assets": [
+			    {"name": "圣手运河-v1.7.1-darwin-arm64.zip", "browser_download_url": "%s/mac.zip"},
+			    {"name": "SHA256SUMS.txt", "browser_download_url": "%s/SHA256SUMS.txt"}
+			  ]
+			}`, srvURL, srvURL))
+		})
+		mux.HandleFunc("/SHA256SUMS.txt", func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, sumsBody)
+		})
+		srv := httptest.NewServer(mux)
+		srvURL = srv.URL
+		t.Cleanup(srv.Close)
+		return srv
+	}
+
+	setRuntime(t, "darwin", "arm64")
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"无本平台行", "linux-amd64: aaaa\n"},
+		{"哈希长度不对", "darwin-arm64: deadbeef\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res, err := newUpdateApp(t, newSrv(c.body)).CheckUpdate(CheckUpdateRequest{CurrentVersion: "v1.0.0"})
+			if err != nil {
+				t.Fatalf("CheckUpdate: %v", err)
+			}
+			if !res.HasUpdate || res.SHA256 != "" {
+				t.Fatalf("SHA256 must degrade to empty, got %+v", res)
+			}
+		})
+	}
+
+	// 旧版本 Release 完全没有 sha256sums 资产:不得发起额外请求。
+	srv := fakeGiteeServer(t, `{"tag_name":"v1.7.1","assets":[{"name":"圣手运河-v1.7.1-darwin-arm64.zip","browser_download_url":"u"}]}`)
+	res, err := newUpdateApp(t, srv).CheckUpdate(CheckUpdateRequest{CurrentVersion: "v1.0.0"})
+	if err != nil {
+		t.Fatalf("CheckUpdate: %v", err)
+	}
+	if !res.HasUpdate || res.SHA256 != "" {
+		t.Fatalf("missing sums asset must degrade to empty, got %+v", res)
+	}
+}
+
+// TestDownloadUpdateSHA256 覆盖下载校验:匹配成功(大小写不敏感)、不匹配
+// 报错(phase=error 且含「校验失败」)、为空跳过。
+func TestDownloadUpdateSHA256(t *testing.T) {
+	zipPath := filepath.Join(t.TempDir(), "u.zip")
+	makeUpdateZip(t, zipPath)
+	data, err := os.ReadFile(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(data)
+	}))
+	defer srv.Close()
+
+	sum := sha256.Sum256(data)
+	good := hex.EncodeToString(sum[:])
+
+	// 匹配成功:大写十六进制也必须通过。
+	app := newUpdateApp(t, srv)
+	if err := app.DownloadUpdate(DownloadUpdateRequest{URL: srv.URL + "/u.zip", SHA256: strings.ToUpper(good)}); err != nil {
+		t.Fatalf("matching sha256 must pass: %v", err)
+	}
+	if app.UpdateProgress().Phase != "done" {
+		t.Fatalf("unexpected progress %+v", app.UpdateProgress())
+	}
+
+	// 不匹配:返回 error,进度置 error 且错误信息含「校验失败」。
+	bad := newUpdateApp(t, srv)
+	err = bad.DownloadUpdate(DownloadUpdateRequest{URL: srv.URL + "/u.zip", SHA256: strings.Repeat("ab", 32)})
+	if err == nil {
+		t.Fatal("mismatched sha256 must fail")
+	}
+	prog := bad.UpdateProgress()
+	if prog.Phase != "error" || !strings.Contains(prog.Error, "校验失败") {
+		t.Fatalf("expected error phase with 校验失败, got %+v", prog)
+	}
+
+	// 为空:跳过校验,兼容旧流程。
+	skip := newUpdateApp(t, srv)
+	if err := skip.DownloadUpdate(DownloadUpdateRequest{URL: srv.URL + "/u.zip", SHA256: ""}); err != nil {
+		t.Fatalf("empty sha256 must skip verification: %v", err)
+	}
+	if skip.UpdateProgress().Phase != "done" {
+		t.Fatalf("unexpected progress %+v", skip.UpdateProgress())
+	}
+}
+
+// makeUpdateTarGz 生成含单个条目的 tar.gz(entryName 可带 ./ 等目录前缀,
+// 模拟 CI 里 tar -C 打包的产物形态)。
+func makeUpdateTarGz(t *testing.T, path, entryName, content string) {
+	t.Helper()
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	if err := tw.WriteHeader(&tar.Header{Name: entryName, Mode: 0o755, Size: int64(len(content))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDownloadUpdateTarGz 验证 Linux 资产(.tar.gz)的下载闭环:落盘为暂存
+// 目录的 update.tar.gz(ApplyUpdate 的 linux 分支按此名取包),SHA256 校验
+// 同样生效,且要求包内含 圣手运河 二进制,缺失时报错。
+func TestDownloadUpdateTarGz(t *testing.T) {
+	tgzPath := filepath.Join(t.TempDir(), "u.tar.gz")
+	makeUpdateTarGz(t, tgzPath, "./圣手运河", "binary-bytes")
+	data, err := os.ReadFile(tgzPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(data)
+	}))
+	defer srv.Close()
+
+	// 含二进制的 tar.gz:落盘为 update.tar.gz,校验通过,进度 done。
+	app := newUpdateApp(t, srv)
+	url := srv.URL + "/ShengShouYunHe-v1.7.1-linux-amd64.tar.gz"
+	if err := app.DownloadUpdate(DownloadUpdateRequest{URL: url, SHA256: hex.EncodeToString(sum[:])}); err != nil {
+		t.Fatalf("tar.gz download must pass: %v", err)
+	}
+	if app.UpdateProgress().Phase != "done" {
+		t.Fatalf("unexpected progress %+v", app.UpdateProgress())
+	}
+	staging, _ := app.stagingDir.Load().(string)
+	if _, err := os.Stat(filepath.Join(staging, "update.tar.gz")); err != nil {
+		t.Fatalf("staged update.tar.gz missing: %v", err)
+	}
+
+	// 缺二进制的 tar.gz:报错且进度置 error。
+	badPath := filepath.Join(t.TempDir(), "bad.tar.gz")
+	makeUpdateTarGz(t, badPath, "README.md", "no binary here")
+	badData, err := os.ReadFile(badPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(badData)
+	}))
+	defer badSrv.Close()
+	bad := newUpdateApp(t, badSrv)
+	if err := bad.DownloadUpdate(DownloadUpdateRequest{URL: badSrv.URL + "/x-linux-amd64.tar.gz"}); err == nil {
+		t.Fatal("tar.gz without the binary must fail")
+	}
+	if prog := bad.UpdateProgress(); prog.Phase != "error" || !strings.Contains(prog.Error, "圣手运河") {
+		t.Fatalf("expected error phase mentioning payload, got %+v", prog)
+	}
+}
+
+// --- 4. Linux 原位替换 ---
+
+// TestBuildLinuxUpdaterScript 验证 Linux 脚本:tar 解压 → /proc/self/exe
+// 解析当前可执行文件真实路径 → mv 原位替换 → chmod +x → 清理 → 后台重启。
+func TestBuildLinuxUpdaterScript(t *testing.T) {
+	s := buildLinuxUpdaterScript("/tmp/stage", "/opt/apps/圣手运河")
+	for _, want := range []string{
+		"tar -xzf",
+		"/proc/self/exe",
+		"mv ",
+		"chmod +x",
+		`TARGET="/opt/apps/圣手运河"`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("script missing %q:\n%s", want, s)
+		}
+	}
+}
+
+// TestApplyUpdateLinuxRunsSh 验证 Linux 分支:定位暂存 tar.gz,生成替换
+// 脚本并以分离进程启动。
+func TestApplyUpdateLinuxRunsSh(t *testing.T) {
+	setRuntime(t, "linux", "amd64")
+	staging := t.TempDir()
+	os.WriteFile(filepath.Join(staging, "update.tar.gz"), []byte("fake tgz"), 0o644)
+	oldExePath := exePath
+	exePath = func() (string, error) { return "/opt/apps/圣手运河", nil }
+	t.Cleanup(func() { exePath = oldExePath })
+
+	var started []string
+	app := newUpdateApp(t, httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})))
+	app.applyCmd = func(cmd *exec.Cmd) error {
+		started = append(started, strings.Join(cmd.Args, " "))
+		return nil
+	}
+	app.stagingDir.Store(staging)
+	if err := app.ApplyUpdate(ApplyUpdateRequest{}); err != nil {
+		t.Fatalf("ApplyUpdate: %v", err)
+	}
+	if len(started) != 1 || !strings.Contains(started[0], "apply-update.sh") {
+		t.Fatalf("expected detached script start, got %v", started)
+	}
+	data, err := os.ReadFile(filepath.Join(staging, "apply-update.sh"))
+	if err != nil {
+		t.Fatalf("script not written: %v", err)
+	}
+	if !strings.Contains(string(data), `TARGET="/opt/apps/圣手运河"`) {
+		t.Fatalf("script must target the running binary:\n%s", data)
+	}
+	if !strings.Contains(string(data), "tar -xzf") {
+		t.Fatalf("script must extract the tar.gz:\n%s", data)
+	}
+}
+
+// --- 5. Notes 清理:剔除 body 末尾的 ```sha256sums 围栏块 ---
+
+func TestStripSHA256Fence(t *testing.T) {
+	if got := stripSHA256Fence("常规说明\n- 修复 A"); got != "常规说明\n- 修复 A" {
+		t.Fatalf("body without fence must be untouched, got %q", got)
+	}
+	if got := stripSHA256Fence("说明\n\n```sha256sums\ndarwin-arm64: 5cf1...\n```\n"); got != "说明" {
+		t.Fatalf("closed fence must be stripped, got %q", got)
+	}
+	if got := stripSHA256Fence("说明\n```SHA256SUMS\nabc: 00"); got != "说明" {
+		t.Fatalf("unclosed fence must be stripped to the end, got %q", got)
+	}
+}
+
+// TestCheckUpdateStripsSHA256Fence 验证端到端:返回给前端的 Notes 不再带
+// 哈希围栏块。
+func TestCheckUpdateStripsSHA256Fence(t *testing.T) {
+	rel := giteeRelease{
+		TagName: "v1.1.0",
+		Body:    "## 更新内容\n- 修复 A\n\n```sha256sums\ndarwin-arm64: 5cf1...\nwindows-amd64: abcd...\n```\n",
+		Assets:  []releaseAsset{mkAsset("圣手运河-v1.1.0-darwin-arm64.zip", "u")},
+	}
+	data, err := json.Marshal(rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := fakeGiteeServer(t, string(data))
+	res, err := newUpdateApp(t, srv).CheckUpdate(CheckUpdateRequest{CurrentVersion: "v1.0.0"})
+	if err != nil {
+		t.Fatalf("CheckUpdate: %v", err)
+	}
+	if want := "## 更新内容\n- 修复 A"; res.Notes != want {
+		t.Fatalf("notes must drop the sha256sums fence, got %q, want %q", res.Notes, want)
 	}
 }

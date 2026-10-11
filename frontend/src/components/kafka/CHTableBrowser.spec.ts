@@ -478,7 +478,7 @@ describe('CHTableBrowser', () => {
   it('keeps column headers horizontal via natural table width (squeeze guard)', () => {
     // jsdom 无法测真实布局,用样式契约锁住:列数多时表格按内容自然宽度
     // 横向滚动,而不是把每个列头压成竖排文字(用户真机翻车现场)。
-    const fileSrc = readFileSync(join(process.cwd(), 'src/components/kafka/CHTableBrowser.vue'), 'utf8')
+    const fileSrc = readFileSync(join(process.cwd(), 'src/components/common/TableDataGrid.vue'), 'utf8')
     const tableBlock = fileSrc.match(/\.table \{[\s\S]*?\n\}/)?.[0] ?? ''
     expect(tableBlock).toContain('width: max-content')
     expect(tableBlock).toContain('min-width: 100%')

@@ -3,6 +3,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { getApi } from '@/api/client'
 import type { HiveColumn, HivePageRowsResult, HiveTableColumnsResult } from '@/api/types'
+import TableDataGrid from '@/components/common/TableDataGrid.vue'
+import { usePagedTable } from '@/composables/usePagedTable'
 
 const props = defineProps<{ connectionId: string; database: string; table: string }>()
 
@@ -22,10 +24,10 @@ const totalRows = ref(0)
 const tableType = ref('')
 const loading = ref(false)
 const error = ref<string | null>(null)
-const offset = ref(0)
 const confirmTruncate = ref(false)
 
-const page = computed(() => Math.floor(offset.value / PAGE_SIZE) + 1)
+// --- 分页:共用组合式(Hive 只读浏览,无过滤/排序/编辑)。 ---
+const { offset, page, nextPage, prevPage } = usePagedTable({ pageSize: PAGE_SIZE, refetch: fetchPage })
 
 // 仅内部表(事务相关数据落在 MANAGED_TABLE)支持 TRUNCATE;外部表/视图禁用。
 const isManagedTable = computed(() => tableType.value === 'MANAGED_TABLE')
@@ -88,16 +90,6 @@ watch(
 )
 
 function refresh(): void {
-  void fetchPage()
-}
-
-function nextPage(): void {
-  offset.value += PAGE_SIZE
-  void fetchPage()
-}
-
-function prevPage(): void {
-  offset.value = Math.max(0, offset.value - PAGE_SIZE)
   void fetchPage()
 }
 
@@ -189,48 +181,16 @@ function colTitle(c: HiveColumn): string {
     </div>
 
     <div v-else class="table-wrap">
-      <table class="table" data-test="hive-grid">
-        <thead>
-          <tr>
-            <!-- Hive 不显示排序控件:列头纯展示(名称 + 类型小字 + 可选注释)。 -->
-            <th
-              v-for="c in columns"
-              :key="c.name"
-              data-test="hive-col"
-              :title="colTitle(c)"
-            >
-              <div class="col-head">
-                <span class="col-name">
-                  <span data-test="hive-col-name">{{ c.name }}</span>
-                </span>
-                <span class="col-type" data-test="hive-col-type">{{ c.type }}</span>
-                <span v-if="c.comment" class="col-comment" data-test="hive-col-comment">{{ c.comment }}</span>
-              </div>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(row, ri) in rows" :key="ri" data-test="hive-row">
-            <td
-              v-for="(cell, ci) in row"
-              :key="ci"
-              class="mono cell"
-              :class="{ 'cell-null': cell === null, 'cell-trunc': isTruncated(cell) }"
-              :title="cellTitle(cell)"
-              data-test="hive-cell"
-            >
-              {{ cellDisplay(cell) }}
-            </td>
-          </tr>
-          <tr v-if="rows.length === 0 && !loading">
-            <td :colspan="columns.length" class="empty" data-test="hive-grid-empty">
-              <div class="empty-icon">◌</div>
-              <div>该表暂无数据</div>
-              <div class="empty-hint">数据写入后点击「刷新」查看</div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <!-- 共享表格网格:Hive 只读浏览(sortable=false,无行删除/编辑/主键角标)。 -->
+      <TableDataGrid
+        test-prefix="hive"
+        :columns="columns"
+        :rows="rows"
+        :loading="loading"
+        :sortable="false"
+        :col-title="colTitle"
+        :cell-title="cellTitle"
+      />
     </div>
 
     <div class="pager" data-test="hive-pager">
@@ -270,27 +230,6 @@ function colTitle(c: HiveColumn): string {
   margin-top: 10px; overflow: auto; max-height: calc(100vh - 320px);
   border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated);
 }
-.table {
-  /* width:max-content:列数多时按内容自然宽度横向滚动,而不是把列头
-     压成竖排文字;min-width:100% 保证列少时仍铺满容器。 */
-  width: max-content; min-width: 100%;
-  border-collapse: collapse; font-size: 13px;
-}
-.table th {
-  position: sticky; top: 0; z-index: 1;
-  text-align: left; padding: 7px 10px; background: var(--bg-subtle);
-  border-bottom: 1px solid var(--border); user-select: none; white-space: nowrap;
-}
-.col-head { display: flex; flex-direction: column; gap: 1px; white-space: nowrap; }
-.col-name { font-weight: 600; display: flex; align-items: center; gap: 4px; }
-.col-type { font-size: 10px; color: var(--text-tertiary); font-family: var(--mono); font-weight: 400; }
-/* 第三行:字段描述(comment),灰色小字;超长省略,悬停 title 已含全文。 */
-.col-comment { font-size: 10px; color: var(--text-tertiary); max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
-.table tbody tr:nth-child(even) td { background: var(--bg-subtle); }
-.table tbody tr:hover td { background: var(--bg-hover); }
-.table td { padding: 5px 10px; border-bottom: 1px solid var(--border); word-break: break-all; max-width: 420px; }
-.cell-null { color: var(--text-tertiary); font-style: italic; }
-.cell-trunc { color: var(--text-secondary); }
 .mono { font-family: var(--mono); }
 .empty { text-align: center; color: var(--text-tertiary); padding: 28px 24px; }
 .empty-icon { font-size: 26px; margin-bottom: 6px; }

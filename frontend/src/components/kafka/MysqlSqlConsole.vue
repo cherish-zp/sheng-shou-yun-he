@@ -2,8 +2,16 @@
 import { computed, onMounted, ref, unref, watch } from 'vue'
 import type { SqlTableSchema } from '@/components/common/SqlEditor.vue'
 import { parseCHSingleTableSelect } from '@/utils/chSql'
-import { commentAbove, splitSqlStatements, type SqlSegment } from '@/utils/sqlSplit'
+import { splitSqlStatements } from '@/utils/sqlSplit'
 import { useQueryFiles } from '@/composables/queryFiles'
+import { useStatementMarks, useConsoleCursor, statementSummary, tabLabel, tabsFromSegments, applyTabStatus, marksFromResults } from '@/composables/useConsoleStatements'
+import type { MarkedStatement } from '@/composables/useConsoleStatementRefresh'
+import { useConsolePaging } from '@/composables/useConsolePaging'
+import { useConsoleLayout } from '@/composables/useConsoleLayout'
+import { useConsoleCellUpdate } from '@/composables/useConsoleCellUpdate'
+import { useConsoleCellEdit, resolveSourceTable } from '@/composables/useConsoleCellEdit'
+import { useConsoleRowDelete, pkLocateHint, buildPkWhere } from '@/composables/useConsoleRowDelete'
+import { refreshStatementInPlace } from '@/composables/useConsoleStatementRefresh'
 import { useTabsStore } from '@/store/tabs'
 import SqlEditor from '@/components/common/SqlEditor.vue'
 import SqlResultCard from '@/components/common/SqlResultCard.vue'
@@ -93,151 +101,34 @@ const activeCard = computed(() => results.value[activeResult.value])
 // --- 结果区分页(服务端分页,默认 500 条/页) --------------------------------
 // 新查询成功后记录 lastRequest(重放依据)并回到第 1 页;翻页 = lastRequest
 // + 新 offset 重新执行,不经过编辑器(编辑器内容可能与重放脚本不同)。
-const PAGE_SIZE = 500
-const page = ref(1)
-const lastRequest = ref<{ sql: string; database: string } | null>(null)
-
-// 行结果:无错误且 rows 是数组的结果,分页信息以行为准。
-const rowResults = computed(() =>
-  results.value.filter((r) => !r.error && Array.isArray(r.rows)),
-)
-
-// 精确总数:第一个行结果上 ≥0 的 total_rows(-1 是「无法计数」);null = 全部
-// 不可计数或未启用分页。
-const exactTotal = computed<number | null>(() => {
-  for (const r of rowResults.value) {
-    if (r.total_rows != null && r.total_rows >= 0) return r.total_rows
-  }
-  return null
+// 状态与翻页动作由 useConsolePaging 组合式承担;replay 闭包携带当前库。
+const {
+  pageSize: PAGE_SIZE,
+  page,
+  rowResults,
+  exactTotal,
+  allUnknownTotal,
+  pagerVisible,
+  lastPage,
+  pagerInfo,
+  canPrev,
+  canNext,
+  commitRequest,
+  prevPage,
+  nextPage,
+} = useConsolePaging<MysqlStatementResult, { sql: string; database: string }>({
+  results,
+  running,
+  statementOf: (r) => r.sql,
+  replay: (req, targetPage) => {
+    void executeScript(req.sql, req.database, targetPage)
+  },
 })
 
-// 所有行结果都无法计数(total_rows === -1)→ 「至少 N 条」。
-const allUnknownTotal = computed(
-  () =>
-    rowResults.value.length > 0 &&
-    rowResults.value.every((r) => r.total_rows === -1),
-)
+// (只读判定/分页可见性/页码信息/翻页动作均在 useConsolePaging 组合式内。)
 
-// --- 脚本只读判定:翻页 = 重放整段脚本,含 DML 的脚本翻一页就重复写一次库,
-// 仅当本次执行的每条语句首个关键字都属于只读集合才显示分页条。WITH 可能是
-// 数据修改 CTE(PG/MySQL 8),与其他一切语句(INSERT/UPDATE/SET/USE/…)一律
-// 保守视为不可重放。 ---
-const READONLY_KEYWORDS = new Set(['SELECT', 'SHOW', 'DESC', 'DESCRIBE', 'EXPLAIN', 'TABLE', 'VALUES'])
-
-// 取语句首个关键字:跳过前导空白与注释(-- 与 # 行注释、/* */ 块注释),
-// 大小写不敏感;纯注释/空白/无法识别返回 null(保守视为非只读)。
-function firstStatementKeyword(stmt: string): string | null {
-  let i = 0
-  const n = stmt.length
-  for (;;) {
-    while (i < n && /\s/.test(stmt[i] as string)) i += 1
-    if (stmt.startsWith('--', i) || stmt[i] === '#') {
-      const nl = stmt.indexOf('\n', i)
-      i = nl === -1 ? n : nl + 1
-      continue
-    }
-    if (stmt.startsWith('/*', i)) {
-      const end = stmt.indexOf('*/', i + 2)
-      i = end === -1 ? n : end + 2
-      continue
-    }
-    break
-  }
-  const m = /^[A-Za-z_]+/.exec(stmt.slice(i, i + 64))
-  return m ? m[0].toUpperCase() : null
-}
-
-// 脚本只读判定:全部语句只读 → true;空集或含任何非只读语句 → false。
-function scriptIsReadonly(statements: string[]): boolean {
-  return (
-    statements.length > 0 &&
-    statements.every((s) => {
-      const kw = firstStatementKeyword(s)
-      return kw !== null && READONLY_KEYWORDS.has(kw)
-    })
-  )
-}
-
-// 分页条可见:有行结果,且本次执行的脚本整体只读(重放翻页安全)。
-const pagerVisible = computed(
-  () => rowResults.value.length > 0 && scriptIsReadonly(results.value.map((r) => r.sql)),
-)
-
-const lastPage = computed(() =>
-  exactTotal.value == null ? null : Math.max(1, Math.ceil(exactTotal.value / PAGE_SIZE)),
-)
-
-// 页码信息:精确总数 → 共 N 条 · 第 p/last 页;全部 -1 → 至少 N 条 · 第 p 页;
-// 结果上没有 total_rows(未启用分页的响应)→ 第 x-y 条。
-const pagerInfo = computed(() => {
-  const first = rowResults.value[0]
-  const pageLen = first?.rows?.length ?? 0
-  const offset = (page.value - 1) * PAGE_SIZE
-  if (exactTotal.value != null) {
-    return `共 ${exactTotal.value.toLocaleString('en-US')} 条 · 第 ${page.value}/${lastPage.value ?? 1} 页`
-  }
-  if (allUnknownTotal.value) {
-    return `至少 ${(offset + pageLen).toLocaleString('en-US')} 条 · 第 ${page.value} 页`
-  }
-  if (pageLen === 0) return `第 ${page.value} 页`
-  return `第 ${offset + 1}-${offset + pageLen} 条`
-})
-
-const canPrev = computed(() => !running.value && page.value > 1)
-
-// 下一页:执行中禁用;有精确总数时按 lastPage 判定(恰好整页已取完不可再翻,
-// total=0 亦不可翻);总数未知(-1/缺省)沿用「本页行数 < PAGE_SIZE 则无更多」。
-const canNext = computed(() => {
-  if (running.value || rowResults.value.length === 0) return false
-  if (exactTotal.value != null) {
-    return lastPage.value != null && page.value < lastPage.value
-  }
-  return rowResults.value.some((r) => (r.rows?.length ?? 0) >= PAGE_SIZE)
-})
-
-// 翻页 = 上次成功执行的请求 + 新 offset 重新执行。
-function goToPage(target: number): void {
-  const req = lastRequest.value
-  if (!req) return
-  void executeScript(req.sql, req.database, target)
-}
-
-function prevPage(): void {
-  if (canPrev.value) void goToPage(page.value - 1)
-}
-
-function nextPage(): void {
-  if (canNext.value) void goToPage(page.value + 1)
-}
-
-// 语句单行摘要:第一条非空行(trim,超长截断),供 tab 悬浮提示。
-function statementSummary(text: string): string {
-  const line = (text.split('\n').find((l) => l.trim() !== '') ?? '').trim()
-  return line.length > 80 ? `${line.slice(0, 80)}…` : line
-}
-
-// tab 标签:语句起始 offset 上方最近的注释;无注释回退「结果 N」。
-// doc 为注释检索的文本:新查询 = 编辑器当前内容,翻页 = 重放的脚本。
-function tabLabel(doc: string, from: number, index: number): string {
-  return commentAbove(doc, from) ?? `结果 ${index + 1}`
-}
-
-// 发起「运行全部」:按拆分段生成 running tab,active 指向第 0 个。
-function tabsFromSegments(segs: SqlSegment[], doc: string): ResultTabItem[] {
-  return segs.map((s, i) => ({
-    label: tabLabel(doc, s.from, i),
-    status: 'running',
-    title: statementSummary(s.text),
-  }))
-}
-
-// 运行完成:按结果 error 映射 ok/fail;结果可能少于段数(后端遇错即停)。
-function applyTabStatus(tabs: ResultTabItem[], res: MysqlStatementResult[]): ResultTabItem[] {
-  return tabs.slice(0, res.length).map((t, i) => ({
-    ...t,
-    status: res[i]?.error ? 'fail' : 'ok',
-  }))
-}
+// (语句摘要/tab 标签/运行 tab 生成/状态映射由 useConsoleStatements 共享模块
+// 提供;行为与既有实现逐字一致。)
 
 // --- 三层补全(表 → 列):挂载时(及 database 变化)拉表清单,再查一次
 // information_schema.columns 组装列;失败静默降级,不打断编辑。 ---
@@ -329,64 +220,12 @@ async function loadTables(): Promise<void> {
   }
 }
 
-// --- 语句状态标记 -------------------------------------------------------------
-// markedStatements 保存最近一次运行的语句级状态(运行中/成功/失败);编辑器
-// 内容变化后按语句文本(trim 后相等)对 split 结果重新定位,匹配不到的丢弃。
-interface MarkedStatement {
-  text: string
-  status: 'ok' | 'fail' | 'running'
-  detail?: string
-}
-const markedStatements = ref<MarkedStatement[]>([])
+// --- 语句状态标记(useConsoleStatements 共享模块;编辑器内容变化后按语句
+// 文本对 split 结果重新定位,匹配不到的丢弃) ---
+const { markedStatements, statementMarks } = useStatementMarks({ sql, split: splitSqlStatements })
 
-const statementMarks = computed(() => {
-  const segs = splitSqlStatements(sql.value)
-  const used = new Set<number>()
-  const marks: { from: number; status: 'ok' | 'fail' | 'running'; detail?: string }[] = []
-  for (const m of markedStatements.value) {
-    const idx = segs.findIndex((s, i) => !used.has(i) && s.text.trim() === m.text.trim())
-    if (idx === -1) continue
-    used.add(idx)
-    marks.push({ from: segs[idx].from, status: m.status, detail: m.detail })
-  }
-  return marks
-})
-
-// 返回结果与发起文本按顺序映射成语句标记:耗时来自 duration_ms,错误用原文。
-function marksFromResults(texts: string[], res: MysqlStatementResult[]): MarkedStatement[] {
-  return res.map((r, i): MarkedStatement => ({
-    text: texts[i] ?? r.sql,
-    status: r.error ? 'fail' : 'ok',
-    detail: r.error ?? `${r.duration_ms} ms`,
-  }))
-}
-
-// --- 光标位置与「执行当前语句」 ------------------------------------------------
-// SqlEditor 的 cursor emit(1 基行列)记录最新光标;⌘Enter 时把行列换算成文本
-// offset,在 split 结果中定位光标所在语句段(段间空白归属前一段)。
-const cursorPos = ref({ line: 1, col: 1 })
-
-function onCursor(pos: { line: number; col: number }): void {
-  cursorPos.value = { line: pos.line, col: pos.col }
-}
-
-function cursorOffset(text: string, pos: { line: number; col: number }): number {
-  const lines = text.split('\n')
-  let offset = 0
-  for (let i = 0; i < Math.min(pos.line - 1, lines.length); i++) offset += lines[i].length + 1
-  const lineText = lines[Math.min(Math.max(pos.line - 1, 0), lines.length - 1)] ?? ''
-  return offset + Math.min(Math.max(pos.col - 1, 0), lineText.length)
-}
-
-function statementAtCursor(): string | null {
-  const segs = splitSqlStatements(sql.value)
-  if (segs.length === 0) return null
-  const offset = cursorOffset(sql.value, cursorPos.value)
-  const seg =
-    segs.find((s) => offset >= s.from && offset <= s.to) ??
-    [...segs].reverse().find((s) => s.to <= offset)
-  return (seg ?? segs[0]).text
-}
+// --- 光标位置与「执行当前语句」(useConsoleStatements 共享模块) ---
+const { cursorPos, onCursor, statementAtCursor } = useConsoleCursor({ sql, split: splitSqlStatements })
 
 // 单语句执行:只发该段文本,结果数组替换为该条结果;发起即置 running 标记,
 // 并预置单个 running tab(标签优先取该语句的前置注释)。新查询成功后记录
@@ -416,15 +255,14 @@ async function runSingle(text: string): Promise<void> {
       offset: 0,
     })
     results.value = res
-    lastRequest.value = { sql: text, database: activeDb.value }
-    page.value = 1
+    commitRequest({ sql: text, database: activeDb.value }, 1)
     // 选中文本可能含多条语句:结果多于预置 tab 时按序回退「结果 N」补齐。
     resultTabs.value = res.map((r, i) => ({
       label: resultTabs.value[i]?.label ?? `结果 ${i + 1}`,
       status: r.error ? 'fail' : 'ok',
       title: resultTabs.value[i]?.title ?? statementSummary(r.sql),
     }))
-    markedStatements.value = marksFromResults([text], res)
+    markedStatements.value = marksFromResults([text], res, (r) => r.sql)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     error.value = msg
@@ -481,8 +319,7 @@ async function executeScript(script: string, database: string, targetPage: numbe
       status: r.error ? 'fail' : 'ok',
       detail: r.error ?? `${r.duration_ms} ms`,
     }))
-    lastRequest.value = { sql: script, database }
-    page.value = targetPage
+    commitRequest({ sql: script, database }, targetPage)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     error.value = msg
@@ -504,61 +341,10 @@ function onRunSelection(text: string): void {
   void runSingle(text)
 }
 
-// --- IDE 式布局:可拖拽结果区 ---------------------------------------------------
-// 结果区仅打开时渲染;高度 160..窗口 80% 可拖拽,双击分隔条恢复 50/50,
-// 持久化到 localStorage(与 CH 控制台共用同一 key)。
-const RESULTS_HEIGHT_KEY = 'dbclient-sql-results-height'
-const MIN_RESULTS_HEIGHT = 160
-const DEFAULT_RESULTS_HEIGHT = 320
-
-const resultsOpen = ref(false)
-const rootRef = ref<HTMLElement | null>(null)
-
-function maxResultsHeight(): number {
-  return Math.max(MIN_RESULTS_HEIGHT, Math.floor(window.innerHeight * 0.8))
-}
-
-function clampResultsHeight(h: number): number {
-  return Math.min(maxResultsHeight(), Math.max(MIN_RESULTS_HEIGHT, h))
-}
-
-function readStoredResultsHeight(): number {
-  const v = Number(localStorage.getItem(RESULTS_HEIGHT_KEY))
-  if (!Number.isFinite(v) || v <= 0) return DEFAULT_RESULTS_HEIGHT
-  return clampResultsHeight(Math.round(v))
-}
-
-const resultsHeight = ref(readStoredResultsHeight())
-const resultsResizing = ref(false)
-let resultsDragStartY = 0
-let resultsDragStartHeight = 0
-
-function startResultsResize(e: MouseEvent): void {
-  resultsResizing.value = true
-  resultsDragStartY = e.clientY
-  resultsDragStartHeight = resultsHeight.value
-  window.addEventListener('mousemove', onResultsResize)
-  window.addEventListener('mouseup', endResultsResize)
-}
-
-function onResultsResize(e: MouseEvent): void {
-  // 结果区在下方:向上拖(dy 为负)增高。
-  resultsHeight.value = clampResultsHeight(resultsDragStartHeight - (e.clientY - resultsDragStartY))
-}
-
-function endResultsResize(): void {
-  resultsResizing.value = false
-  localStorage.setItem(RESULTS_HEIGHT_KEY, String(resultsHeight.value))
-  window.removeEventListener('mousemove', onResultsResize)
-  window.removeEventListener('mouseup', endResultsResize)
-}
-
-// 双击分隔条:恢复上下 50/50(容器无布局高度时按窗口高折半)。
-function resetResultsHeight(): void {
-  const total = rootRef.value?.clientHeight || window.innerHeight
-  resultsHeight.value = clampResultsHeight(Math.round(total / 2))
-  localStorage.setItem(RESULTS_HEIGHT_KEY, String(resultsHeight.value))
-}
+// --- IDE 式布局:可拖拽结果区(useConsoleLayout 组合式;高度持久化与
+// 双击恢复语义不变) ---
+const { resultsOpen, resultsHeight, resultsResizing, rootRef, startResultsResize, resetResultsHeight } =
+  useConsoleLayout()
 
 // --- 状态栏:光标行列 / 语句条数 / 最近耗时 ------------------------------------
 const statementCount = computed(() => splitSqlStatements(sql.value).length)
@@ -568,69 +354,32 @@ const lastDurationMs = computed(() => results.value.reduce((sum, r) => sum + (r.
 // 结果若来自单表 SELECT(允许 WHERE/ORDER BY/LIMIT),卡片发出 cell-dblclick
 // 进入行内编辑;edit-commit 后预览(确认弹窗展示后端生成的 UPDATE 语句全文
 // 与匹配行数),确认执行成功后重新执行该条语句刷新结果。复杂查询只读。
-// 预览/执行状态机(与 useCHCellUpdate 同构,但 MySQL 侧只传列名与值):
-const cuPreviewing = ref(false)
-const cuError = ref<string | null>(null)
-const cuConfirmOpen = ref(false)
-const cuStatement = ref('')
-const cuMatchedRows = ref(0)
-// 预览通过后暂存的待执行目标,确认时原样发给执行。
-let cuPending: MysqlCellUpdateTarget | null = null
-
-async function requestCellUpdate(target: MysqlCellUpdateTarget): Promise<void> {
-  cuPending = target
-  cuPreviewing.value = true
-  cuError.value = null
-  try {
-    const res = await app.MysqlPreviewCellUpdate(target)
-    cuStatement.value = res.statement
-    cuMatchedRows.value = res.matched_rows
-    cuConfirmOpen.value = true
-  } catch (e) {
-    cuError.value = e instanceof Error ? e.message : String(e)
-    cuPending = null
-  } finally {
-    cuPreviewing.value = false
-  }
-}
+// 预览/执行状态机由 useConsoleCellUpdate 组合式承担(MySQL 侧只传列名与值)。
+const {
+  previewing: cuPreviewing,
+  error: cuError,
+  confirmOpen: cuConfirmOpen,
+  statement: cuStatement,
+  matchedRows: cuMatchedRows,
+  request: requestCellUpdate,
+  confirm: confirmCellUpdateMachine,
+  cancel: cancelCellUpdateMachine,
+} = useConsoleCellUpdate<MysqlCellUpdateTarget>({
+  preview: (target) => app.MysqlPreviewCellUpdate(target),
+  execute: (target) => app.MysqlUpdateCell(target),
+})
 
 // 每条语句结果是否可编辑:有 error 的结果与解析不出单表来源的结果只读。
 const editableResults = computed<boolean[]>(() =>
   results.value.map((r) => !r.error && parseCHSingleTableSelect(r.sql) !== null),
 )
 
-// 行内编辑状态:目标(结果索引/行索引/列索引)+ 初始草稿;null 表示未在编辑。
-interface CellEdit {
-  stmtIndex: number
-  rowIndex: number
-  colIndex: number
-  draft: string
-}
-const cellEdit = ref<CellEdit | null>(null)
-
-// 卡片的 editing prop:仅当该卡对应单元格处于编辑态时非空。
-function editingFor(stmtIndex: number): { row: number; col: number; draft: string } | null {
-  const e = cellEdit.value
-  if (!e || e.stmtIndex !== stmtIndex) return null
-  return { row: e.rowIndex, col: e.colIndex, draft: e.draft }
-}
-
-// 进入编辑:原始值取结果行内存(NULL→空草稿)。运行中或不可编辑结果忽略。
-function startCellEdit(stmtIndex: number, rowIndex: number, colIndex: number): void {
-  if (running.value || !editableResults.value[stmtIndex]) return
-  const row = results.value[stmtIndex]?.rows?.[rowIndex]
-  if (!row) return
-  cellEdit.value = {
-    stmtIndex,
-    rowIndex,
-    colIndex,
-    draft: row[colIndex] ?? '',
-  }
-}
-
-function cancelCellEdit(): void {
-  cellEdit.value = null
-}
+// 行内编辑状态由 useConsoleCellEdit 组合式承担(目标/草稿/进入与退出守卫)。
+const { cellEdit, editingFor, startCellEdit, cancelCellEdit } = useConsoleCellEdit<MysqlStatementResult>({
+  running,
+  results,
+  editableResults,
+})
 
 // 卡片事件适配:edit-commit 的 value 契约为 string|null(实现恒为字符串),
 // 统一归一化为空串(空输入按 NULL 写入)。
@@ -648,6 +397,9 @@ function buildWhere(r: MysqlStatementResult, rowIndex: number): MysqlCellRef[] {
 }
 
 // 回车提交:构造 set(空输入→null)与定位 where(主键列或整行),交给预览并弹确认。
+// 库表定位经 resolveSourceTable 共享实现:后端执行的权威来源
+// (source_database/source_table,按执行时生效库解析)优先,仅在其缺失
+// (旧后端)时退回文本解析值——否则未带库名前缀的语句会误落到连接默认库。
 function commitCellEdit(stmtIndex: number, value: string): void {
   const e = cellEdit.value
   if (!e || e.stmtIndex !== stmtIndex) return
@@ -657,10 +409,11 @@ function commitCellEdit(stmtIndex: number, value: string): void {
   cellEdit.value = null
   if (!r || !parsed || !col) return
   pendingStmtIndex = stmtIndex
+  const source = resolveSourceTable(r, parsed)
   void requestCellUpdate({
     connection_id: props.connectionId,
-    database: parsed.database,
-    table: parsed.table,
+    database: source.database,
+    table: source.table,
     set: { column: col.name, value: value === '' ? null : value },
     where: buildWhere(r, e.rowIndex),
   })
@@ -681,186 +434,86 @@ const cellUpdateMessage = computed(() => {
 async function confirmCellUpdate(): Promise<void> {
   const idx = pendingStmtIndex
   pendingStmtIndex = null
-  if (!cuPending) {
-    cuError.value = '没有待执行的单元格更新'
-    return
-  }
-  cuError.value = null
-  try {
-    await app.MysqlUpdateCell(cuPending)
-    cuConfirmOpen.value = false
-  } catch (e) {
-    cuError.value = e instanceof Error ? e.message : String(e)
-    return // 失败:弹窗保持打开,错误复用错误展示区显示
-  }
+  if (!(await confirmCellUpdateMachine())) return
   const target = idx === null ? undefined : results.value[idx]
   if (!target) return
-  try {
-    // 刷新与该结果的原执行同页(当前页码),避免编辑后整页内容跳变。
-    const fresh = await app.MysqlExecute({
-      connection_id: props.connectionId,
-      sql: target.sql,
-      database: activeDb.value,
-      limit: PAGE_SIZE,
-      offset: (page.value - 1) * PAGE_SIZE,
-    })
-    if (fresh.length > 0) {
-      // 仅替换该索引的结果,其他语句结果保持不变。
-      results.value = results.value.map((old, i) => (i === idx ? fresh[0] : old))
-      // 刷新同样更新该语句的标记与结果 tab 状态(新耗时或错误)。
-      const m = markedStatements.value.find((x) => x.text.trim() === target.sql.trim())
-      if (m) {
-        m.status = fresh[0].error ? 'fail' : 'ok'
-        m.detail = fresh[0].error ?? `${fresh[0].duration_ms} ms`
-      }
-      const t = idx === null ? undefined : resultTabs.value[idx]
-      if (t && idx !== null) resultTabs.value[idx] = { ...t, status: fresh[0].error ? 'fail' : 'ok' }
-    }
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  }
+  // 刷新与该结果的原执行同页(当前页码),避免编辑后整页内容跳变。
+  await refreshStatementInPlace({
+    idx: idx as number,
+    sql: target.sql,
+    refetch: () =>
+      app.MysqlExecute({
+        connection_id: props.connectionId,
+        sql: target.sql,
+        database: activeDb.value,
+        limit: PAGE_SIZE,
+        offset: (page.value - 1) * PAGE_SIZE,
+      }),
+    results,
+    markedStatements,
+    resultTabs,
+    onError: (msg) => {
+      error.value = msg
+    },
+  })
 }
 
 function cancelCellUpdate(): void {
   pendingStmtIndex = null
-  cuPending = null
-  cuConfirmOpen.value = false
-  cuStatement.value = ''
-  cuMatchedRows.value = 0
-  cuError.value = null
+  cancelCellUpdateMachine()
 }
 
 // --- 查询结果删除行(第一期单行;仅后端回传来源库/表且表有主键时可用) ---
 // 行首 ✕ 按钮由 SqlResultCard 的 rowDelete prop 注入:hint 返回禁用原因或
 // null(可删);点击后取该行主键列原值构造 where → 预览(确认弹窗展示 DELETE
 // 全文与命中行数,命中 >1 视为定位不唯一禁用执行)→ 确认执行 → 同页刷新。
+// 删除状态机由 useConsoleRowDelete 组合式承担;主键可定位校验(pkLocateHint)
+// 与主键 where 构造(buildPkWhere)为共享实现。
 
-// 单行删除的禁用判定:返回 null = 可删;非空 = 原因文案。
+// 单行删除的禁用判定:返回 null = 可删;非空 = 原因文案(来源定位为本源方言)。
 function rowDeleteHint(r: MysqlStatementResult, rowIndex: number): string | null {
   if (!r.source_database || !r.source_table) {
     return '仅单表查询可删除:无法定位来源表'
   }
-  const pk = r.primary_key ?? []
-  if (pk.length === 0) return '该表无主键,无法定位行'
-  const row = r.rows?.[rowIndex]
-  if (!row) return '行不存在'
-  const cols = r.columns ?? []
-  for (const name of pk) {
-    const ci = cols.findIndex((c) => c.name === name)
-    if (ci === -1 || row[ci] == null) return '主键值为 NULL,无法定位行'
-  }
-  return null
+  return pkLocateHint(r, rowIndex)
 }
 
-// 该行主键列原值(NULL → null)构造 where;调用前 hint 已保证主键值非 NULL。
-function buildPkWhere(r: MysqlStatementResult, rowIndex: number): MysqlCellRef[] {
-  const row = r.rows?.[rowIndex] ?? []
-  const cols = r.columns ?? []
-  return (r.primary_key ?? []).map((name) => {
-    const ci = cols.findIndex((c) => c.name === name)
-    return { column: name, value: ci === -1 ? null : (row[ci] ?? null) }
-  })
-}
-
-// 删除状态机(与单元格更新同构):预览 → 确认弹窗 → 执行 → 同页刷新。
-const drPreviewing = ref(false)
-const drError = ref<string | null>(null)
-const drConfirmOpen = ref(false)
-const drStatement = ref('')
-const drMatchedRows = ref(0)
-// 预览通过后暂存的待执行目标与结果索引,确认时原样发给执行。
-let drPending: MysqlDeleteRowTarget | null = null
-let drPendingStmtIndex: number | null = null
-
-async function requestDeleteRow(stmtIndex: number, rowIndex: number): Promise<void> {
-  const r = results.value[stmtIndex]
-  if (!r || running.value || drPreviewing.value) return
-  if (rowDeleteHint(r, rowIndex) !== null) return
-  const target: MysqlDeleteRowTarget = {
+const {
+  error: drError,
+  confirmOpen: drConfirmOpen,
+  statement: drStatement,
+  matchedRows: drMatchedRows,
+  message: deleteRowMessage,
+  request: requestDeleteRow,
+  confirm: confirmDeleteRow,
+  cancel: cancelDeleteRow,
+} = useConsoleRowDelete<MysqlDeleteRowTarget, MysqlStatementResult>({
+  results,
+  running,
+  markedStatements,
+  resultTabs,
+  statementOf: (r) => r.sql,
+  errorSink: (msg) => {
+    error.value = msg
+  },
+  hint: rowDeleteHint,
+  buildTarget: (r, rowIndex) => ({
     connection_id: props.connectionId,
     database: r.source_database ?? '',
     table: r.source_table ?? '',
     where: buildPkWhere(r, rowIndex),
-  }
-  drPendingStmtIndex = stmtIndex
-  drPending = target
-  drPreviewing.value = true
-  drError.value = null
-  try {
-    const res = await app.MysqlPreviewDeleteRow(target)
-    drStatement.value = res.statement
-    drMatchedRows.value = res.matched_rows
-    drConfirmOpen.value = true
-  } catch (e) {
-    drError.value = e instanceof Error ? e.message : String(e)
-    drPending = null
-    drPendingStmtIndex = null
-  } finally {
-    drPreviewing.value = false
-  }
-}
-
-// 确认弹窗文案:DELETE 全文 + 命中行数;命中 >1 = 定位不唯一,警示并禁用执行。
-const deleteRowMessage = computed(() => {
-  const n = drMatchedRows.value
-  const base = `${drStatement.value}\n匹配 ${n} 行`
-  return n > 1 ? `${base}\n注意:该条件命中 ${n} 行,定位不唯一,已禁止执行。` : base
-})
-
-async function confirmDeleteRow(): Promise<void> {
-  if (drMatchedRows.value > 1) return // 定位不唯一:执行已被禁用,兜底拦截
-  const idx = drPendingStmtIndex
-  drPendingStmtIndex = null
-  if (!drPending) {
-    drError.value = '没有待执行的删除'
-    return
-  }
-  drError.value = null
-  try {
-    await app.MysqlDeleteRow(drPending)
-    drConfirmOpen.value = false
-    drPending = null
-  } catch (e) {
-    drError.value = e instanceof Error ? e.message : String(e)
-    return // 失败:弹窗保持打开,错误复用错误展示区显示
-  }
-  const target = idx === null ? undefined : results.value[idx]
-  if (!target) return
-  try {
-    // 刷新与该结果的原执行同页(当前页码),避免删除后整页跳变。
-    const fresh = await app.MysqlExecute({
+  }),
+  preview: (target) => app.MysqlPreviewDeleteRow(target),
+  execute: (target) => app.MysqlDeleteRow(target),
+  refetchStatement: (sql) =>
+    app.MysqlExecute({
       connection_id: props.connectionId,
-      sql: target.sql,
+      sql,
       database: activeDb.value,
       limit: PAGE_SIZE,
       offset: (page.value - 1) * PAGE_SIZE,
-    })
-    if (fresh.length > 0) {
-      // 仅替换该索引的结果,其他语句结果保持不变。
-      results.value = results.value.map((old, i) => (i === idx ? fresh[0] : old))
-      const m = markedStatements.value.find((x) => x.text.trim() === target.sql.trim())
-      if (m) {
-        m.status = fresh[0].error ? 'fail' : 'ok'
-        m.detail = fresh[0].error ?? `${fresh[0].duration_ms} ms`
-      }
-      if (idx !== null) {
-        const t = resultTabs.value[idx]
-        if (t) resultTabs.value[idx] = { ...t, status: fresh[0].error ? 'fail' : 'ok' }
-      }
-    }
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  }
-}
-
-function cancelDeleteRow(): void {
-  drPendingStmtIndex = null
-  drPending = null
-  drConfirmOpen.value = false
-  drStatement.value = ''
-  drMatchedRows.value = 0
-  drError.value = null
-}
+    }),
+})
 
 // 传给结果卡的 rowDelete 能力:确认弹窗等逻辑留在控制台层。
 const activeRowDelete = computed(() => ({

@@ -294,7 +294,7 @@ describe('HiveTableBrowser', () => {
     // 视觉对齐 MysqlTableBrowser 的防挤压契约(经 vitest 静态断言源码样式)。
     const { readFileSync } = await import('node:fs')
     const { join } = await import('node:path')
-    const fileSrc = readFileSync(join(process.cwd(), 'src/components/kafka/HiveTableBrowser.vue'), 'utf8')
+    const fileSrc = readFileSync(join(process.cwd(), 'src/components/common/TableDataGrid.vue'), 'utf8')
     const tableBlock = fileSrc.match(/\.table \{[\s\S]*?\n\}/)?.[0] ?? ''
     expect(tableBlock).toContain('width: max-content')
     expect(tableBlock).toContain('min-width: 100%')

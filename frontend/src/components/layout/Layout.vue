@@ -34,6 +34,7 @@ import { useConnectionsStore } from '@/store/connections'
 import HomeView from '@/views/HomeView.vue'
 import { getApi } from '@/api/client'
 import { APP_VERSION } from '@/version'
+import { getIgnoredVersion } from '@/utils/updateIgnore'
 
 const props = defineProps<{ connections: Connection[] }>()
 const emit = defineEmits<{
@@ -85,8 +86,11 @@ async function pollUpdate(): Promise<void> {
   try {
     const res = await getApi().checkUpdate?.({ current_version: APP_VERSION })
     if (!res) return
-    updateAvailable.value = res.has_update
-    if (res.has_update) latestVersion.value = res.latest_version
+    // 静默探测命中「忽略此版本」时不点亮红点;手动打开弹窗(顶栏按钮/设置页
+    // 检查更新)不受忽略限制,弹窗照常重新探测。
+    const ignored = res.latest_version === getIgnoredVersion()
+    updateAvailable.value = res.has_update && !ignored
+    if (res.has_update && !ignored) latestVersion.value = res.latest_version
   } catch {
     // 静默:探测失败保持现状,不弹错误。
   }

@@ -93,6 +93,8 @@ describe('UpdateDialog', () => {
   beforeEach(() => {
     api = fakeApi()
     setApi(api)
+    // 「忽略此版本」的 localStorage 记忆不跨用例泄漏。
+    localStorage.removeItem('update.ignoredVersion')
   })
 
   it('renders nothing when hidden', () => {
@@ -164,6 +166,42 @@ describe('UpdateDialog', () => {
     await vi.waitFor(() => {
       expect(api.applyUpdate).toHaveBeenCalled()
     })
+  })
+
+  it('carries the sha256 from the check result into the download request', async () => {
+    ;(api.checkUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
+      has_update: true,
+      latest_version: 'v1.1.0',
+      notes: '',
+      download_url: 'http://x/mac.zip',
+      sha256: 'deadbeef',
+    })
+    ;(api.updateProgress as ReturnType<typeof vi.fn>).mockResolvedValue({ phase: 'done', percent: 100 })
+    mount(UpdateDialog, { props: { show: true } })
+    await vi.waitFor(() => {
+      expect(el('btn-update-install')).not.toBeNull()
+    })
+    click('btn-update-install')
+    await vi.waitFor(() => {
+      expect(api.downloadUpdate).toHaveBeenCalledWith({ url: 'http://x/mac.zip', sha256: 'deadbeef' })
+    })
+  })
+
+  it('writes the ignored version to localStorage and closes on 忽略此版本', async () => {
+    ;(api.checkUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
+      has_update: true,
+      latest_version: 'v1.2.3',
+      notes: '',
+      download_url: 'http://x/mac.zip',
+    })
+    const wrapper = mount(UpdateDialog, { props: { show: true } })
+    await vi.waitFor(() => {
+      expect(el('ignore-update-btn')).not.toBeNull()
+    })
+    click('ignore-update-btn')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(localStorage.getItem('update.ignoredVersion')).toBe('v1.2.3')
+    expect(wrapper.emitted('close')).toBeTruthy()
   })
 
   it('surfaces download errors with retry and open-download-page exits', async () => {

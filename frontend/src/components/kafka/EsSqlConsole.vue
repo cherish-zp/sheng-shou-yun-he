@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, unref, watch } from 'vue'
 import type { SqlTableSchema, StatementMark } from '@/components/common/SqlEditor.vue'
-import { commentAbove, splitSqlStatements } from '@/utils/sqlSplit'
+import { splitSqlStatements } from '@/utils/sqlSplit'
 import { EsDslParseError, parseEsDslRequests, prettyJson, type EsDslRequestPart } from '@/utils/esDsl'
 import { useQueryFiles } from '@/composables/queryFiles'
+import { useConsolePaging } from '@/composables/useConsolePaging'
+import { useConsoleLayout } from '@/composables/useConsoleLayout'
+import { useStatementMarks, useConsoleCursor, statementSummary, tabLabel, tabsFromSegments, applyTabStatus, marksFromResults } from '@/composables/useConsoleStatements'
+import type { MarkedStatement } from '@/composables/useConsoleStatementRefresh'
 import { useTabsStore } from '@/store/tabs'
 import { useToastStore } from '@/store/toast'
 import SqlEditor from '@/components/common/SqlEditor.vue'
@@ -111,145 +115,47 @@ const activeCard = computed(() => results.value[sqlActive.value])
 // --- 结果区分页(服务端分页,默认 500 条/页,仅 SQL 模式) --------------------
 // 新查询成功后记录 lastRequest(重放依据)并回到第 1 页;翻页 = lastRequest
 // + 新 offset 重新执行,不经过编辑器(编辑器内容可能与重放脚本不同)。
-const PAGE_SIZE = 500
-const page = ref(1)
-const lastRequest = ref<{ sql: string } | null>(null)
-
-// 行结果:无错误且 rows 是数组的结果,分页信息以行为准。
-const rowResults = computed(() =>
-  results.value.filter((r) => !r.error && Array.isArray(r.rows)),
-)
-
-// 精确总数:第一个行结果上 ≥0 的 total_rows(-1 是「无法计数」);null = 全部
-// 不可计数或未启用分页。
-const exactTotal = computed<number | null>(() => {
-  for (const r of rowResults.value) {
-    if (r.total_rows != null && r.total_rows >= 0) return r.total_rows
-  }
-  return null
+// 状态与翻页动作由 useConsolePaging 组合式承担;「仅 SQL 模式可重放/可见」
+// 经 canReplay 注入(DSL 模式不渲染分页条,翻页动作直接忽略)。
+const {
+  pageSize: PAGE_SIZE,
+  page,
+  rowResults,
+  exactTotal,
+  allUnknownTotal,
+  pagerVisible,
+  lastPage,
+  pagerInfo,
+  canPrev,
+  canNext,
+  commitRequest,
+  prevPage,
+  nextPage,
+} = useConsolePaging<EsStatementResult, { sql: string }>({
+  results,
+  running,
+  statementOf: (r) => r.sql,
+  canReplay: () => mode.value === 'sql',
+  replay: (req, targetPage) => {
+    void executeScript(req.sql, targetPage)
+  },
 })
 
-// 所有行结果都无法计数(total_rows === -1)→ 「至少 N 条」。
-const allUnknownTotal = computed(
-  () =>
-    rowResults.value.length > 0 &&
-    rowResults.value.every((r) => r.total_rows === -1),
-)
-
-// --- 脚本只读判定:翻页 = 重放整段脚本,含 DML 的脚本翻一页就重复写一次库,
-// 仅当本次执行的每条语句首个关键字都属于只读集合才显示分页条。WITH 可能是
-// 数据修改 CTE,与其他一切语句(INSERT/UPDATE/SET/USE/…)一律保守视为不可重放。 ---
-const READONLY_KEYWORDS = new Set(['SELECT', 'SHOW', 'DESC', 'DESCRIBE', 'EXPLAIN', 'TABLE', 'VALUES'])
-
-// 取语句首个关键字:跳过前导空白与注释(-- 与 # 行注释、/* */ 块注释),
-// 大小写不敏感;纯注释/空白/无法识别返回 null(保守视为非只读)。
-function firstStatementKeyword(stmt: string): string | null {
-  let i = 0
-  const n = stmt.length
-  for (;;) {
-    while (i < n && /\s/.test(stmt[i] as string)) i += 1
-    if (stmt.startsWith('--', i) || stmt[i] === '#') {
-      const nl = stmt.indexOf('\n', i)
-      i = nl === -1 ? n : nl + 1
-      continue
-    }
-    if (stmt.startsWith('/*', i)) {
-      const end = stmt.indexOf('*/', i + 2)
-      i = end === -1 ? n : end + 2
-      continue
-    }
-    break
-  }
-  const m = /^[A-Za-z_]+/.exec(stmt.slice(i, i + 64))
-  return m ? m[0].toUpperCase() : null
-}
-
-// 脚本只读判定:全部语句只读 → true;空集或含任何非只读语句 → false。
-function scriptIsReadonly(statements: string[]): boolean {
-  return (
-    statements.length > 0 &&
-    statements.every((s) => {
-      const kw = firstStatementKeyword(s)
-      return kw !== null && READONLY_KEYWORDS.has(kw)
-    })
-  )
-}
-
-// 分页条可见:SQL 模式、有行结果,且本次执行的脚本整体只读(重放翻页安全;
-// DSL 模式不渲染分页条)。
-const pagerVisible = computed(
-  () =>
-    mode.value === 'sql' &&
-    rowResults.value.length > 0 &&
-    scriptIsReadonly(results.value.map((r) => r.sql)),
-)
-
-const lastPage = computed(() =>
-  exactTotal.value == null ? null : Math.max(1, Math.ceil(exactTotal.value / PAGE_SIZE)),
-)
-
-// 页码信息:精确总数 → 共 N 条 · 第 p/last 页;全部 -1 → 至少 N 条 · 第 p 页;
-// 结果上没有 total_rows(未启用分页的响应)→ 第 x-y 条。
-const pagerInfo = computed(() => {
-  const first = rowResults.value[0]
-  const pageLen = first?.rows?.length ?? 0
-  const offset = (page.value - 1) * PAGE_SIZE
-  if (exactTotal.value != null) {
-    return `共 ${exactTotal.value.toLocaleString('en-US')} 条 · 第 ${page.value}/${lastPage.value ?? 1} 页`
-  }
-  if (allUnknownTotal.value) {
-    return `至少 ${(offset + pageLen).toLocaleString('en-US')} 条 · 第 ${page.value} 页`
-  }
-  if (pageLen === 0) return `第 ${page.value} 页`
-  return `第 ${offset + 1}-${offset + pageLen} 条`
-})
-
-const canPrev = computed(() => !running.value && page.value > 1)
-
-// 下一页:执行中禁用;有精确总数时按 lastPage 判定(恰好整页已取完不可再翻,
-// total=0 亦不可翻);总数未知(-1/缺省)沿用「本页行数 < PAGE_SIZE 则无更多」。
-const canNext = computed(() => {
-  if (running.value || rowResults.value.length === 0) return false
-  if (exactTotal.value != null) {
-    return lastPage.value != null && page.value < lastPage.value
-  }
-  return rowResults.value.some((r) => (r.rows?.length ?? 0) >= PAGE_SIZE)
-})
-
-// 翻页 = 上次成功执行的请求 + 新 offset 重新执行(SQL 模式)。
-function goToPage(target: number): void {
-  const req = lastRequest.value
-  if (!req || mode.value !== 'sql') return
-  void executeScript(req.sql, target)
-}
-
-function prevPage(): void {
-  if (canPrev.value) void goToPage(page.value - 1)
-}
-
-function nextPage(): void {
-  if (canNext.value) void goToPage(page.value + 1)
-}
+// (只读判定/分页可见性/页码信息/翻页动作均在 useConsolePaging 组合式内;
+// DSL 模式下 pagerVisible 恒为 false,与既有行为一致。)
 const dslResultTabs = ref<ResultTabItem[]>([])
+
 const dslActive = ref(0)
 const activeDslCard = computed(() => dslResults.value[dslActive.value])
 
-// tab 点击随模式写入各自的 active 下标。
+// (语句摘要/tab 标签由 useConsoleStatements 共享模块提供;SQL/DSL 各持一组
+// tab,tab 点击随模式写入各自的 active 下标。)
 function onTabSelect(i: number): void {
   if (mode.value === 'sql') sqlActive.value = i
   else dslActive.value = i
 }
 
-// 语句单行摘要:第一条非空行(trim,超长截断),供 tab 悬浮提示。
-function statementSummary(text: string): string {
-  const line = (text.split('\n').find((l) => l.trim() !== '') ?? '').trim()
-  return line.length > 80 ? `${line.slice(0, 80)}…` : line
-}
-
 // tab 标签:source 内语句起始 offset 上方最近的注释;无注释回退「结果 N」。
-function tabLabel(source: string, from: number, index: number): string {
-  return commentAbove(source, from) ?? `结果 ${index + 1}`
-}
 
 // --- 索引补全(仅索引名一层):挂载时拉一次索引清单;ES 无 DESCRIBE 惯例,
 // 列级补全不做。失败静默降级为无补全,不打断编辑。 ---
@@ -264,64 +170,14 @@ async function loadIndices(): Promise<void> {
   }
 }
 
-// --- 语句状态标记 -------------------------------------------------------------
-// markedStatements 保存最近一次运行的语句级状态(运行中/成功/失败);编辑器
-// 内容变化后按语句文本(trim 后相等)对 split 结果重新定位,匹配不到的丢弃。
-interface MarkedStatement {
-  text: string
-  status: 'ok' | 'fail' | 'running'
-  detail?: string
-}
-const markedStatements = ref<MarkedStatement[]>([])
-
-const sqlStatementMarks = computed(() => {
-  const segs = splitSqlStatements(sql.value)
-  const used = new Set<number>()
-  const marks: StatementMark[] = []
-  for (const m of markedStatements.value) {
-    const idx = segs.findIndex((s, i) => !used.has(i) && s.text.trim() === m.text.trim())
-    if (idx === -1) continue
-    used.add(idx)
-    marks.push({ from: segs[idx].from, status: m.status, detail: m.detail })
-  }
-  return marks
+// --- 语句状态标记(useConsoleStatements 共享模块;DSL 标记单独维护) ---
+const { markedStatements, statementMarks: sqlStatementMarks } = useStatementMarks({
+  sql,
+  split: splitSqlStatements,
 })
 
-// 返回结果与发起文本按顺序映射成语句标记:耗时来自 duration_ms,错误用原文。
-function marksFromResults(texts: string[], res: EsStatementResult[]): MarkedStatement[] {
-  return res.map((r, i): MarkedStatement => ({
-    text: texts[i] ?? r.sql,
-    status: r.error ? 'fail' : 'ok',
-    detail: r.error ?? `${r.duration_ms} ms`,
-  }))
-}
-
-// --- 光标位置与「执行当前语句」 ------------------------------------------------
-// SqlEditor 的 cursor emit(1 基行列)记录最新光标;⌘Enter 时把行列换算成文本
-// offset,在 split 结果中定位光标所在语句段(段间空白归属前一段)。
-const cursorPos = ref({ line: 1, col: 1 })
-
-function onCursor(pos: { line: number; col: number }): void {
-  cursorPos.value = { line: pos.line, col: pos.col }
-}
-
-function cursorOffset(text: string, pos: { line: number; col: number }): number {
-  const lines = text.split('\n')
-  let offset = 0
-  for (let i = 0; i < Math.min(pos.line - 1, lines.length); i++) offset += lines[i].length + 1
-  const lineText = lines[Math.min(Math.max(pos.line - 1, 0), lines.length - 1)] ?? ''
-  return offset + Math.min(Math.max(pos.col - 1, 0), lineText.length)
-}
-
-function statementAtCursor(): string | null {
-  const segs = splitSqlStatements(sql.value)
-  if (segs.length === 0) return null
-  const offset = cursorOffset(sql.value, cursorPos.value)
-  const seg =
-    segs.find((s) => offset >= s.from && offset <= s.to) ??
-    [...segs].reverse().find((s) => s.to <= offset)
-  return (seg ?? segs[0]).text
-}
+// --- 光标位置与「执行当前语句」(useConsoleStatements 共享模块) ---
+const { cursorPos, onCursor, statementAtCursor } = useConsoleCursor({ sql, split: splitSqlStatements })
 
 // 服务端没有 SQL 端点(<6.3 / OSS 发行版)时,自动切换到 DSL 模式并播种
 // 起始模板——SQL 模式在这种服务端上永远失败,不把用户留在必败路径上。
@@ -354,15 +210,14 @@ async function runSingle(text: string): Promise<void> {
   try {
     const res = await app.ESExecute({ connection_id: props.connectionId, sql: text, limit: PAGE_SIZE, offset: 0 })
     results.value = res
-    lastRequest.value = { sql: text }
-    page.value = 1
+    commitRequest({ sql: text }, 1)
     // 选中文本可能含多条语句:结果多于预置 tab 时按序回退「结果 N」补齐。
     sqlResultTabs.value = res.map((r, i) => ({
       label: sqlResultTabs.value[i]?.label ?? `结果 ${i + 1}`,
       status: r.error ? 'fail' : 'ok',
       title: sqlResultTabs.value[i]?.title ?? statementSummary(r.sql),
     }))
-    markedStatements.value = marksFromResults([text], res)
+    markedStatements.value = marksFromResults([text], res, (r) => r.sql)
     maybeFallbackToDsl(res.map((r) => r.error))
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -406,11 +261,7 @@ async function executeScript(script: string, targetPage: number): Promise<void> 
   resultsOpen.value = true
   const segs = splitSqlStatements(script)
   markedStatements.value = segs.map((s): MarkedStatement => ({ text: s.text, status: 'running' }))
-  sqlResultTabs.value = segs.map((s, i) => ({
-    label: tabLabel(script, s.from, i),
-    status: 'running',
-    title: statementSummary(s.text),
-  }))
+  sqlResultTabs.value = tabsFromSegments(segs, script)
   sqlActive.value = 0
   try {
     const res = await app.ESExecute({
@@ -420,18 +271,14 @@ async function executeScript(script: string, targetPage: number): Promise<void> 
       offset: (targetPage - 1) * PAGE_SIZE,
     })
     results.value = res
-    sqlResultTabs.value = sqlResultTabs.value.slice(0, res.length).map((t, i) => ({
-      ...t,
-      status: res[i]?.error ? 'fail' : 'ok',
-    }))
+    sqlResultTabs.value = applyTabStatus(sqlResultTabs.value, res)
     markedStatements.value = res.map((r, i): MarkedStatement => ({
       text: segs[i]?.text ?? r.sql,
       status: r.error ? 'fail' : 'ok',
       detail: r.error ?? `${r.duration_ms} ms`,
     }))
     maybeFallbackToDsl(res.map((r) => r.error))
-    lastRequest.value = { sql: script }
-    page.value = targetPage
+    commitRequest({ sql: script }, targetPage)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     error.value = msg
@@ -708,61 +555,10 @@ async function copyDslBody(c: DslResultCard): Promise<void> {
   if (ok) toast.show('已复制响应')
 }
 
-// --- IDE 式布局:可拖拽结果区 ---------------------------------------------------
-// 结果区仅打开时渲染;高度 160..窗口 80% 可拖拽,双击分隔条恢复 50/50,
-// 持久化到 localStorage(与 MySQL/CH 控制台共用同一 key)。
-const RESULTS_HEIGHT_KEY = 'dbclient-sql-results-height'
-const MIN_RESULTS_HEIGHT = 160
-const DEFAULT_RESULTS_HEIGHT = 320
-
-const resultsOpen = ref(false)
-const rootRef = ref<HTMLElement | null>(null)
-
-function maxResultsHeight(): number {
-  return Math.max(MIN_RESULTS_HEIGHT, Math.floor(window.innerHeight * 0.8))
-}
-
-function clampResultsHeight(h: number): number {
-  return Math.min(maxResultsHeight(), Math.max(MIN_RESULTS_HEIGHT, h))
-}
-
-function readStoredResultsHeight(): number {
-  const v = Number(localStorage.getItem(RESULTS_HEIGHT_KEY))
-  if (!Number.isFinite(v) || v <= 0) return DEFAULT_RESULTS_HEIGHT
-  return clampResultsHeight(Math.round(v))
-}
-
-const resultsHeight = ref(readStoredResultsHeight())
-const resultsResizing = ref(false)
-let resultsDragStartY = 0
-let resultsDragStartHeight = 0
-
-function startResultsResize(e: MouseEvent): void {
-  resultsResizing.value = true
-  resultsDragStartY = e.clientY
-  resultsDragStartHeight = resultsHeight.value
-  window.addEventListener('mousemove', onResultsResize)
-  window.addEventListener('mouseup', endResultsResize)
-}
-
-function onResultsResize(e: MouseEvent): void {
-  // 结果区在下方:向上拖(dy 为负)增高。
-  resultsHeight.value = clampResultsHeight(resultsDragStartHeight - (e.clientY - resultsDragStartY))
-}
-
-function endResultsResize(): void {
-  resultsResizing.value = false
-  localStorage.setItem(RESULTS_HEIGHT_KEY, String(resultsHeight.value))
-  window.removeEventListener('mousemove', onResultsResize)
-  window.removeEventListener('mouseup', endResultsResize)
-}
-
-// 双击分隔条:恢复上下 50/50(容器无布局高度时按窗口高折半)。
-function resetResultsHeight(): void {
-  const total = rootRef.value?.clientHeight || window.innerHeight
-  resultsHeight.value = clampResultsHeight(Math.round(total / 2))
-  localStorage.setItem(RESULTS_HEIGHT_KEY, String(resultsHeight.value))
-}
+// --- IDE 式布局:可拖拽结果区(useConsoleLayout 组合式;高度持久化与
+// 双击恢复语义不变) ---
+const { resultsOpen, resultsHeight, resultsResizing, rootRef, startResultsResize, resetResultsHeight } =
+  useConsoleLayout()
 
 // --- 状态栏:光标行列 / 语句(请求)条数 / 最近耗时 ------------------------------------
 const dslRequestCount = computed(() => {

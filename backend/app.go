@@ -36,13 +36,15 @@ type App struct {
 	// falls back to defaultSaveDialog.
 	dialog func(ctx context.Context, opts SaveDialogOptions) (string, error)
 	// --- 更新引擎依赖(测试可注入,见 update.go) ---
-	// baseURL 是 Gitee API 地址;httpClient 用于探测/下载;applyCmd 拦截
-	// 安装脚本的启动;stagingDir 记录下载解包后的暂存位置。
-	baseURL    atomic.Value
-	httpClient *http.Client
-	applyCmd   func(cmd *exec.Cmd) error
-	dl         *downloadState
-	stagingDir atomic.Value
+	// baseURL 是 Gitee API 地址;fallbackURL 是回退的 GitHub API 地址;
+	// httpClient 用于探测/下载;applyCmd 拦截安装脚本的启动;stagingDir
+	// 记录下载解包后的暂存位置。
+	baseURL     atomic.Value
+	fallbackURL atomic.Value
+	httpClient  *http.Client
+	applyCmd    func(cmd *exec.Cmd) error
+	dl          *downloadState
+	stagingDir  atomic.Value
 }
 
 // NewApp builds the application root around the service layer.

@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch, type ComponentPublicInstance } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import TableDataGrid from '@/components/common/TableDataGrid.vue'
 import { useToastStore } from '@/store/toast'
 import { buildDocSkeleton } from '@/utils/esDocSkeleton'
-import * as App from '../../../wailsjs/go/backend/App'
+import { usePagedTable } from '@/composables/usePagedTable'
+import { useCellEdit } from '@/composables/useCellEdit'
+import { getApi } from '@/api/client'
 
 const props = defineProps<{ connectionId: string; index: string }>()
 
@@ -29,38 +32,9 @@ interface EsPageRowsResult {
   engine: string
 }
 
-// Es* 绑定尚未由 wails generate module 生成,这里按显式形状断言调用
-// (req 为契约形状原样,Wails 按字段名序列化,snake_case 已对齐);生成后
-// 签名一致,无需改动本文件。
-const app = App as unknown as {
-  ESPageRows(req: {
-    connection_id: string
-    index: string
-    where?: string
-    order_by?: string
-    asc?: boolean
-    limit: number
-    offset: number
-  }): Promise<EsPageRowsResult>
-  EsRefreshIndex(req: { connection_id: string; index: string }): Promise<void>
-  ESGetDoc(req: { connection_id: string; index: string; id: string }): Promise<{ doc_json: string }>
-  ESPutDoc(req: { connection_id: string; index: string; id: string; doc_json: string }): Promise<void>
-  EsCreateDoc(req: {
-    connection_id: string
-    index: string
-    id?: string
-    doc_json: string
-  }): Promise<{ id: string; source: string }>
-  ESUpdateCell(req: {
-    connection_id: string
-    index: string
-    id: string
-    column: string
-    value: string | null
-  }): Promise<void>
-  ESDeleteDoc(req: { connection_id: string; index: string; id: string }): Promise<void>
-  ESDeleteByQuery(req: { connection_id: string; index: string }): Promise<void>
-}
+// Es* 系列绑定调用统一收口到 api/client.ts 适配层(WailsApi 按 wailsjs
+// 绑定名转发,req 为契约形状原样;测试在 wailsjs 模块层 mock,命中同一转发)。
+// 绑定在 Api 接口上为可选成员,调用方用可选链访问;缺绑定按请求失败处理。
 
 const columns = ref<EsColumn[]>([])
 const rows = ref<(string | null)[][]>([])
@@ -69,20 +43,44 @@ const totalRows = ref(0)
 const loading = ref(false)
 const error = ref<string | null>(null)
 
-const where = ref('')
-// 已应用的过滤条件:回车/按钮提交后才随请求下发;语义两级——含冒号视为
-// query_string 高级语法(字段:值、AND/OR),否则按普通关键词全字段匹配
-// (后端 multi_match lenient),避免 query_string 把 `2026-08-21`、
-// `abc-def` 这类值按操作符拆解导致结果错乱。
-const appliedWhere = ref('')
-const orderBy = ref('')
-const asc = ref(true)
-const offset = ref(0)
+// 首列 _id(columns[0].type === '_id')承载文档标识:只读、不可排序,
+// 行首操作按钮(JSON 编辑/删除)也挂在该列;缺失时整表只读。
+const hasIdColumn = computed(() => columns.value[0]?.type === '_id')
 
-// 行内编辑态:同一时刻仅一个单元格可编辑,row/col 为行/列下标;
-// editValue 为输入框草稿,提交时空串按写 null 处理。
-const editing = ref<{ row: number; col: number } | null>(null)
-const editValue = ref('')
+// --- 分页/过滤/排序:共用组合式;refresh 仍走 ES 特有的显式 _refresh 后取数。 ---
+// 过滤语义两级——含冒号视为 query_string 高级语法(字段:值、AND/OR),否则
+// 按普通关键词全字段匹配(后端 multi_match lenient),避免 query_string 把
+// `2026-08-21`、`abc-def` 这类值按操作符拆解导致结果错乱(后端语义,前端
+// 原样下发 appliedWhere)。
+const {
+  where,
+  appliedWhere,
+  orderBy,
+  asc,
+  offset,
+  page,
+  applyWhere,
+  sortBy,
+  nextPage,
+  prevPage,
+  resetFilters,
+} = usePagedTable({ pageSize: PAGE_SIZE, refetch: fetchPage })
+
+// --- 行内编辑态:共用组合式(_id 首列只读经 canStart 拦截)。 ---
+const {
+  editing,
+  editValue,
+  isEditing,
+  startEdit,
+  cancelEdit,
+  focusEditor,
+  discard: discardEdit,
+} = useCellEdit({
+  loading,
+  rows,
+  columns,
+  canStart: (_ri, ci) => hasIdColumn.value && ci !== 0,
+})
 
 // 编辑框行数:与展示态一致——单元格按 420px 宽 break-all 换行,按展示
 // 长度(截断后约 200 字符)估算行数;超过 8 行编辑框内滚动。
@@ -93,11 +91,6 @@ const editorRows = computed(() => {
   const shown = cellDisplay(editValue.value).length
   return Math.min(EDITOR_MAX_ROWS, Math.max(1, Math.ceil(shown / EDITOR_CHARS_PER_LINE)))
 })
-
-// 首列 _id(columns[0].type === '_id')承载文档标识:只读、不可排序,
-// 行首操作按钮(JSON 编辑/删除)也挂在该列;缺失时整表只读。
-const hasIdColumn = computed(() => columns.value[0]?.type === '_id')
-const page = computed(() => Math.floor(offset.value / PAGE_SIZE) + 1)
 
 // mappingFields 映射字段(剔除 _id 列):新增文档骨架的生成来源。
 const mappingFields = computed(() =>
@@ -112,9 +105,9 @@ async function fetchPage(): Promise<void> {
   loading.value = true
   error.value = null
   // 换页/刷新后行集合将重建,未完成的行内编辑一并丢弃。
-  editing.value = null
+  discardEdit()
   try {
-    const res = await app.ESPageRows({
+    const res = await getApi().esPageRows?.({
       connection_id: props.connectionId,
       index: props.index,
       where: appliedWhere.value || undefined,
@@ -123,6 +116,7 @@ async function fetchPage(): Promise<void> {
       limit: PAGE_SIZE,
       offset: offset.value,
     })
+    if (!res) throw new Error('当前环境不支持 ES 索引浏览')
     // wire 形状防御:后端异常/老版本可能给出 null 或缺字段;模板对
     // columns/rows 按数组、totalRows 按数字直接使用,任何 null/undefined
     // 都会在渲染期抛 TypeError 并中断整个调度队列(WKWebView 表现为白屏)。
@@ -146,28 +140,17 @@ onMounted(() => {
 watch(
   () => props.index,
   () => {
-    where.value = ''
-    appliedWhere.value = ''
-    orderBy.value = ''
-    asc.value = true
-    offset.value = 0
+    resetFilters()
     void fetchPage()
   },
 )
-
-// applyWhere 提交过滤条件并回到第一页重新请求。
-function applyWhere(): void {
-  appliedWhere.value = where.value.trim()
-  offset.value = 0
-  void fetchPage()
-}
 
 // refreshThenFetch 手动刷新与写后自动刷新共用:先 best-effort 显式 _refresh
 // (POST /{index}/_refresh;失败忽略——最坏情况只是数据可见性延迟到 ES 自身
 // 刷新周期),再立即重取当前页,使写入/删除无需等待 refresh_interval 即可见。
 async function refreshThenFetch(): Promise<void> {
   try {
-    await app.EsRefreshIndex({ connection_id: props.connectionId, index: props.index })
+    await getApi().esRefreshIndex?.({ connection_id: props.connectionId, index: props.index })
   } catch {
     // best-effort:刷新失败不阻断取数,也不进错误区。
   }
@@ -178,33 +161,14 @@ function refresh(): void {
   void refreshThenFetch()
 }
 
-// sortBy 点击列头排序:同一列翻转方向,新列默认升序;回第一页。
-// 仅映射字段列可排序(_id 列头不触发);不可排序字段由服务端报错透出。
-function sortBy(col: string): void {
-  if (orderBy.value === col) {
-    asc.value = !asc.value
-  } else {
-    orderBy.value = col
-    asc.value = true
-  }
-  offset.value = 0
-  void fetchPage()
-}
-
+// sortByCol 点击列头排序的入口:首列 _id 不可排序直接忽略;其余列交给
+// 组合式的 sortBy(同一列翻转方向,新列默认升序;回第一页)。
 function sortByCol(col: string, ci: number): void {
   if (ci === 0 && hasIdColumn.value) return
   sortBy(col)
 }
 
-function nextPage(): void {
-  offset.value += PAGE_SIZE
-  void fetchPage()
-}
-
-function prevPage(): void {
-  offset.value = Math.max(0, offset.value - PAGE_SIZE)
-  void fetchPage()
-}
+// (nextPage/prevPage 来自 usePagedTable 组合式。)
 
 // --- 单元格渲染:nil → NULL(浅色);超长值截断(浅色标注 + title 全文)。 ---
 
@@ -233,31 +197,8 @@ function colTitle(c: EsColumn, ci: number): string {
   return c.comment ? `${base}\n${c.comment}` : base
 }
 
-// --- 单元格行内编辑:双击 → 输入 → 回车 → 预览确认 → 执行并刷新。 ---
-
-function isEditing(ri: number, ci: number): boolean {
-  return editing.value?.row === ri && editing.value?.col === ci
-}
-
-// startEdit 双击进入编辑:原始值取自 rows 内存(null 显示为空输入框);
-// _id 列只读,loading 或已有单元格在编辑时忽略,避免并发编辑态。
-function startEdit(ri: number, ci: number): void {
-  if (loading.value || editing.value || !hasIdColumn.value) return
-  if (ci === 0) return
-  if (!columns.value[ci]) return
-  editing.value = { row: ri, col: ci }
-  editValue.value = rows.value[ri]?.[ci] ?? ''
-}
-
-// focusEditor 编辑框渲染后自动聚焦(function ref 挂载时触发)。
-function focusEditor(el: Element | ComponentPublicInstance | null): void {
-  if (el) (el as HTMLInputElement).focus()
-}
-
-function cancelEdit(): void {
-  editing.value = null
-  editValue.value = ''
-}
+// --- 单元格行内编辑:双击 → 输入 → 回车 → 确认 → 执行并刷新。 ---
+// (isEditing/startEdit/cancelEdit 来自 useCellEdit 组合式;_id 首列只读。)
 
 // rowId 取行文档 _id(首列值);无 _id 列时返回 null。
 function rowId(ri: number): string | null {
@@ -300,13 +241,7 @@ async function onEditConfirm(): Promise<void> {
     return
   }
   try {
-    await app.ESUpdateCell({
-      connection_id: props.connectionId,
-      index: props.index,
-      id: target.id,
-      column: target.column,
-      value: target.value,
-    })
+    await getApi().esUpdateCell?.({ connection_id: props.connectionId, index: props.index, id: target.id, column: target.column, value: target.value })
     pendingEdit = null
     confirmEdit.value = false
     editError.value = null
@@ -353,7 +288,8 @@ async function openJson(ri: number): Promise<void> {
   const id = rowId(ri)
   if (id === null || loading.value || jsonOpen.value) return
   try {
-    const res = await app.ESGetDoc({ connection_id: props.connectionId, index: props.index, id })
+    const res = (await getApi().esGetDoc?.({ connection_id: props.connectionId, index: props.index, id })) as { doc_json?: string } | undefined
+    if (!res) throw new Error('当前环境不支持读取文档')
     jsonMode.value = 'edit'
     jsonId.value = id
     jsonDraft.value = prettyJson(res.doc_json ?? '')
@@ -431,26 +367,12 @@ async function saveJson(): Promise<void> {
       }
       const id = jsonNewId.value.trim()
       if (id) {
-        await app.EsCreateDoc({
-          connection_id: props.connectionId,
-          index: props.index,
-          id,
-          doc_json: jsonDraft.value,
-        })
+        await getApi().esCreateDoc?.({ connection_id: props.connectionId, index: props.index, id, doc_json: jsonDraft.value })
       } else {
-        await app.EsCreateDoc({
-          connection_id: props.connectionId,
-          index: props.index,
-          doc_json: jsonDraft.value,
-        })
+        await getApi().esCreateDoc?.({ connection_id: props.connectionId, index: props.index, doc_json: jsonDraft.value })
       }
     } else {
-      await app.ESPutDoc({
-        connection_id: props.connectionId,
-        index: props.index,
-        id: jsonId.value,
-        doc_json: jsonDraft.value,
-      })
+      await getApi().esPutDoc?.({ connection_id: props.connectionId, index: props.index, id: jsonId.value, doc_json: jsonDraft.value })
     }
     jsonOpen.value = false
     if (jsonMode.value === 'create') toast.show('文档已创建')
@@ -492,7 +414,7 @@ async function doDelete(): Promise<void> {
   deleteId.value = ''
   if (!id) return
   try {
-    await app.ESDeleteDoc({ connection_id: props.connectionId, index: props.index, id })
+    await getApi().esDeleteDoc?.({ connection_id: props.connectionId, index: props.index, id })
     void refreshThenFetch()
   } catch (e) {
     error.value = errMsg(e)
@@ -510,7 +432,7 @@ const clearMessage = computed(
 async function doClear(): Promise<void> {
   confirmClear.value = false
   try {
-    await app.ESDeleteByQuery({ connection_id: props.connectionId, index: props.index })
+    await getApi().esDeleteByQuery?.({ connection_id: props.connectionId, index: props.index })
     offset.value = 0
     await refreshThenFetch()
   } catch (e) {
@@ -565,100 +487,62 @@ async function doClear(): Promise<void> {
     </div>
 
     <div v-else class="table-wrap">
-      <table class="table" data-test="es-grid">
-        <thead>
-          <tr>
-            <th
-              v-for="(c, ci) in columns"
-              :key="c.name"
-              data-test="es-col"
-              :class="{ 'col-nosort': ci === 0 && hasIdColumn }"
-              :title="colTitle(c, ci)"
-              @click="sortByCol(c.name, ci)"
+      <!-- 共享表格网格:ES 特有部分——_id 首列经 leading-cell 插槽挂 JSON/删除
+           按钮,textarea 编辑器随内容多行,_id 列头不可排序,空态文案用插槽。 -->
+      <TableDataGrid
+        v-model:edit-value="editValue"
+        test-prefix="es"
+        :columns="columns"
+        :rows="rows"
+        :loading="loading"
+        :order-by="orderBy"
+        :asc="asc"
+        :leading-column="hasIdColumn"
+        nosort-first-column
+        editor-tag="textarea"
+        :editor-rows="editorRows"
+        :editing="editing"
+        :cell-readonly="(ci) => ci === 0 && hasIdColumn"
+        :col-title="colTitle"
+        :cell-title="cellTitle"
+        @sort="sortByCol"
+        @start-edit="startEdit"
+        @submit-edit="submitEdit"
+        @cancel-edit="cancelEdit"
+      >
+        <template #leading-cell="{ cell, rowIndex }">
+          <div class="id-cell">
+            <button
+              class="mini-btn"
+              type="button"
+              :data-test="`es-doc-json-${rowIndex}`"
+              title="编辑整文档 JSON"
+              @click="openJson(rowIndex)"
             >
-              <!-- 弹性布局只在内层 div:th 必须保持 table-cell,否则脱离
-                   表格列布局,WebKit 会把整行列头堆进一个匿名单元格。 -->
-              <div class="col-head">
-                <span class="col-name">
-                  <span data-test="es-col-name">{{ c.name }}</span>
-                  <span v-if="orderBy === c.name" class="col-arrow">{{ asc ? '↑' : '↓' }}</span>
-                </span>
-                <span class="col-type" data-test="es-col-type">{{ c.type }}</span>
-                <span v-if="c.comment" class="col-comment" data-test="es-col-comment">{{ c.comment }}</span>
-              </div>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(row, ri) in rows" :key="ri" data-test="es-row">
-            <td
-              v-for="(cell, ci) in row"
-              :key="ci"
-              class="mono cell"
-              :class="{ 'cell-null': cell === null && !isEditing(ri, ci), 'cell-trunc': isTruncated(cell), 'cell-readonly': ci === 0 && hasIdColumn }"
-              :title="cellTitle(cell, ci)"
-              data-test="es-cell"
-              @dblclick="startEdit(ri, ci)"
+              JSON
+            </button>
+            <button
+              class="mini-btn danger"
+              type="button"
+              :data-test="`es-doc-delete-${rowIndex}`"
+              title="删除文档"
+              @click="askDelete(rowIndex)"
             >
-              <!-- _id 列(首列):只读,行首挂 JSON 编辑与删除按钮。 -->
-              <template v-if="ci === 0 && hasIdColumn">
-                <div class="id-cell">
-                  <button
-                    class="mini-btn"
-                    type="button"
-                    :data-test="`es-doc-json-${ri}`"
-                    title="编辑整文档 JSON"
-                    @click="openJson(ri)"
-                  >
-                    JSON
-                  </button>
-                  <button
-                    class="mini-btn danger"
-                    type="button"
-                    :data-test="`es-doc-delete-${ri}`"
-                    title="删除文档"
-                    @click="askDelete(ri)"
-                  >
-                    ✕
-                  </button>
-                  <span class="id-text" data-test="es-id-value">{{ cell ?? '' }}</span>
-                </div>
-              </template>
-              <!-- 行内编辑:双击进入,Esc/blur 取消,回车提交预览。
-                   textarea 行数随内容增长,尺寸与展示态一致(长内容多行)。 -->
-              <template v-else>
-                <textarea
-                  v-if="isEditing(ri, ci)"
-                  :ref="focusEditor"
-                  v-model="editValue"
-                  :rows="editorRows"
-                  class="cell-editor"
-                  data-test="es-cell-editor"
-                  spellcheck="false"
-                  autocapitalize="off"
-                  autocorrect="off"
-                  autocomplete="off"
-                  @blur="cancelEdit"
-                  @keydown.enter.prevent="submitEdit"
-                  @keydown.esc.prevent="cancelEdit"
-                />
-                <template v-else>{{ cellDisplay(cell) }}</template>
-              </template>
-            </td>
-          </tr>
-          <!-- 零行(空索引/过滤无匹配):表头保持横排,空态作为表内一行,
-               不再用竖排字段面板替换整表。loading 期间不渲染,避免首屏闪现。 -->
-          <tr v-if="rows.length === 0 && !loading">
-            <td :colspan="columns.length">
-              <div class="empty" data-test="es-grid-empty">
-                <div class="empty-icon">◌</div>
-                <div>无匹配文档</div>
-                <div class="empty-hint">数据写入后点击「刷新」查看</div>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+              ✕
+            </button>
+            <span class="id-text" data-test="es-id-value">{{ cell ?? '' }}</span>
+          </div>
+        </template>
+        <template #empty>
+          <td :colspan="columns.length">
+            <div class="empty" data-test="es-grid-empty">
+              <div class="empty-icon">◌</div>
+              <div>无匹配文档</div>
+              <div class="empty-hint">数据写入后点击「刷新」查看</div>
+            </div>
+          </td>
+        </template>
+      </TableDataGrid>
     </div>
 
     <div class="pager" data-test="es-pager">
@@ -784,36 +668,7 @@ async function doClear(): Promise<void> {
   margin-top: 10px; overflow: auto; max-height: calc(100vh - 320px);
   border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated);
 }
-.table {
-  /* width:max-content:列数多时按内容自然宽度横向滚动,而不是把列头
-     压成竖排文字;min-width:100% 保证列少时仍铺满容器。 */
-  width: max-content; min-width: 100%;
-  border-collapse: collapse; font-size: 13px;
-}
-.table th {
-  position: sticky; top: 0; z-index: 1;
-  text-align: left; padding: 7px 10px; background: var(--bg-subtle);
-  border-bottom: 1px solid var(--border); cursor: pointer; user-select: none;
-  transition: background 0.12s ease; white-space: nowrap;
-}
-.table th:hover { background: var(--bg-hover); }
-/* _id 列头不可排序:去掉指针与悬停反馈。 */
-.table th.col-nosort { cursor: default; }
-.table th.col-nosort:hover { background: var(--bg-subtle); }
-.col-head { display: flex; flex-direction: column; gap: 1px; white-space: nowrap; }
-.col-name { font-weight: 600; display: flex; align-items: center; gap: 4px; }
-.col-type { font-size: 10px; color: var(--text-tertiary); font-family: var(--mono); font-weight: 400; }
-.col-arrow { color: var(--accent); font-size: 11px; }
-/* 第三行:字段描述(comment),灰色小字;超长省略,悬停 title 已含全文。 */
-.col-comment { font-size: 10px; color: var(--text-tertiary); max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
-.table tbody tr:nth-child(even) td { background: var(--bg-subtle); }
-.table tbody tr:hover td { background: var(--bg-hover); }
-.table td { padding: 5px 10px; border-bottom: 1px solid var(--border); word-break: break-all; max-width: 420px; }
-.cell-null { color: var(--text-tertiary); font-style: italic; }
-.cell-trunc { color: var(--text-secondary); }
-/* _id 列只读:不出现文本光标,提示走 title。 */
-.cell-readonly { cursor: default; }
-/* _id 单元格:行首操作按钮 + 文档标识。 */
+/* _id 单元格:行首操作按钮 + 文档标识(leading-cell 插槽内容,样式留在入口)。 */
 .id-cell { display: flex; align-items: center; gap: 5px; }
 .id-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
 .mini-btn {
@@ -825,15 +680,6 @@ async function doClear(): Promise<void> {
 .mini-btn:hover { background: var(--bg-hover); color: var(--text); }
 .mini-btn.danger { color: var(--danger); border-color: var(--danger); }
 .mini-btn.danger:hover { background: var(--danger-soft); }
-/* 行内编辑输入框:textarea 随内容多行(与展示态一致),细边框。 */
-.cell-editor {
-  box-sizing: border-box; display: block; width: 100%; min-width: 80px;
-  background: var(--bg-elevated); color: var(--text);
-  border: 1px solid var(--accent); border-radius: 4px;
-  padding: 1px 6px; font-size: 13px; font-family: var(--mono);
-  line-height: 1.5; resize: none; overflow-y: auto;
-}
-.cell-editor:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-soft); }
 .mono { font-family: var(--mono); }
 .empty { text-align: center; color: var(--text-tertiary); padding: 28px 24px; }
 .empty-icon { font-size: 26px; margin-bottom: 6px; }

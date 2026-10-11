@@ -6,9 +6,9 @@ import { mount, DOMWrapper, flushPromises, type VueWrapper } from '@vue/test-uti
 import { useToastStore } from '@/store/toast'
 import EsTableBrowser from './EsTableBrowser.vue'
 
-// Es* 绑定尚未由 wails generate module 生成:组件按显式形状断言直连
-// wailsjs,因此测试只在 wailsjs 模块层 mock(vi.mock 提升到文件顶部,fn
-// 须用 vi.hoisted 创建避免 TDZ)。
+// Es* 绑定调用现经 api/client.ts 适配层(WailsApi 按绑定名转发到 wailsjs),
+// 因此测试仍在 wailsjs 模块层 mock(vi.mock 提升到文件顶部,fn 须用
+// vi.hoisted 创建避免 TDZ)。
 const wailsMocks = vi.hoisted(() => ({
   // 分页取数:返回列/行/总行数/引擎(契约形状,首列为 _id)。
   ESPageRows: vi.fn(),
@@ -854,7 +854,7 @@ describe('EsTableBrowser', () => {
   it('保持列头横向铺开:表格按内容自然宽度(th 不套弹性布局)', () => {
     // 视觉对齐 MysqlTableBrowser 的防挤压契约:列数多时横向滚动而不是把列头
     // 压成竖排文字;th 保持 table-cell,弹性布局只在内层 div。
-    const fileSrc = readFileSync(join(process.cwd(), 'src/components/kafka/EsTableBrowser.vue'), 'utf8')
+    const fileSrc = readFileSync(join(process.cwd(), 'src/components/common/TableDataGrid.vue'), 'utf8')
     const tableBlock = fileSrc.match(/\.table \{[\s\S]*?\n\}/)?.[0] ?? ''
     expect(tableBlock).toContain('width: max-content')
     expect(tableBlock).toContain('min-width: 100%')

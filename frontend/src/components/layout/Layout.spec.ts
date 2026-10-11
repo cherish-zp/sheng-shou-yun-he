@@ -199,6 +199,8 @@ describe('Layout', () => {
     localStorage.removeItem('dbclient-files-width')
     // 文档弹窗的上次篇章记忆同样不跨用例泄漏。
     localStorage.removeItem('dbclient-docs-last')
+    // 「忽略此版本」的 localStorage 记忆不跨用例泄漏。
+    localStorage.removeItem('update.ignoredVersion')
   })
 
   it('shows the welcome view when no tab is open', () => {
@@ -794,6 +796,30 @@ describe('Layout', () => {
     expect(btn.classes()).not.toContain('has-update')
     expect(wrapper.find('[data-test="update-dot"]').exists()).toBe(false)
     expect(btn.attributes('title')).toBe('检查更新')
+  })
+
+  it('does not light the update dot for an ignored version', async () => {
+    localStorage.setItem('update.ignoredVersion', 'v9.9.9')
+    const { wrapper } = mountLayout([conn('a')], {
+      checkUpdate: vi.fn(async () => ({ has_update: true, latest_version: 'v9.9.9' })),
+    })
+    await flushPromises()
+    // 静默探测命中「忽略此版本」:红点与标题都不点亮。
+    expect(wrapper.find('[data-test="update-dot"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="btn-update"]').classes()).not.toContain('has-update')
+    expect(wrapper.find('[data-test="btn-update"]').attributes('title')).toBe('检查更新')
+  })
+
+  it('still opens the update dialog from the top bar for an ignored version', async () => {
+    localStorage.setItem('update.ignoredVersion', 'v9.9.9')
+    const { wrapper } = mountLayout([conn('a')], {
+      checkUpdate: vi.fn(async () => ({ has_update: true, latest_version: 'v9.9.9' })),
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-test="update-dot"]').exists()).toBe(false)
+    // 手动点顶栏按钮不受忽略限制:弹窗照常打开。
+    await wrapper.find('[data-test="btn-update"]').trigger('click')
+    expect(document.body.querySelector('[data-test="update-dialog"]')).not.toBeNull()
   })
 
   it('silently ignores a missing checkUpdate binding', async () => {

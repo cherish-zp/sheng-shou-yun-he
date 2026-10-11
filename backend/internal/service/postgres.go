@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -461,39 +460,18 @@ func (c *PostgresClient) Execute(ctx context.Context, database, schema, sqlText 
 	return out, nil
 }
 
-// wrapPostgresPagedQuery renders the paged form of a wrappable statement: the
-// original text (trailing semicolon stripped) becomes a derived table, and the
-// page window is appended as literal LIMIT/OFFSET (integers, injection-free).
-// 语句顶层以 ORDER BY 结尾且其后无 LIMIT/FOR 等尾巴时,把 ORDER BY 原样外提
-// 到包装外层(派生表不保证保留子查询内的 ORDER BY,跨页顺序可能不稳)。
+// wrapPostgresPagedQuery 渲染可包装语句的分页形态(LIMIT/OFFSET 方言,派生
+// 表别名 _pgc),骨架见 common_query.go 的 wrapLimitOffsetPagedQuery。
 func wrapPostgresPagedQuery(stmt string, limit, offset int) string {
-	body := stripTrailingSemicolon(stmt)
-	tail := ""
-	if head, order, ok := splitTrailingTopLevelOrderBy(body); ok {
-		body, tail = head, " "+order
-	}
-	return "SELECT * FROM (" + body + ") _pgc" + tail + " LIMIT " +
-		strconv.Itoa(limit) + " OFFSET " + strconv.Itoa(offset)
+	return wrapLimitOffsetPagedQuery(stmt, limit, offset, "_pgc")
 }
 
 // countPostgresWrapped runs `SELECT COUNT(*) FROM (<stmt>) _pgc` on the same
 // console connection and returns the exact total; a failing count returns nil
-// (total_rows is then omitted rather than guessed).
+// (total_rows is then omitted rather than guessed)。
+// 计数骨架见 common_query.go 的 countWrappedTotal。
 func countPostgresWrapped(ctx context.Context, conn *sql.Conn, stmt string) *int64 {
-	rows, err := conn.QueryContext(ctx,
-		"SELECT COUNT(*) FROM ("+stripTrailingSemicolon(stmt)+") _pgc")
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	if !rows.Next() {
-		return nil
-	}
-	var total int64
-	if err := rows.Scan(&total); err != nil {
-		return nil
-	}
-	return &total
+	return countWrappedTotal(ctx, conn, stmt, "SELECT COUNT(*)", "_pgc")
 }
 
 // TruncateTable empties an ordinary table; views and materialized views are
@@ -809,37 +787,15 @@ func collectPostgresRows(rows *sql.Rows) ([]model.PostgresColumn, [][]*string, e
 // (max<=0 表示不限制),供 EXPLAIN/SHOW/TABLE/VALUES 等不能包装的语句做
 // offset+limit 截断。
 func collectPostgresRowsN(rows *sql.Rows, max int) ([]model.PostgresColumn, [][]*string, error) {
-	types, err := rows.ColumnTypes()
-	if err != nil {
-		return nil, nil, fmt.Errorf("column types: %w", err)
+	cols, out, err := collectStdRowsN(rows, max,
+		func(name, dbType string) model.PostgresColumn { return model.PostgresColumn{Name: name, Type: dbType} },
+		formatStdCell)
+	// 原 PG 实现的空结果返回非 nil 空切片(nil 与 [] 在 wire 上有 null/[]
+	// 之别),保持不变;错误路径仍按原样返回 nil。
+	if err == nil && out == nil {
+		out = [][]*string{}
 	}
-	cols := make([]model.PostgresColumn, len(types))
-	for i, typ := range types {
-		cols[i] = model.PostgresColumn{Name: typ.Name(), Type: typ.DatabaseTypeName()}
-	}
-	values := make([]any, len(types))
-	pointers := make([]any, len(types))
-	out := [][]*string{}
-	for rows.Next() {
-		if max > 0 && len(out) >= max {
-			break
-		}
-		for i := range values {
-			pointers[i] = &values[i]
-		}
-		if err := rows.Scan(pointers...); err != nil {
-			return nil, nil, fmt.Errorf("scan row: %w", err)
-		}
-		row := make([]*string, len(values))
-		for i, value := range values {
-			row[i] = FormatCHCell(value, CHCellMaxBytes)
-		}
-		out = append(out, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
-	return cols, out, nil
+	return cols, out, err
 }
 
 func markPostgresPrimaryKeys(cols []model.PostgresColumn, pk []string) []model.PostgresColumn {

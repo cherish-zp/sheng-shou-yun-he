@@ -1151,6 +1151,40 @@ describe('MysqlSqlConsole', () => {
       wrapper.unmount()
     })
 
+    it('语句未带库名前缀时,更新定位优先用后端 source_database/source_table(而非文本解析出的空库名)', async () => {
+      // 回归:连接未配默认库时,空 database 会让后端在 table_schema='' 上查
+      // 主键,三层探测全部落空,误报「表无主键,不支持编辑」。
+      const unqualified = {
+        ...singleTableSelect('SELECT * FROM msms_silent_config WHERE id = 1 LIMIT 10'),
+        source_database: 'msms',
+        source_table: 'msms_silent_config',
+        primary_key: ['id'],
+      }
+      const wrapper = await mountWithResults([unqualified])
+      await startEdit(wrapper, 0, 0, 1)
+      resultCards(wrapper)[0].vm.$emit('edit-commit', 'carol')
+      await vi.waitFor(() => {
+        expect(app.MysqlPreviewCellUpdate).toHaveBeenCalledTimes(1)
+      })
+      expect(app.MysqlPreviewCellUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ database: 'msms', table: 'msms_silent_config' }),
+      )
+      wrapper.unmount()
+    })
+
+    it('source 缺失(旧后端)时退回文本解析的库表名,行为不变', async () => {
+      const wrapper = await mountWithResults([singleTableSelect('SELECT * FROM shop.users WHERE id = 1 LIMIT 10')])
+      await startEdit(wrapper, 0, 0, 1)
+      resultCards(wrapper)[0].vm.$emit('edit-commit', 'carol')
+      await vi.waitFor(() => {
+        expect(app.MysqlPreviewCellUpdate).toHaveBeenCalledTimes(1)
+      })
+      expect(app.MysqlPreviewCellUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ database: 'shop', table: 'users' }),
+      )
+      wrapper.unmount()
+    })
+
     it('匹配 0 行:弹窗提示未命中并禁用执行,点击不落库', async () => {
       app.MysqlPreviewCellUpdate.mockResolvedValue({
         statement: 'UPDATE `users` SET `name` = \'x\' WHERE `id` = \'1\'',

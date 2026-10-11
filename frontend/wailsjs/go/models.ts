@@ -300,6 +300,7 @@ export namespace backend {
 	}
 	export class DownloadUpdateRequest {
 	    url: string;
+	    sha256?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new DownloadUpdateRequest(source);
@@ -308,6 +309,7 @@ export namespace backend {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.url = source["url"];
+	        this.sha256 = source["sha256"];
 	    }
 	}
 	export class DriverInfo {
@@ -1411,6 +1413,7 @@ export namespace backend {
 	    latest_version: string;
 	    notes?: string;
 	    download_url?: string;
+	    sha256?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new UpdateCheckResult(source);
@@ -1422,6 +1425,7 @@ export namespace backend {
 	        this.latest_version = source["latest_version"];
 	        this.notes = source["notes"];
 	        this.download_url = source["download_url"];
+	        this.sha256 = source["sha256"];
 	    }
 	}
 	export class UpdateConnectionRequest {

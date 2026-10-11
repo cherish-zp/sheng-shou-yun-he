@@ -456,7 +456,8 @@ describe('MysqlTableBrowser', () => {
   it('保持列头横向铺开:表格按内容自然宽度(th 不套弹性布局)', () => {
     // 视觉对齐 CHTableBrowser 的防挤压契约:列数多时横向滚动而不是把列头
     // 压成竖排文字;th 保持 table-cell,弹性布局只在内层 div。
-    const fileSrc = readFileSync(join(process.cwd(), 'src/components/kafka/MysqlTableBrowser.vue'), 'utf8')
+    // (表格渲染与样式已抽到共享组件 TableDataGrid,守卫随之指向共享件。)
+    const fileSrc = readFileSync(join(process.cwd(), 'src/components/common/TableDataGrid.vue'), 'utf8')
     const tableBlock = fileSrc.match(/\.table \{[\s\S]*?\n\}/)?.[0] ?? ''
     expect(tableBlock).toContain('width: max-content')
     expect(tableBlock).toContain('min-width: 100%')

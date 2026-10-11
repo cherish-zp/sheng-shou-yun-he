@@ -14,19 +14,9 @@ type MysqlTablesRequest struct {
 	Database     string `json:"database"`
 }
 
-// MysqlPageRowsRequest carries one page request over a table.
-type MysqlPageRowsRequest struct {
-	ConnectionID string `json:"connection_id"`
-	Database     string `json:"database"`
-	Table        string `json:"table"`
-	// Where is the user's native WHERE fragment (without the keyword); empty
-	// omits the clause.
-	Where   string `json:"where,omitempty"`
-	OrderBy string `json:"order_by,omitempty"`
-	Asc     bool   `json:"asc"`
-	Limit   int    `json:"limit"`
-	Offset  int    `json:"offset"`
-}
+// MysqlPageRowsRequest carries one page request over a table; 与 CH 分页请求
+// 同形,共享 app_requests.go 的 PageRowsRequest。
+type MysqlPageRowsRequest = PageRowsRequest
 
 // MysqlTruncateTableRequest addresses the table to empty.
 type MysqlTruncateTableRequest struct {
@@ -35,18 +25,10 @@ type MysqlTruncateTableRequest struct {
 	Table        string `json:"table"`
 }
 
-// MysqlExecuteRequest carries the multi-statement SQL script. Database is the
-// console's current database context: non-empty runs the whole script on one
-// connection pinned to it via USE; empty keeps the pool default (no USE).
-// Limit/Offset 启用服务端分页:Limit>0 时仅返回 Offset 起的 Limit 行,结果按
-// 语句类型附 total_rows(≥0 精确 / -1 无法计数)。
-type MysqlExecuteRequest struct {
-	ConnectionID string `json:"connection_id"`
-	Database     string `json:"database,omitempty"`
-	SQL          string `json:"sql"`
-	Limit        int    `json:"limit,omitempty"`
-	Offset       int    `json:"offset,omitempty"`
-}
+// MysqlExecuteRequest carries the multi-statement SQL script with the
+// console's current database context; 与 Hive 执行请求同形,共享
+// app_requests.go 的 DatabaseExecuteRequest。
+type MysqlExecuteRequest = DatabaseExecuteRequest
 
 // TestMysqlConnection verifies reachability without persisting anything.
 func (a *App) TestMysqlConnection(cfg model.MysqlConfig) error {

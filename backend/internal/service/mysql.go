@@ -345,8 +345,10 @@ func (c *MysqlClient) tableMeta(ctx context.Context, database, table string) (st
 // tableColumnsWithPK reads the table's column metadata in definition order
 // plus the primary key column names (information_schema.columns.column_key =
 // 'PRI', in ordinal position order). 单元格编辑的 WHERE、分页与单表 SELECT
-// 结果的 primary_key 元数据同源于这一条查询。exec 由调用方给出(连接池或
-// USE 固定的专用连接),查询只读且全限定,不依赖会话状态。
+// 结果的 primary_key 元数据同源于这一条查询。COLUMN_KEY 不可信的变体服务器
+// (分片代理/OceanBase 等恒返回空)回退 primaryKeyFromIndexes 逐层探测。
+// exec 由调用方给出(连接池或 USE 固定的专用连接),查询只读且全限定,不
+// 依赖会话状态。
 func (c *MysqlClient) tableColumnsWithPK(ctx context.Context, exec mysqlExecutor, database, table string) ([]model.MysqlColumn, []string, error) {
 	rows, err := exec.QueryContext(ctx,
 		"SELECT column_name, column_type, column_comment, column_key FROM information_schema.columns"+
@@ -374,7 +376,133 @@ func (c *MysqlClient) tableColumnsWithPK(ctx context.Context, exec mysqlExecutor
 		}
 		cols = append(cols, col)
 	}
-	return cols, pk, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	if len(pk) == 0 {
+		// COLUMN_KEY 缺失:回退索引元数据探测,并把主键角标回填到列元数据。
+		pk = c.primaryKeyFromIndexes(ctx, exec, database, table)
+		if len(pk) > 0 {
+			pkSet := make(map[string]bool, len(pk))
+			for _, name := range pk {
+				pkSet[name] = true
+			}
+			for i := range cols {
+				if pkSet[cols[i].Name] {
+					cols[i].IsInPrimaryKey = true
+				}
+			}
+		}
+	}
+	return cols, pk, nil
+}
+
+// primaryKeyFromIndexes 在 columns.COLUMN_KEY 不可信时的主键回退探测:
+// 先查 information_schema.statistics 的 PRIMARY 索引(SQL 端按 seq_in_index
+// 排序,组合主键天然有序),仍拿不到再退到 SHOW INDEX(部分代理只实现协议
+// 级 SHOW,不实现 statistics)。任一层拿到即返回;两层都失败按无主键处理,
+// 维持上层「表无主键,不支持编辑」的拒绝语义。
+func (c *MysqlClient) primaryKeyFromIndexes(ctx context.Context, exec mysqlExecutor, database, table string) []string {
+	rows, err := exec.QueryContext(ctx,
+		"SELECT index_name, column_name, non_unique, seq_in_index FROM information_schema.statistics"+
+			" WHERE table_schema = ? AND table_name = ? ORDER BY seq_in_index", database, table)
+	if err == nil {
+		pk := collectPrimaryKeyRows(rows)
+		if len(pk) > 0 {
+			return pk
+		}
+	}
+	show, err := exec.QueryContext(ctx,
+		"SHOW INDEX FROM "+quoteMysqlIdent(database)+"."+quoteMysqlIdent(table))
+	if err != nil {
+		return nil
+	}
+	return collectShowIndexPrimaryKey(show)
+}
+
+// collectPrimaryKeyRows 从 information_schema.statistics 行集里收集 PRIMARY
+// 索引的列(到达序即 seq_in_index 序)。数字列按 NullString 收,规避各变体
+// 驱动的类型差异。
+func collectPrimaryKeyRows(rows *sql.Rows) []string {
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name, col, nonUnique, seq sql.NullString
+		if err := rows.Scan(&name, &col, &nonUnique, &seq); err != nil {
+			return nil
+		}
+		if strings.EqualFold(strings.TrimSpace(name.String), "primary") && col.String != "" {
+			out = append(out, col.String)
+		}
+	}
+	if rows.Err() != nil {
+		return nil
+	}
+	return out
+}
+
+// collectShowIndexPrimaryKey 从 SHOW INDEX 行集里按「列名」定位 PRIMARY
+// 索引的列(各服务器的列序/列数有差异,按名取比按位取稳);同序号列按
+// 到达序拼接。
+func collectShowIndexPrimaryKey(rows *sql.Rows) []string {
+	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil
+	}
+	pos := make(map[string]int, len(columns))
+	for i, name := range columns {
+		pos[strings.ToLower(name)] = i
+	}
+	keyIdx, hasKey := pos["key_name"]
+	colIdx, hasCol := pos["column_name"]
+	uniqIdx, hasUniq := pos["non_unique"]
+	seqIdx, hasSeq := pos["seq_in_index"]
+	if !hasKey || !hasCol {
+		return nil
+	}
+	bySeq := map[int][]string{}
+	for rows.Next() {
+		vals := make([]sql.NullString, len(columns))
+		scan := make([]any, len(columns))
+		for i := range vals {
+			scan[i] = &vals[i]
+		}
+		if err := rows.Scan(scan...); err != nil {
+			return nil
+		}
+		if !strings.EqualFold(strings.TrimSpace(vals[keyIdx].String), "primary") {
+			continue
+		}
+		// 防御:PRIMARY 是唯一索引的行业约定,万一变体把非唯一索引命名成
+		// PRIMARY,按 non_unique=1 剔除,避免误判出假主键。
+		if hasUniq && vals[uniqIdx].Valid && vals[uniqIdx].String == "1" {
+			continue
+		}
+		if vals[colIdx].String == "" {
+			continue
+		}
+		seq := 1
+		if hasSeq && vals[seqIdx].Valid {
+			if n, convErr := strconv.Atoi(vals[seqIdx].String); convErr == nil && n > 0 {
+				seq = n
+			}
+		}
+		bySeq[seq] = append(bySeq[seq], vals[colIdx].String)
+	}
+	if rows.Err() != nil {
+		return nil
+	}
+	var out []string
+	for seq := 1; len(bySeq) > 0; seq++ {
+		names, ok := bySeq[seq]
+		if !ok {
+			break
+		}
+		out = append(out, names...)
+		delete(bySeq, seq)
+	}
+	return out
 }
 
 // TruncateTable empties the table.
@@ -532,39 +660,18 @@ func (c *MysqlClient) runMysqlStatements(ctx context.Context, exec mysqlExecutor
 	return out, nil
 }
 
-// wrapMysqlPagedQuery renders the paged form of a wrappable statement: the
-// original text (trailing semicolon stripped) becomes a derived table, and the
-// page window is appended as literal LIMIT/OFFSET (integers, injection-free).
-// 语句顶层以 ORDER BY 结尾且其后无 LIMIT/FOR 等尾巴时,把 ORDER BY 原样外提
-// 到包装外层(派生表不保证保留子查询内的 ORDER BY,跨页顺序可能不稳)。
+// wrapMysqlPagedQuery 渲染可包装语句的分页形态(LIMIT/OFFSET 方言,派生表
+// 别名 _dbp),骨架见 common_query.go 的 wrapLimitOffsetPagedQuery。
 func wrapMysqlPagedQuery(stmt string, limit, offset int) string {
-	body := stripTrailingSemicolon(stmt)
-	tail := ""
-	if head, order, ok := splitTrailingTopLevelOrderBy(body); ok {
-		body, tail = head, " "+order
-	}
-	return "SELECT * FROM (" + body + ") _dbp" + tail + " LIMIT " +
-		strconv.Itoa(limit) + " OFFSET " + strconv.Itoa(offset)
+	return wrapLimitOffsetPagedQuery(stmt, limit, offset, "_dbp")
 }
 
 // countMysqlWrapped runs `SELECT COUNT(*) FROM (<stmt>) _dbp` on the same
 // connection as the paged query and returns the exact total; a failing count
-// returns nil (total_rows is then omitted rather than guessed).
+// returns nil (total_rows is then omitted rather than guessed)。
+// 计数骨架见 common_query.go 的 countWrappedTotal。
 func countMysqlWrapped(ctx context.Context, exec mysqlExecutor, stmt string) *int64 {
-	rows, err := exec.QueryContext(ctx,
-		"SELECT COUNT(*) FROM ("+stripTrailingSemicolon(stmt)+") _dbp")
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	if !rows.Next() {
-		return nil
-	}
-	var total int64
-	if err := rows.Scan(&total); err != nil {
-		return nil
-	}
-	return &total
+	return countWrappedTotal(ctx, exec, stmt, "SELECT COUNT(*)", "_dbp")
 }
 
 // mysqlStatementPrimaryKey 在语句是单表 SELECT 时查它的主键列
@@ -710,16 +817,9 @@ func isMysqlClauseKeyword(text string) bool {
 
 // mysqlStatementReturnsRows reports whether the statement's first keyword is
 // one that produces a result set and should go through Query instead of Exec.
+// 关键字集与 Hive 完全一致,共用 stdStatementReturnsRows 骨架。
 func mysqlStatementReturnsRows(stmt string) bool {
-	first := stmt
-	if i := strings.IndexAny(stmt, " \t\n\r("); i >= 0 {
-		first = stmt[:i]
-	}
-	switch strings.ToUpper(first) {
-	case "SELECT", "SHOW", "DESC", "DESCRIBE", "EXPLAIN", "WITH":
-		return true
-	}
-	return false
+	return stdStatementReturnsRows(stmt)
 }
 
 // mysqlDatetimeLayout 是 DATETIME/TIMESTAMP 单元格的显示布局:本地墙钟、
@@ -782,39 +882,9 @@ func collectMysqlRows(rows *sql.Rows) ([]model.MysqlColumn, [][]*string, error) 
 // 表示不限制),供 SHOW/DESC/EXPLAIN 等不能包装的语句做 offset+limit 截断,
 // 避免为取一页而拉全量结果集。
 func collectMysqlRowsN(rows *sql.Rows, max int) ([]model.MysqlColumn, [][]*string, error) {
-	types, err := rows.ColumnTypes()
-	if err != nil {
-		return nil, nil, fmt.Errorf("column types: %w", err)
-	}
-	cols := make([]model.MysqlColumn, len(types))
-	for i, ct := range types {
-		cols[i] = model.MysqlColumn{Name: ct.Name(), Type: ct.DatabaseTypeName()}
-	}
-	// 通用扫描:每个单元格扫进 *any;std 适配层对 NULL 行给出 nil。
-	width := len(types)
-	values := make([]any, width)
-	pointers := make([]any, width)
-	var out [][]*string
-	for rows.Next() {
-		if max > 0 && len(out) >= max {
-			break
-		}
-		for i := range values {
-			pointers[i] = &values[i]
-		}
-		if err := rows.Scan(pointers...); err != nil {
-			return nil, nil, fmt.Errorf("scan row: %w", err)
-		}
-		row := make([]*string, width)
-		for i, v := range values {
-			row[i] = formatMysqlCell(v, cols[i].Type, CHCellMaxBytes)
-		}
-		out = append(out, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
-	return cols, out, nil
+	return collectStdRowsN(rows, max,
+		func(name, dbType string) model.MysqlColumn { return model.MysqlColumn{Name: name, Type: dbType} },
+		func(v any, colType string) *string { return formatMysqlCell(v, colType, CHCellMaxBytes) })
 }
 
 // --- 单元格更新(表详情/SQL 结果编辑,全程参数化) ---
@@ -875,7 +945,14 @@ func (c *MysqlClient) validateCellEdit(ctx context.Context, database, table stri
 	if strings.TrimSpace(table) == "" {
 		return errors.New("表名不能为空")
 	}
-	cols, pk, err := c.tableColumnsWithPK(ctx, c.db, database, table)
+	// 空库名(语句未带库名前缀且连接未配置默认库)先拦下:否则会在
+	// table_schema='' 上查主键,三层探测全部落空,把定位问题误报成
+	// 「表无主键,不支持编辑」。
+	db := c.resolveDatabase(database)
+	if strings.TrimSpace(db) == "" {
+		return errors.New("无法定位目标库:语句未带库名前缀且连接未配置默认库")
+	}
+	cols, pk, err := c.tableColumnsWithPK(ctx, c.db, db, table)
 	if err != nil {
 		return err
 	}

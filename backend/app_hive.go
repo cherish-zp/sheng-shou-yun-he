@@ -28,15 +28,10 @@ type HivePageRowsRequest struct {
 }
 
 // HiveExecuteRequest carries a multi-statement SQL script. Database 非空时
-// 后端在该库上执行(等效 USE);Limit>0 启用服务端分页(可包装 SELECT 用
+// 后端在该库上执行(等效 USE);与 MySQL 执行请求同形,共享 app_requests.go
+// 的 DatabaseExecuteRequest。Limit>0 启用服务端分页(可包装 SELECT 用
 // ROW_NUMBER 窗口;SHOW/DESCRIBE 类截断回退),缺省全量返回。
-type HiveExecuteRequest struct {
-	ConnectionID string `json:"connection_id"`
-	SQL          string `json:"sql"`
-	Database     string `json:"database,omitempty"`
-	Limit        int    `json:"limit,omitempty"`
-	Offset       int    `json:"offset,omitempty"`
-}
+type HiveExecuteRequest = DatabaseExecuteRequest
 
 // HiveTableRequest addresses the table for DDL operations.
 type HiveTableRequest struct {

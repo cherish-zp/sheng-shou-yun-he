@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { getApi } from '@/api/client'
 import { APP_VERSION } from '@/version'
+import { ignoreVersion } from '@/utils/updateIgnore'
 import type { UpdateCheckResult } from '@/api/types'
 
 const props = defineProps<{ show: boolean }>()
@@ -60,7 +61,8 @@ async function install(): Promise<void> {
   percent.value = 0
   startPolling()
   try {
-    await getApi().downloadUpdate({ url: downloadURL.value })
+    // sha256 来自检查结果(发布元数据),透传给后端做完整性校验。
+    await getApi().downloadUpdate({ url: downloadURL.value, sha256: result.value?.sha256 })
     // 下载调用返回后再确认终态(轮询与下载并发推进);轮询读到 error 时
     // 已写入具体错误,这里不再覆盖。
     const done = await waitForDone()
@@ -71,6 +73,13 @@ async function install(): Promise<void> {
     phase.value = 'error'
     errorText.value = e instanceof Error ? e.message : String(e)
   }
+}
+
+// ignoreThisVersion 记住当前探测到的版本:静默红点不再为它点亮,但手动
+// 检查(设置页/顶栏按钮)不受限制,用户主动检查仍会看到该版本。
+function ignoreThisVersion(): void {
+  if (result.value?.latest_version) ignoreVersion(result.value.latest_version)
+  emit('close')
 }
 
 // waitForDone 轮询进度到 done;done 时先切到 installing(提示即将重启),
@@ -182,6 +191,15 @@ const statusText = computed(() => {
             @click="install"
           >
             立即更新
+          </button>
+          <button
+            v-if="phase === 'available'"
+            class="btn ghost"
+            type="button"
+            data-test="ignore-update-btn"
+            @click="ignoreThisVersion"
+          >
+            忽略此版本
           </button>
           <button
             v-if="phase === 'checking' || phase === 'uptodate' || phase === 'available'"

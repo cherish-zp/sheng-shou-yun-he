@@ -5,6 +5,7 @@ import type { AuditEntry, DriverInfo } from '@/api/types'
 import { formatTime } from '@/utils/format'
 import { DEFAULT_QUERY_DIR, getQueryDir, setQueryDir } from '@/utils/queryDir'
 import { APP_VERSION } from '@/version'
+import { useToastStore } from '@/store/toast'
 
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ (e: 'close'): void; (e: 'check-update'): void }>()
@@ -20,7 +21,12 @@ const TABS: { id: SettingsTab; icon: string; label: string }[] = [
 const activeTab = ref<SettingsTab>('generic')
 
 const THEME_KEY = 'dbclient-theme'
-const theme = ref<'dark' | 'light'>(localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light')
+type ThemeName = 'dark' | 'light' | 'pink'
+// localStorage 无值或值非法时默认「少女粉」;已有存储值(dark/light)尊重不动。
+function normalizeTheme(v: string | null): ThemeName {
+  return v === 'dark' || v === 'light' ? v : 'pink'
+}
+const theme = ref<ThemeName>(normalizeTheme(localStorage.getItem(THEME_KEY)))
 
 // 查询文件目录:初始读 localStorage(空值回退默认),输入变更即持久化。
 const queryDir = ref(getQueryDir())
@@ -76,9 +82,9 @@ function actionLabel(action: string): string {
   return ACTION_LABELS[action] ?? action
 }
 
-function apply(theme: 'dark' | 'light'): void {
-  document.documentElement.setAttribute('data-theme', theme)
-  localStorage.setItem(THEME_KEY, theme)
+function apply(name: ThemeName): void {
+  document.documentElement.setAttribute('data-theme', name)
+  localStorage.setItem(THEME_KEY, name)
 }
 
 function changeTheme(): void {
@@ -123,6 +129,32 @@ watch(
 function close(): void {
   emit('close')
 }
+
+// --- 关于:手动检查更新 ---------------------------------------------------------
+
+// toast:与全局轻提示同一 store(Layout 底部居中渲染),检查结果就地反馈。
+const toast = useToastStore()
+const checkingUpdate = ref(false)
+
+// checkForUpdate 手动检查:发现新版本才 emit 给 Layout 打开 UpdateDialog
+// (弹窗内会重新探测并接管下载/安装流程);已是最新就地 toast 告知;手动检查
+// 不受「忽略此版本」限制——用户主动检查就应看到结果。
+async function checkForUpdate(): Promise<void> {
+  if (checkingUpdate.value) return
+  checkingUpdate.value = true
+  try {
+    const res = await getApi().checkUpdate({ current_version: APP_VERSION })
+    if (res.has_update) {
+      emit('check-update')
+    } else {
+      toast.show(`当前已是最新版本 ${res.latest_version}`)
+    }
+  } catch (e) {
+    toast.show(`检查更新失败: ${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    checkingUpdate.value = false
+  }
+}
 </script>
 
 <template>
@@ -153,6 +185,7 @@ function close(): void {
             <div class="field">
               <label class="label">主题</label>
               <select v-model="theme" data-test="select-theme" class="input" @change="changeTheme">
+                <option value="pink">少女粉</option>
                 <option value="dark">深色</option>
                 <option value="light">浅色</option>
               </select>
@@ -240,7 +273,9 @@ function close(): void {
             <div class="about-row"><span class="about-label">版本</span><span class="about-value mono" data-test="about-version">{{ APP_VERSION }}</span></div>
             <div class="about-row"><span class="about-label">作者</span><span class="about-value" data-test="about-author">By Mr Zp</span></div>
             <div class="about-actions">
-              <button class="btn-check" type="button" data-test="btn-about-check" @click="emit('check-update')">检查更新</button>
+              <button class="btn-check" type="button" data-test="btn-about-check" :disabled="checkingUpdate" @click="checkForUpdate">
+                {{ checkingUpdate ? '检查中…' : '检查更新' }}
+              </button>
               <span class="about-hint">将在 Gitee 检查最新版本</span>
             </div>
           </div>
@@ -251,17 +286,9 @@ function close(): void {
 </template>
 
 <style scoped>
-.modal-backdrop {
-  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.22);
-  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-  display: flex; align-items: center; justify-content: center; z-index: 900;
-}
+/* 遮罩/容器基础样式走全局 .modal-backdrop/.modal 基座,这里只保留尺寸。 */
 .modal {
   width: 680px; height: 500px; max-width: 94vw; max-height: 90vh;
-  display: flex; flex-direction: column; overflow: hidden;
-  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  color: var(--text); font-family: var(--font);
 }
 .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--border); }
 .modal-title { font-weight: 600; font-size: 15px; }
@@ -282,7 +309,7 @@ function close(): void {
 .field { margin-bottom: 14px; }
 .label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
 .input { background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text); border-radius: 7px; padding: 8px 10px; font-size: 13px; width: 100%; box-sizing: border-box; transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease; }
-.input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--accent-soft); }
+.input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: var(--focus-ring); }
 .mono { font-family: var(--mono); }
 
 /* 查询文件目录 */
@@ -317,8 +344,9 @@ function close(): void {
 .about-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .about-label { color: var(--text-secondary); }
 .about-actions { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
-.btn-check { background: var(--accent); color: #fff; border: none; border-radius: 7px; padding: 7px 14px; font-size: 13px; font-family: var(--font); cursor: pointer; transition: background 0.15s ease; }
-.btn-check:hover { background: var(--accent-hover); }
+.btn-check { background: var(--primary-gradient); color: var(--on-primary); border: none; border-radius: 7px; padding: 7px 14px; font-size: 13px; font-family: var(--font); cursor: pointer; transition: filter 0.15s ease; }
+.btn-check:hover:not(:disabled) { filter: brightness(0.95); }
+.btn-check:disabled { opacity: 0.5; cursor: not-allowed; }
 .about-hint { font-size: 12px; color: var(--text-tertiary); }
 
 .about-intro {

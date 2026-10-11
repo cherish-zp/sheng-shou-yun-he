@@ -87,19 +87,9 @@ type CHTablesRequest struct {
 	ShowSystem bool `json:"show_system"`
 }
 
-// CHPageRowsRequest carries one page request over a table.
-type CHPageRowsRequest struct {
-	ConnectionID string `json:"connection_id"`
-	Database     string `json:"database"`
-	Table        string `json:"table"`
-	// Where is the user's native WHERE fragment (without the keyword); empty
-	// omits the clause.
-	Where   string `json:"where,omitempty"`
-	OrderBy string `json:"order_by,omitempty"`
-	Asc     bool   `json:"asc"`
-	Limit   int    `json:"limit"`
-	Offset  int    `json:"offset"`
-}
+// CHPageRowsRequest carries one page request over a table; 与 MySQL 分页请求
+// 同形,共享 app_requests.go 的 PageRowsRequest。
+type CHPageRowsRequest = PageRowsRequest
 
 // CHTruncateTableRequest addresses the table to empty.
 type CHTruncateTableRequest struct {
@@ -111,15 +101,9 @@ type CHTruncateTableRequest struct {
 	OnCluster bool `json:"on_cluster,omitempty"`
 }
 
-// CHExecuteRequest carries the multi-statement SQL script. Limit/Offset 启用
-// 服务端分页:Limit>0 时仅返回 Offset 起的 Limit 行,结果按语句类型附
-// total_rows(≥0 精确 / -1 无法计数)。
-type CHExecuteRequest struct {
-	ConnectionID string `json:"connection_id"`
-	SQL          string `json:"sql"`
-	Limit        int    `json:"limit,omitempty"`
-	Offset       int    `json:"offset,omitempty"`
-}
+// CHExecuteRequest carries the multi-statement SQL script; 与 ES 执行请求
+// 同形,共享 app_requests.go 的 ExecuteRequest。
+type CHExecuteRequest = ExecuteRequest
 
 // TestCHConnection verifies reachability without persisting anything.
 func (a *App) TestCHConnection(cfg model.ClickHouseConfig) error {

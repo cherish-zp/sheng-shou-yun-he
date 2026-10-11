@@ -305,10 +305,14 @@ export interface UpdateCheckResult {
   latest_version: string
   notes?: string
   download_url?: string
+  // 最新版安装包的 SHA-256 摘要(发布元数据,可选);透传给下载请求供后端校验。
+  sha256?: string
 }
 
 export interface UpdateDownloadRequest {
   url: string
+  // 期望的安装包 SHA-256(可选,来自检查结果);后端下载完成后据此校验完整性。
+  sha256?: string
 }
 
 export interface UpdateProgressInfo {
@@ -961,7 +965,10 @@ export interface EsPutDocRequest {
   connection_id: string
   index: string
   id: string
-  doc: string
+  // 注意:前端绑定(与 spec 契约)发送 doc_json;后端 Go 结构体字段标签为
+  // json:"doc" —— 两侧字段名漂移为既有现状,前端按既有 wire 原样保留,
+  // 待绑定重新生成时统一。
+  doc_json: string
 }
 
 // 新增文档:id 留空 = POST /{index}/_doc 由 ES 自动生成;非空 = PUT
@@ -985,7 +992,8 @@ export interface EsDeleteDocRequest {
 export interface EsDeleteByQueryRequest {
   connection_id: string
   index: string
-  query: string
+  // 缺省(空串) = match_all:索引浏览器「清空文档」即不带 query 调用。
+  query?: string
 }
 
 // 新建索引:shards/replicas 为主分片与副本数(后端再做 ≥1 下限保护)。

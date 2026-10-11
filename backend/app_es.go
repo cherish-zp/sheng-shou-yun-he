@@ -80,15 +80,9 @@ type EsDeleteByQueryRequest struct {
 	Query        string `json:"query"`
 }
 
-// EsExecuteRequest carries the multi-statement SQL script. Limit/Offset 启用
-// 服务端分页:Limit>0 时仅返回 Offset 起的 Limit 行,结果按语句类型附
-// total_rows(≥0 精确 / -1 无法计数)。
-type EsExecuteRequest struct {
-	ConnectionID string `json:"connection_id"`
-	SQL          string `json:"sql"`
-	Limit        int    `json:"limit,omitempty"`
-	Offset       int    `json:"offset,omitempty"`
-}
+// EsExecuteRequest carries the multi-statement SQL script; 与 CH 执行请求
+// 同形,共享 app_requests.go 的 ExecuteRequest。
+type EsExecuteRequest = ExecuteRequest
 
 // EsDslRequest carries one raw DSL console request (Kibana Dev Tools style):
 // method+path+body are forwarded to the cluster as-is; body may be empty and

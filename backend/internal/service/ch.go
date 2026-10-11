@@ -698,39 +698,17 @@ func (c *CHClient) Execute(ctx context.Context, sqlText string, limit, offset in
 	return out, nil
 }
 
-// wrapCHPagedQuery renders the paged form of a wrappable statement: the
-// original text (trailing semicolon stripped) becomes a derived table, and the
-// page window is appended as literal LIMIT/OFFSET (integers, injection-free).
-// 语句顶层以 ORDER BY 结尾且其后无 LIMIT/FOR 等尾巴时,把 ORDER BY 原样外提
-// 到包装外层(派生表不保证保留子查询内的 ORDER BY,跨页顺序可能不稳)。
+// wrapCHPagedQuery 渲染可包装语句的分页形态(LIMIT/OFFSET 方言,派生表别名
+// _dbp),骨架见 common_query.go 的 wrapLimitOffsetPagedQuery。
 func wrapCHPagedQuery(stmt string, limit, offset int) string {
-	body := stripTrailingSemicolon(stmt)
-	tail := ""
-	if head, order, ok := splitTrailingTopLevelOrderBy(body); ok {
-		body, tail = head, " "+order
-	}
-	return "SELECT * FROM (" + body + ") _dbp" + tail + " LIMIT " +
-		strconv.Itoa(limit) + " OFFSET " + strconv.Itoa(offset)
+	return wrapLimitOffsetPagedQuery(stmt, limit, offset, "_dbp")
 }
 
 // countCHWrapped runs `SELECT count() FROM (<stmt>) _dbp` and returns the
 // exact total; a failing count returns nil (total_rows is then omitted rather
-// than guessed).
+// than guessed)。CH 的 count 走小写 count(),计数骨架见 countWrappedTotal。
 func countCHWrapped(ctx context.Context, db *sql.DB, stmt string) *int64 {
-	rows, err := db.QueryContext(ctx,
-		"SELECT count() FROM ("+stripTrailingSemicolon(stmt)+") _dbp")
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	if !rows.Next() {
-		return nil
-	}
-	var total int64
-	if err := rows.Scan(&total); err != nil {
-		return nil
-	}
-	return &total
+	return countWrappedTotal(ctx, db, stmt, "SELECT count()", "_dbp")
 }
 
 // collectCHRows drains a result set into wire-shaped columns and pre-formatted
@@ -742,39 +720,9 @@ func collectCHRows(rows *sql.Rows) ([]model.CHColumn, [][]*string, error) {
 // collectCHRowsN 是 collectCHRows 的限量变体:至多消费 max 行(max<=0 表示
 // 不限制),供 SHOW/DESC/EXPLAIN 等不能包装的语句做 offset+limit 截断。
 func collectCHRowsN(rows *sql.Rows, max int) ([]model.CHColumn, [][]*string, error) {
-	types, err := rows.ColumnTypes()
-	if err != nil {
-		return nil, nil, fmt.Errorf("column types: %w", err)
-	}
-	cols := make([]model.CHColumn, len(types))
-	for i, ct := range types {
-		cols[i] = model.CHColumn{Name: ct.Name(), Type: ct.DatabaseTypeName()}
-	}
-	// 通用扫描:每个单元格扫进 *any;std 适配层对 NULL 行给出 nil。
-	width := len(types)
-	values := make([]any, width)
-	pointers := make([]any, width)
-	var out [][]*string
-	for rows.Next() {
-		if max > 0 && len(out) >= max {
-			break
-		}
-		for i := range values {
-			pointers[i] = &values[i]
-		}
-		if err := rows.Scan(pointers...); err != nil {
-			return nil, nil, fmt.Errorf("scan row: %w", err)
-		}
-		row := make([]*string, width)
-		for i, v := range values {
-			row[i] = FormatCHCell(v, CHCellMaxBytes)
-		}
-		out = append(out, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
-	return cols, out, nil
+	return collectStdRowsN(rows, max,
+		func(name, dbType string) model.CHColumn { return model.CHColumn{Name: name, Type: dbType} },
+		formatStdCell)
 }
 
 // FormatCHCell renders one cell for the wire: nil means SQL NULL, values are
@@ -829,16 +777,9 @@ func FormatCHCell(v any, maxBytes int) *string {
 
 // chStatementReturnsRows reports whether the statement's first keyword is one
 // that produces a result set and should go through Query instead of Exec.
+// CH 在基础关键字集上扩展 EXISTS/CHECK(判型骨架见 stdStatementReturnsRows)。
 func chStatementReturnsRows(stmt string) bool {
-	first := stmt
-	if i := strings.IndexAny(stmt, " \t\n\r("); i >= 0 {
-		first = stmt[:i]
-	}
-	switch strings.ToUpper(first) {
-	case "SELECT", "SHOW", "DESC", "DESCRIBE", "EXPLAIN", "EXISTS", "CHECK", "WITH":
-		return true
-	}
-	return false
+	return stdStatementReturnsRows(stmt, "EXISTS", "CHECK")
 }
 
 // quoteCHIdent backtick-quotes an identifier, escaping embedded backticks.

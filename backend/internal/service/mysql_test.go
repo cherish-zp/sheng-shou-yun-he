@@ -624,6 +624,15 @@ type fakeMysqlDrvConn struct {
 	// countRows 非空时,SELECT COUNT(*) 查询返回该结果集(分页计数与页数据
 	// 需要不同的应答,故与 queryRows 分开)。
 	countRows *fakeMysqlDrvRows
+	// statByTable 按 "schema.table" 给出 information_schema.statistics 形状的
+	// 预置行(列: index_name, column_name, non_unique, seq_in_index),模拟
+	// 「COLUMN_KEY 缺失但索引元数据完整」的变体服务器(分片代理/OceanBase 等)。
+	statByTable map[string][][]driver.Value
+	statQueries int
+	// showIndexRows 非空时,SHOW INDEX 查询返回该结果集(statistics 也拿不到
+	// 时的第三层回退桩)。
+	showIndexRows    *fakeMysqlDrvRows
+	showIndexQueries int
 }
 
 // pkResultRows 把桩数据渲染成 information_schema.columns 形状的结果集
@@ -680,6 +689,27 @@ func (s *fakeMysqlDrvStmt) Query(args []driver.Value) (driver.Rows, error) {
 			return nil, s.conn.pkErr
 		}
 		return s.conn.pkResultRows(args), nil
+	}
+	// information_schema.statistics 与 SHOW INDEX 是主键回退探测的桩应答,
+	// 同样不记入业务 queries。
+	if strings.Contains(s.query, "information_schema.statistics") {
+		s.conn.statQueries++
+		var vals [][]driver.Value
+		if len(args) >= 2 {
+			key := args[0].(string) + "." + args[1].(string)
+			vals = s.conn.statByTable[key]
+		}
+		return &fakeMysqlDrvRows{
+			cols: []string{"index_name", "column_name", "non_unique", "seq_in_index"},
+			vals: vals,
+		}, nil
+	}
+	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(s.query)), "SHOW INDEX") {
+		s.conn.showIndexQueries++
+		if s.conn.showIndexRows != nil {
+			return s.conn.showIndexRows, nil
+		}
+		return &fakeMysqlDrvRows{cols: []string{"Key_name", "Column_name"}}, nil
 	}
 	s.conn.queries = append(s.conn.queries, s.query)
 	if s.conn.countRows != nil && strings.Contains(strings.ToUpper(s.query), "COUNT(*)") {
@@ -1450,5 +1480,148 @@ func TestCollectMysqlRowsFormatsDateTime(t *testing.T) {
 	}
 	if !reflect.DeepEqual(res.Rows, wantRows) {
 		t.Fatalf("rows must be wall-clock formatted, got %+v", res.Rows)
+	}
+}
+
+// --- 主键探测的变体服务器回退:columns.COLUMN_KEY 缺失时逐层回退 ---
+
+// TestTableColumnsWithPKFallsBackToStatistics 复现用户报障:部分变体服务器
+// (分片代理/OceanBase 等)information_schema.columns 的 COLUMN_KEY 恒为空,
+// 有主键的表被误判为无主键、编辑被拒。此时应回退 information_schema.statistics
+// 的 PRIMARY 索引探测,并把 is_in_primary_key 角标一并回填。
+func TestTableColumnsWithPKFallsBackToStatistics(t *testing.T) {
+	conn := &fakeMysqlDrvConn{
+		colsByTable: map[string][][2]string{
+			"msms.msms_silent_config": {{"id", ""}, {"province_id", ""}, {"device_name", ""}},
+		},
+		statByTable: map[string][][]driver.Value{
+			"msms.msms_silent_config": {
+				{"uk_prov_op", "province_id", int64(1), int64(1)},
+				{"PRIMARY", "id", int64(0), int64(1)},
+			},
+		},
+	}
+	c, _ := newFakeMysqlClient(t, conn)
+	cols, pk, err := c.tableColumnsWithPK(context.Background(), c.db, "msms", "msms_silent_config")
+	if err != nil {
+		t.Fatalf("tableColumnsWithPK: %v", err)
+	}
+	if len(pk) != 1 || pk[0] != "id" {
+		t.Fatalf("fallback must find PRIMARY from statistics, got pk=%v", pk)
+	}
+	if len(cols) != 3 || !cols[0].IsInPrimaryKey {
+		t.Fatalf("is_in_primary_key must be backfilled, got %+v", cols)
+	}
+	if conn.statQueries == 0 {
+		t.Fatal("statistics fallback query must be issued when COLUMN_KEY is empty")
+	}
+}
+
+// TestTableColumnsWithPKCompositePKFromStatistics 组合主键按 seq_in_index 序
+// 返回,顺序即 WHERE 列序,不能乱。
+func TestTableColumnsWithPKCompositePKFromStatistics(t *testing.T) {
+	conn := &fakeMysqlDrvConn{
+		colsByTable: map[string][][2]string{
+			"app.t": {{"order_no", ""}, {"user_id", ""}, {"amount", ""}},
+		},
+		statByTable: map[string][][]driver.Value{
+			"app.t": {
+				{"PRIMARY", "user_id", int64(0), int64(1)},
+				{"PRIMARY", "order_no", int64(0), int64(2)},
+			},
+		},
+	}
+	c, _ := newFakeMysqlClient(t, conn)
+	_, pk, err := c.tableColumnsWithPK(context.Background(), c.db, "app", "t")
+	if err != nil {
+		t.Fatalf("tableColumnsWithPK: %v", err)
+	}
+	if len(pk) != 2 || pk[0] != "user_id" || pk[1] != "order_no" {
+		t.Fatalf("composite pk must follow seq_in_index, got %v", pk)
+	}
+}
+
+// TestTableColumnsWithPKSkipsStatisticsWhenPRIPresent:COLUMN_KEY 可信
+// (原生 MySQL/TiDB)时不得多发 statistics/SHOW INDEX 查询。
+func TestTableColumnsWithPKSkipsStatisticsWhenPRIPresent(t *testing.T) {
+	conn := &fakeMysqlDrvConn{
+		colsByTable: map[string][][2]string{
+			"msms.msms_silent_config": {{"id", "PRI"}, {"province_id", ""}},
+		},
+	}
+	c, _ := newFakeMysqlClient(t, conn)
+	_, pk, err := c.tableColumnsWithPK(context.Background(), c.db, "msms", "msms_silent_config")
+	if err != nil {
+		t.Fatalf("tableColumnsWithPK: %v", err)
+	}
+	if len(pk) != 1 || pk[0] != "id" {
+		t.Fatalf("pk must come from COLUMN_KEY, got %v", pk)
+	}
+	if conn.statQueries != 0 || conn.showIndexQueries != 0 {
+		t.Fatalf("no fallback queries expected, statistics=%d showIndex=%d", conn.statQueries, conn.showIndexQueries)
+	}
+}
+
+// TestTableColumnsWithPKFallsBackToShowIndex:连 statistics 也为空的代理,
+// 第三层回退 SHOW INDEX(协议级实现最普遍)。
+func TestTableColumnsWithPKFallsBackToShowIndex(t *testing.T) {
+	conn := &fakeMysqlDrvConn{
+		colsByTable: map[string][][2]string{
+			"msms.msms_silent_config": {{"id", ""}, {"province_id", ""}},
+		},
+		showIndexRows: &fakeMysqlDrvRows{
+			// SHOW INDEX 的真实列序:Table, Non_unique, Key_name, Seq_in_index, Column_name, ...
+			cols: []string{"Table", "Non_unique", "Key_name", "Seq_in_index", "Column_name"},
+			vals: [][]driver.Value{
+				{"msms_silent_config", int64(0), "PRIMARY", int64(1), "id"},
+			},
+		},
+	}
+	c, _ := newFakeMysqlClient(t, conn)
+	_, pk, err := c.tableColumnsWithPK(context.Background(), c.db, "msms", "msms_silent_config")
+	if err != nil {
+		t.Fatalf("tableColumnsWithPK: %v", err)
+	}
+	if len(pk) != 1 || pk[0] != "id" {
+		t.Fatalf("show index fallback must find PRIMARY, got pk=%v", pk)
+	}
+	if conn.showIndexQueries == 0 {
+		t.Fatal("SHOW INDEX fallback must be issued when statistics is empty")
+	}
+}
+
+// TestTableColumnsWithPKNoPrimaryKeyAnywhere 三层都拿不到主键时维持原语义
+// (空 pk → 上层按无主键拒绝编辑),不得误报。
+func TestTableColumnsWithPKNoPrimaryKeyAnywhere(t *testing.T) {
+	conn := &fakeMysqlDrvConn{
+		colsByTable: map[string][][2]string{
+			"msms.msms_silent_config": {{"id", ""}, {"province_id", ""}},
+		},
+	}
+	c, _ := newFakeMysqlClient(t, conn)
+	_, pk, err := c.tableColumnsWithPK(context.Background(), c.db, "msms", "msms_silent_config")
+	if err != nil {
+		t.Fatalf("tableColumnsWithPK: %v", err)
+	}
+	if len(pk) != 0 {
+		t.Fatalf("pk must stay empty, got %v", pk)
+	}
+}
+
+// TestValidateCellEditRejectsEmptyDatabase 复现控制台更新误报的第二层防线:
+// 语句未带库名前缀且连接未配置默认库时,空库名应得到明确的定位错误,
+// 而不是在 table_schema=” 上查完三层后误报「表无主键」。
+func TestValidateCellEditRejectsEmptyDatabase(t *testing.T) {
+	c, _ := newFakeMysqlClient(t, &fakeMysqlDrvConn{})
+	err := c.validateCellEdit(context.Background(), "", "msms_silent_config",
+		[]model.MysqlCellValue{{Column: "id", Value: strPtrOf("1")}})
+	if err == nil {
+		t.Fatal("empty database must be rejected")
+	}
+	if strings.Contains(err.Error(), "表无主键") {
+		t.Fatalf("must not mislead with 表无主键, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "库") {
+		t.Fatalf("error must mention database, got %v", err)
 	}
 }
