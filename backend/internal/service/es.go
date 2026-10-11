@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -63,6 +64,9 @@ type EsClient struct {
 	// docBasesTyped 标记该基段必须走 typed 路径(6.x/5.6:/{index}/{type}/{id}...)。
 	docBases      map[string]string
 	docBasesTyped map[string]bool
+	// healthy 记忆上次成功响应的 Hosts 下标:多地址容灾时后续请求从该节点
+	// 起试,首节点宕机不再让每个请求都先吃一次连接失败。
+	healthy atomic.Int32
 }
 
 // compile-time proof that EsClient implements the ES data source.
@@ -139,13 +143,21 @@ func (c *EsClient) applyAuth(req *http.Request) {
 	}
 }
 
-// doRequest performs one REST call, trying the configured hosts in order
-// (first responsive host wins for that request). A non-nil body is sent as
-// application/json. Returns the status and body of the first server response
-// (HTTP errors are responses, not transport failures).
+// doRequest performs one REST call, trying the configured hosts starting from
+// the last healthy one (remembered across requests; first request starts at
+// host 0). A non-nil body is sent as application/json. Returns the status and
+// body of the first server response (HTTP errors are responses, not transport
+// failures).
 func (c *EsClient) doRequest(ctx context.Context, method, path string, body []byte) (int, []byte, error) {
+	n := len(c.cfg.Hosts)
+	if n == 0 {
+		return 0, nil, errors.New("没有可用节点")
+	}
+	start := int(c.healthy.Load()) % n
 	var lastErr error
-	for _, host := range c.cfg.Hosts {
+	for i := 0; i < n; i++ {
+		idx := (start + i) % n
+		host := c.cfg.Hosts[idx]
 		u := fmt.Sprintf("%s://%s%s", c.scheme, host, path)
 		var rd io.Reader
 		if body != nil {
@@ -165,6 +177,7 @@ func (c *EsClient) doRequest(ctx context.Context, method, path string, body []by
 			lastErr = err
 			continue
 		}
+		c.healthy.Store(int32(idx))
 		b, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		return resp.StatusCode, b, nil

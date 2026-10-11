@@ -265,6 +265,9 @@ export interface Api {
   esMapping?(req: EsMappingRequest): Promise<EsColumn[]>
   esPageRows?(req: EsPageRowsRequest): Promise<EsPageRowsResult>
   esExecute?(req: EsExecuteRequest): Promise<EsStatementResult[]>
+  // 显式刷新索引(POST /{index}/_refresh):EsTableBrowser 手动刷新与写后
+  // 自动刷新共用;best-effort 调用,失败被调用方吞掉。
+  esRefreshIndex?(req: { connection_id: string; index: string }): Promise<void>
   esGetDoc?(req: EsGetDocRequest): Promise<EsDoc>
   esPutDoc?(req: EsPutDocRequest): Promise<void>
   esUpdateCell?(req: EsCellUpdateRequest): Promise<void>
@@ -304,426 +307,157 @@ export interface Api {
   hiveExportTable?(req: HiveExportTableRequest): Promise<HiveExportTableResult>
 }
 
+// WailsApi 所有方法的统一转发收口:全文件唯一的类型断言集中在这里。
+// 必须经形状断言而不能直接按生成签名调用,因为 wailsjs 生成的 App.d.ts 与实际
+// 运行时形状存在两类系统性差异:
+// 1. 导出名与本地方法名并不一致(如 testEsConnection→TestESConnection、
+//    esDeleteTemplate→DeleteEsTemplate),且历史上部分绑定尚未由 wails
+//    generate 生成,声明文件中根本没有对应导出;
+// 2. 已生成签名的出入参是 wailsjs models/backend 命名空间里的另一套平行类型,
+//    与 ./types 的领域类型结构不兼容(Go []byte 生成侧是 number[],经 JSON
+//    传输实为 base64 string,见类定义上方的说明),直传无法通过类型检查。
+// 因此把 App 模块一次性断言为「方法名 → 任意参数 → Promise」的宽松形状后按名
+// 调用;入参与返回值的领域类型约束由 Api 接口签名承担,断言风险集中在此一处。
+function call<T>(name: string, ...args: unknown[]): Promise<T> {
+  const fn = (App as unknown as Record<string, (...a: unknown[]) => Promise<T>>)[name]
+  return fn(...args)
+}
+
 // The Wails binding generator models Go `[]byte` fields as `number[]`, but
 // over JSON the transport delivers them as base64 strings. The backend model
 // therefore exposes Message.Key/Value and Header.Value as `string` so the
 // wire format matches our domain types and text (e.g. UTF-8 Chinese) is
 // delivered verbatim instead of base64-encoded.
 export class WailsApi implements Api {
-  createConnection(conn: Connection): Promise<Connection> {
-    return App.CreateConnection(conn as unknown as never) as unknown as Promise<Connection>
-  }
-  updateConnection(req: UpdateConnectionRequest): Promise<Connection> {
-    // App.UpdateConnection 由 wails generate 生成绑定;生成前先对模块断言,
-    // 不手改自动生成的 wailsjs 声明。
-    return (App as unknown as { UpdateConnection: (req: unknown) => Promise<unknown> }).UpdateConnection(req) as unknown as Promise<Connection>
-  }
-  listConnections(): Promise<Connection[]> {
-    return App.ListConnections() as unknown as Promise<Connection[]>
-  }
-  getConnection(id: string): Promise<Connection> {
-    return App.GetConnection(id) as unknown as Promise<Connection>
-  }
-  deleteConnection(id: string): Promise<void> {
-    return App.DeleteConnection(id)
-  }
-  // 侧栏连接排序持久化:Wails 绑定 ReorderConnections 由主会话稍后重生成,
-  // 先对模块形状断言,生成后签名一致无需改动。
-  reorderConnections(ids: string[]): Promise<void> {
-    return (App as unknown as { ReorderConnections: (ids: string[]) => Promise<void> }).ReorderConnections(ids)
-  }
-  testConnection(cfg: KafkaConfig): Promise<void> {
-    return App.TestConnection(cfg as unknown as never) as unknown as Promise<void>
-  }
-  connect(id: string): Promise<void> {
-    return App.Connect(id)
-  }
-  disconnect(id: string): Promise<void> {
-    return App.Disconnect(id)
-  }
-  listTopics(id: string): Promise<Topic[]> {
-    return App.ListTopics(id) as unknown as Promise<Topic[]>
-  }
-  describeTopic(id: string, topic: string): Promise<TopicDetail> {
-    return App.DescribeTopic(id, topic) as unknown as Promise<TopicDetail>
-  }
-  alterTopicConfig(req: AlterTopicConfigRequest): Promise<void> {
-    return App.AlterTopicConfig(req as unknown as never) as unknown as Promise<void>
-  }
-  alterTopicPartitions(req: AlterTopicPartitionsRequest): Promise<void> {
-    return App.AlterTopicPartitions(req as unknown as never) as unknown as Promise<void>
-  }
-  getTopicMessageCounts(id: string, topics: string[]): Promise<Record<string, TopicMessageCounts>> {
-    return App.GetTopicMessageCounts(id, topics) as unknown as Promise<Record<string, TopicMessageCounts>>
-  }
-  describeCluster(id: string): Promise<ClusterHealth> {
-    return App.DescribeCluster(id) as unknown as Promise<ClusterHealth>
-  }
-  listConsumerGroups(id: string): Promise<ConsumerGroup[]> {
-    return App.ListConsumerGroups(id) as unknown as Promise<ConsumerGroup[]>
-  }
-  describeGroup(id: string, group: string): Promise<GroupDetail> {
-    return App.DescribeGroup(id, group) as unknown as Promise<GroupDetail>
-  }
-  createTopic(req: CreateTopicRequest): Promise<void> {
-    return App.CreateTopic(req) as unknown as Promise<void>
-  }
-  deleteTopic(req: DeleteTopicRequest): Promise<void> {
-    return App.DeleteTopic(req) as unknown as Promise<void>
-  }
-  deleteTopics(req: DeleteTopicsRequest): Promise<TopicDeleteResult[]> {
-    return App.DeleteTopics(req as unknown as never) as unknown as Promise<TopicDeleteResult[]>
-  }
-  deleteConsumerGroup(req: DeleteConsumerGroupRequest): Promise<void> {
-    return App.DeleteConsumerGroup(req) as unknown as Promise<void>
-  }
-  consumeMessages(req: ConsumeRequest): Promise<Message[]> {
-    return App.ConsumeMessages(req) as unknown as Promise<Message[]>
-  }
-  consumeMessagesByTimestamp(req: ConsumeRequest): Promise<Message[]> {
-    return App.ConsumeMessagesByTimestamp(req) as unknown as Promise<Message[]>
-  }
-  getPartitionLag(id: string, topic: string, group: string): Promise<Record<number, number>> {
-    return App.GetPartitionLag(id, topic, group)
-  }
-  listActiveProducers(req: ActiveMembersRequest): Promise<ActiveProducer[]> {
-    return App.ListActiveProducers(req) as unknown as Promise<ActiveProducer[]>
-  }
-  listActiveConsumers(req: ActiveMembersRequest): Promise<ActiveConsumer[]> {
-    return App.ListActiveConsumers(req) as unknown as Promise<ActiveConsumer[]>
-  }
-  resetConsumerGroupOffset(req: ResetOffsetRequest): Promise<void> {
-    return App.ResetConsumerGroupOffset(req)
-  }
-  previewResetOffset(req: PreviewOffsetRequest): Promise<PreviewOffsetMap> {
-    return App.PreviewResetOffset(req) as unknown as Promise<PreviewOffsetMap>
-  }
-  produceMessage(req: ProduceRequest): Promise<void> {
-    return App.ProduceMessage(req)
-  }
-  produceMessages(req: BatchProduceRequest): Promise<ProduceResult[]> {
-    return App.ProduceMessages(req as unknown as never) as unknown as Promise<ProduceResult[]>
-  }
-  listAudit(limit?: number): Promise<AuditEntry[]> {
-    return App.ListAudit(limit ?? 200) as unknown as Promise<AuditEntry[]>
-  }
-  saveTextFile(req: SaveTextFileRequest): Promise<string> {
-    return App.SaveTextFile(req as unknown as never) as unknown as Promise<string>
-  }
-  checkUpdate(req: UpdateCheckRequest): Promise<UpdateCheckResult> {
-    return App.CheckUpdate(req as unknown as never) as unknown as Promise<UpdateCheckResult>
-  }
-  downloadUpdate(req: UpdateDownloadRequest): Promise<void> {
-    return App.DownloadUpdate(req as unknown as never) as unknown as Promise<void>
-  }
-  applyUpdate(req: ApplyUpdateRequest): Promise<void> {
-    return App.ApplyUpdate(req as unknown as never) as unknown as Promise<void>
-  }
-  updateProgress(): Promise<UpdateProgressInfo> {
-    return App.UpdateProgress() as unknown as Promise<UpdateProgressInfo>
-  }
-  openURL(url: string): Promise<void> {
-    return App.OpenURL(url) as unknown as Promise<void>
-  }
-  testRedisConnection(cfg: RedisConfigShape): Promise<void> {
-    return App.TestRedisConnection(cfg as unknown as never) as unknown as Promise<void>
-  }
-  listRedisDBs(id: string): Promise<RedisDBInfo[]> {
-    return App.ListRedisDBs(id) as unknown as Promise<RedisDBInfo[]>
-  }
-  redisScan(req: RedisScanRequest): Promise<RedisScanResult> {
-    return App.RedisScan(req as unknown as never) as unknown as Promise<RedisScanResult>
-  }
-  redisGetKey(req: RedisKeyRequest): Promise<RedisValue> {
-    return App.RedisGetKey(req as unknown as never) as unknown as Promise<RedisValue>
-  }
-  redisRenameKey(req: RedisKeyRequest): Promise<void> {
-    return App.RedisRenameKey(req as unknown as never) as unknown as Promise<void>
-  }
-  redisDeleteKeys(req: RedisDeleteKeysRequest): Promise<number> {
-    return App.RedisDeleteKeys(req as unknown as never) as unknown as Promise<number>
-  }
-  redisSetTTL(req: RedisKeyRequest): Promise<void> {
-    return App.RedisSetTTL(req as unknown as never) as unknown as Promise<void>
-  }
-  redisSetString(req: RedisSetStringRequest): Promise<void> {
-    return App.RedisSetString(req as unknown as never) as unknown as Promise<void>
-  }
-  redisFlushDB(req: RedisFlushRequest): Promise<void> {
-    return App.RedisFlushDB(req as unknown as never) as unknown as Promise<void>
-  }
-  redisFlushAll(req: RedisFlushRequest): Promise<void> {
-    return App.RedisFlushAll(req as unknown as never) as unknown as Promise<void>
-  }
-  redisServerInfo(id: string): Promise<RedisServerInfo> {
-    return App.RedisServerInfo(id) as unknown as Promise<RedisServerInfo>
-  }
-  // 以下集合编辑 API 的后端绑定尚未由 wails generate 生成,先对模块形状断言,
-  // 待主会话生成绑定后即可直接调用。
-  redisHashSetField(req: RedisHashSetFieldRequest): Promise<void> {
-    return (App as unknown as { RedisHashSetField: (req: never) => Promise<void> }).RedisHashSetField(req as unknown as never)
-  }
-  redisHashDeleteField(req: RedisHashDeleteFieldRequest): Promise<void> {
-    return (App as unknown as { RedisHashDeleteField: (req: never) => Promise<void> }).RedisHashDeleteField(req as unknown as never)
-  }
-  redisListSetIndex(req: RedisListSetIndexRequest): Promise<void> {
-    return (App as unknown as { RedisListSetIndex: (req: never) => Promise<void> }).RedisListSetIndex(req as unknown as never)
-  }
-  redisListPush(req: RedisListPushRequest): Promise<void> {
-    return (App as unknown as { RedisListPush: (req: never) => Promise<void> }).RedisListPush(req as unknown as never)
-  }
-  redisListDeleteIndex(req: RedisListDeleteIndexRequest): Promise<void> {
-    return (App as unknown as { RedisListDeleteIndex: (req: never) => Promise<void> }).RedisListDeleteIndex(req as unknown as never)
-  }
-  redisSetAdd(req: RedisSetAddRequest): Promise<void> {
-    return (App as unknown as { RedisSetAdd: (req: never) => Promise<void> }).RedisSetAdd(req as unknown as never)
-  }
-  redisSetRemove(req: RedisSetRemoveRequest): Promise<void> {
-    return (App as unknown as { RedisSetRemove: (req: never) => Promise<void> }).RedisSetRemove(req as unknown as never)
-  }
-  redisZSetAdd(req: RedisZSetAddRequest): Promise<void> {
-    return (App as unknown as { RedisZSetAdd: (req: never) => Promise<void> }).RedisZSetAdd(req as unknown as never)
-  }
-  redisZSetRemove(req: RedisZSetRemoveRequest): Promise<void> {
-    return (App as unknown as { RedisZSetRemove: (req: never) => Promise<void> }).RedisZSetRemove(req as unknown as never)
-  }
-  listSavedQueries(req: ListSavedQueriesRequest): Promise<SavedQuery[]> {
-    return App.ListSavedQueries(req as unknown as never) as unknown as Promise<SavedQuery[]>
-  }
-  saveSavedQuery(req: SaveSavedQueryRequest): Promise<SavedQuery> {
-    return App.SaveSavedQuery(req as unknown as never) as unknown as Promise<SavedQuery>
-  }
-  updateSavedQuery(req: UpdateSavedQueryRequest): Promise<SavedQuery> {
-    return App.UpdateSavedQuery(req as unknown as never) as unknown as Promise<SavedQuery>
-  }
-  deleteSavedQuery(req: DeleteSavedQueryRequest): Promise<void> {
-    return App.DeleteSavedQuery(req as unknown as never) as unknown as Promise<void>
-  }
-  // 以下 ClickHouse 与驱动管理 API 的后端绑定尚未由 wails generate 生成,
-  // 先对模块形状断言,待主会话生成绑定后即可直接调用。
-  testCHConnection(cfg: CHConfigShape): Promise<void> {
-    return (App as unknown as { TestCHConnection: (cfg: never) => Promise<void> }).TestCHConnection(cfg as unknown as never)
-  }
-  listCHDatabases(id: string): Promise<string[]> {
-    return (App as unknown as { ListCHDatabases: (id: string) => Promise<string[]> }).ListCHDatabases(id) as unknown as Promise<string[]>
-  }
-  listCHTables(req: CHListTablesRequest): Promise<CHTableInfo[]> {
-    return (App as unknown as { ListCHTables: (req: never) => Promise<CHTableInfo[]> }).ListCHTables(req as unknown as never)
-  }
-  chPageRows(req: CHPageRowsRequest): Promise<CHPageRowsResult> {
-    return (App as unknown as { CHPageRows: (req: never) => Promise<CHPageRowsResult> }).CHPageRows(req as unknown as never)
-  }
-  chTruncateTable(req: CHTruncateTableRequest): Promise<void> {
-    return (App as unknown as { CHTruncateTable: (req: never) => Promise<void> }).CHTruncateTable(req as unknown as never)
-  }
-  // 按行删除:Wails 绑定由主会话稍后重生成,先对模块形状断言。
-  chPreviewDeleteRow(req: CHDeleteRowRequest): Promise<CHDeleteRowPreview> {
-    return (App as unknown as { CHPreviewDeleteRow: (req: never) => Promise<CHDeleteRowPreview> }).CHPreviewDeleteRow(req as unknown as never)
-  }
-  chDeleteRow(req: CHDeleteRowRequest): Promise<void> {
-    return (App as unknown as { CHDeleteRow: (req: never) => Promise<void> }).CHDeleteRow(req as unknown as never)
-  }
-  chExecute(req: CHExecuteRequest): Promise<CHStatementResult[]> {
-    return (App as unknown as { CHExecute: (req: never) => Promise<CHStatementResult[]> }).CHExecute(req as unknown as never)
-  }
-  listDrivers(): Promise<DriverInfo[]> {
-    return (App as unknown as { ListDrivers: () => Promise<DriverInfo[]> }).ListDrivers() as unknown as Promise<DriverInfo[]>
-  }
-  // 以下 MySQL/TiDB API 的后端绑定尚未由 wails generate 生成,先对模块形状
-  // 断言,待主会话生成绑定后即可直接调用(接口侧为可选成员,fake 无需实现)。
-  testMysqlConnection(cfg: MysqlConfigShape): Promise<void> {
-    return (App as unknown as { TestMysqlConnection: (cfg: never) => Promise<void> }).TestMysqlConnection(cfg as unknown as never)
-  }
-  listMysqlDatabases(id: string): Promise<string[]> {
-    return (App as unknown as { ListMysqlDatabases: (id: string) => Promise<string[]> }).ListMysqlDatabases(id) as unknown as Promise<string[]>
-  }
-  listMysqlTables(req: MysqlListTablesRequest): Promise<MysqlTableInfo[]> {
-    return (App as unknown as { ListMysqlTables: (req: never) => Promise<MysqlTableInfo[]> }).ListMysqlTables(req as unknown as never)
-  }
-  mysqlPageRows(req: MysqlPageRowsRequest): Promise<MysqlPageRowsResult> {
-    return (App as unknown as { MysqlPageRows: (req: never) => Promise<MysqlPageRowsResult> }).MysqlPageRows(req as unknown as never)
-  }
-  mysqlExecute(req: MysqlExecuteRequest): Promise<MysqlStatementResult[]> {
-    return (App as unknown as { MysqlExecute: (req: never) => Promise<MysqlStatementResult[]> }).MysqlExecute(req as unknown as never)
-  }
-  mysqlPreviewCellUpdate(req: MysqlCellUpdateRequest): Promise<MysqlCellUpdatePreview> {
-    return (App as unknown as { MysqlPreviewCellUpdate: (req: never) => Promise<MysqlCellUpdatePreview> }).MysqlPreviewCellUpdate(req as unknown as never)
-  }
-  mysqlUpdateCell(req: MysqlCellUpdateRequest): Promise<void> {
-    return (App as unknown as { MysqlUpdateCell: (req: never) => Promise<void> }).MysqlUpdateCell(req as unknown as never)
-  }
-  mysqlTruncateTable(req: MysqlTruncateTableRequest): Promise<void> {
-    return (App as unknown as { MysqlTruncateTable: (req: never) => Promise<void> }).MysqlTruncateTable(req as unknown as never)
-  }
-  // 按行删除:Wails 绑定由主会话稍后重生成,先对模块形状断言。
-  mysqlPreviewDeleteRow(req: MysqlDeleteRowRequest): Promise<MysqlDeleteRowPreview> {
-    return (App as unknown as { MysqlPreviewDeleteRow: (req: never) => Promise<MysqlDeleteRowPreview> }).MysqlPreviewDeleteRow(req as unknown as never)
-  }
-  mysqlDeleteRow(req: MysqlDeleteRowRequest): Promise<void> {
-    return (App as unknown as { MysqlDeleteRow: (req: never) => Promise<void> }).MysqlDeleteRow(req as unknown as never)
-  }
-  // 以下表级 DDL API 的 Wails 绑定已由 wails generate 生成;接口侧保留可选
-  // 成员(既有 fake 无需实现),运行期直接按生成签名调用。
-  mysqlDropTable(req: MysqlDropTableRequest): Promise<void> {
-    return (App as unknown as { MysqlDropTable: (req: never) => Promise<void> }).MysqlDropTable(req as unknown as never)
-  }
-  mysqlTableColumns(req: MysqlTableColumnsRequest): Promise<MysqlTableColumnsResult> {
-    return (App as unknown as { MysqlTableColumns: (req: never) => Promise<MysqlTableColumnsResult> }).MysqlTableColumns(req as unknown as never)
-  }
-  mysqlAlterTable(req: MysqlAlterTableRequest): Promise<void> {
-    return (App as unknown as { MysqlAlterTable: (req: never) => Promise<void> }).MysqlAlterTable(req as unknown as never)
-  }
-  mysqlExportTable(req: MysqlExportTableRequest): Promise<MysqlExportTableResult> {
-    return (App as unknown as { MysqlExportTable: (req: never) => Promise<MysqlExportTableResult> }).MysqlExportTable(req as unknown as never)
-  }
-  // 以下 PostgreSQL API 的后端绑定尚未由 wails generate 生成,先对模块形状
-  // 断言,待主会话生成绑定后即可直接调用(接口侧为可选成员,fake 无需实现)。
-  testPostgresConnection(cfg: PostgresConfigShape): Promise<void> {
-    return (App as unknown as { TestPostgresConnection: (cfg: never) => Promise<void> }).TestPostgresConnection(cfg as unknown as never)
-  }
-  listPostgresDatabases(id: string): Promise<string[]> {
-    return (App as unknown as { ListPostgresDatabases: (id: string) => Promise<string[]> }).ListPostgresDatabases(id) as unknown as Promise<string[]>
-  }
-  listPostgresSchemas(req: PostgresListSchemasRequest): Promise<string[]> {
-    return (App as unknown as { ListPostgresSchemas: (req: never) => Promise<string[]> }).ListPostgresSchemas(req as unknown as never) as unknown as Promise<string[]>
-  }
-  listPostgresTables(req: PostgresListTablesRequest): Promise<PostgresRelationInfo[]> {
-    return (App as unknown as { ListPostgresTables: (req: never) => Promise<PostgresRelationInfo[]> }).ListPostgresTables(req as unknown as never)
-  }
-  postgresPageRows(req: PostgresPageRowsRequest): Promise<PostgresPageRowsResult> {
-    return (App as unknown as { PostgresPageRows: (req: never) => Promise<PostgresPageRowsResult> }).PostgresPageRows(req as unknown as never)
-  }
-  postgresExecute(req: PostgresExecuteRequest): Promise<PostgresStatementResult[]> {
-    return (App as unknown as { PostgresExecute: (req: never) => Promise<PostgresStatementResult[]> }).PostgresExecute(req as unknown as never)
-  }
-  postgresTruncateTable(req: PostgresTruncateTableRequest): Promise<void> {
-    return (App as unknown as { PostgresTruncateTable: (req: never) => Promise<void> }).PostgresTruncateTable(req as unknown as never)
-  }
-  // 按行删除:Wails 绑定由主会话稍后重生成,先对模块形状断言。
-  postgresPreviewDeleteRow(req: PostgresDeleteRowRequest): Promise<PostgresDeleteRowPreview> {
-    return (App as unknown as { PostgresPreviewDeleteRow: (req: never) => Promise<PostgresDeleteRowPreview> }).PostgresPreviewDeleteRow(req as unknown as never)
-  }
-  postgresDeleteRow(req: PostgresDeleteRowRequest): Promise<void> {
-    return (App as unknown as { PostgresDeleteRow: (req: never) => Promise<void> }).PostgresDeleteRow(req as unknown as never)
-  }
-  postgresPreviewCellUpdate(req: PostgresCellUpdateRequest): Promise<PostgresCellUpdatePreview> {
-    return (App as unknown as { PostgresPreviewCellUpdate: (req: never) => Promise<PostgresCellUpdatePreview> }).PostgresPreviewCellUpdate(req as unknown as never)
-  }
-  postgresUpdateCell(req: PostgresCellUpdateRequest): Promise<void> {
-    return (App as unknown as { PostgresUpdateCell: (req: never) => Promise<void> }).PostgresUpdateCell(req as unknown as never)
-  }
-
-  // 以下 Elasticsearch API 的后端绑定尚未由 wails generate 生成,先对模块形状
-  // 断言,待主会话生成绑定后即可直接调用(接口侧为可选成员,fake 无需实现)。
-  testEsConnection(cfg: EsConfigShape): Promise<void> {
-    return (App as unknown as { TestESConnection: (cfg: never) => Promise<void> }).TestESConnection(cfg as unknown as never)
-  }
-  listEsIndices(id: string): Promise<EsIndexInfo[]> {
-    return (App as unknown as { ListESIndices: (id: string) => Promise<EsIndexInfo[]> }).ListESIndices(id) as unknown as Promise<EsIndexInfo[]>
-  }
-  esMapping(req: EsMappingRequest): Promise<EsColumn[]> {
-    return (App as unknown as { ESMapping: (req: never) => Promise<EsColumn[]> }).ESMapping(req as unknown as never)
-  }
-  esPageRows(req: EsPageRowsRequest): Promise<EsPageRowsResult> {
-    return (App as unknown as { ESPageRows: (req: never) => Promise<EsPageRowsResult> }).ESPageRows(req as unknown as never)
-  }
-  esExecute(req: EsExecuteRequest): Promise<EsStatementResult[]> {
-    return (App as unknown as { ESExecute: (req: never) => Promise<EsStatementResult[]> }).ESExecute(req as unknown as never)
-  }
-  esGetDoc(req: EsGetDocRequest): Promise<EsDoc> {
-    return (App as unknown as { ESGetDoc: (req: never) => Promise<EsDoc> }).ESGetDoc(req as unknown as never)
-  }
-  esPutDoc(req: EsPutDocRequest): Promise<void> {
-    return (App as unknown as { ESPutDoc: (req: never) => Promise<void> }).ESPutDoc(req as unknown as never)
-  }
-
-  esCreateDoc(req: EsCreateDocRequest): Promise<EsDoc> {
-    // ESCreateDoc 绑定尚未由 wailsjs 生成,先按模块形状断言直连(主控稍后
-    // 重生成,生成后签名一致无需改动)。
-    return (App as unknown as { ESCreateDoc: (req: never) => Promise<EsDoc> }).ESCreateDoc(req as unknown as never)
-  }
-  esUpdateCell(req: EsCellUpdateRequest): Promise<void> {
-    return (App as unknown as { ESUpdateCell: (req: never) => Promise<void> }).ESUpdateCell(req as unknown as never)
-  }
-  esDeleteDoc(req: EsDeleteDocRequest): Promise<void> {
-    return (App as unknown as { ESDeleteDoc: (req: never) => Promise<void> }).ESDeleteDoc(req as unknown as never)
-  }
-  esDeleteByQuery(req: EsDeleteByQueryRequest): Promise<number> {
-    return (App as unknown as { ESDeleteByQuery: (req: never) => Promise<number> }).ESDeleteByQuery(req as unknown as never)
-  }
-  // 以下 ES 集合编辑 API 的后端绑定尚未由 wails generate 生成,先对模块形状
-  // 断言,待主会话生成绑定后即可直接调用(接口侧为可选成员,fake 无需实现)。
-  esCreateIndex(req: EsCreateIndexRequest): Promise<void> {
-    return (App as unknown as { EsCreateIndex: (req: never) => Promise<void> }).EsCreateIndex(req as unknown as never)
-  }
-  esDeleteIndex(req: EsDeleteIndexRequest): Promise<void> {
-    return (App as unknown as { EsDeleteIndex: (req: never) => Promise<void> }).EsDeleteIndex(req as unknown as never)
-  }
-  esUpdateIndexSettings(req: EsUpdateIndexSettingsRequest): Promise<void> {
-    return (App as unknown as { EsUpdateIndexSettings: (req: never) => Promise<void> }).EsUpdateIndexSettings(req as unknown as never)
-  }
-  // esDeleteTemplate 的绑定已由 wailsjs 生成,直接调用。
-  esDeleteTemplate(req: EsDeleteTemplateRequest): Promise<void> {
-    return App.DeleteEsTemplate(req as unknown as never)
-  }
-  // 以下 ES 模板/监控 API:模板四个绑定已由 wailsjs 生成,直接调用;
-  // esClusterStats 绑定尚未生成,先对模块形状断言,待主会话生成绑定后即可
-  // 直接调用(接口侧为可选成员,fake 无需实现)。
-  listEsTemplates(id: string): Promise<EsTemplateInfo[]> {
-    return App.ListEsTemplates(id) as unknown as Promise<EsTemplateInfo[]>
-  }
-  getEsTemplate(req: EsGetTemplateRequest): Promise<EsTemplateContent> {
-    return App.GetEsTemplate(req as unknown as never) as unknown as Promise<EsTemplateContent>
-  }
-  putEsTemplate(req: EsPutTemplateRequest): Promise<void> {
-    return App.PutEsTemplate(req as unknown as never)
-  }
-  esClusterStats(req: EsClusterStatsRequest): Promise<EsClusterStats> {
-    return (App as unknown as { EsClusterStats: (req: never) => Promise<EsClusterStats> }).EsClusterStats(req as unknown as never)
-  }
-  // Hive 系列:后端绑定由主会话稍后 wails generate 重生成,先按模块形状断言。
-  testHiveConnection(cfg: HiveConfigShape): Promise<void> {
-    return (App as unknown as { TestHiveConnection: (cfg: never) => Promise<void> }).TestHiveConnection(cfg as unknown as never)
-  }
-  listHiveDatabases(id: string): Promise<string[]> {
-    return (App as unknown as { ListHiveDatabases: (id: string) => Promise<string[]> }).ListHiveDatabases(id)
-  }
-  listHiveTables(req: HiveListTablesRequest): Promise<HiveTableInfo[]> {
-    return (App as unknown as { ListHiveTables: (req: never) => Promise<HiveTableInfo[]> }).ListHiveTables(req as unknown as never)
-  }
-  hivePageRows(req: HivePageRowsRequest): Promise<HivePageRowsResult> {
-    return (App as unknown as { HivePageRows: (req: never) => Promise<HivePageRowsResult> }).HivePageRows(req as unknown as never)
-  }
-  hiveExecute(req: HiveExecuteRequest): Promise<HiveStatementResult[]> {
-    return (App as unknown as { HiveExecute: (req: never) => Promise<HiveStatementResult[]> }).HiveExecute(req as unknown as never)
-  }
-  hivePreviewCellUpdate(req: HiveCellUpdateRequest): Promise<HiveCellUpdatePreview> {
-    return (App as unknown as { HivePreviewCellUpdate: (req: never) => Promise<HiveCellUpdatePreview> }).HivePreviewCellUpdate(req as unknown as never)
-  }
-  hiveUpdateCell(req: HiveCellUpdateRequest): Promise<void> {
-    return (App as unknown as { HiveUpdateCell: (req: never) => Promise<void> }).HiveUpdateCell(req as unknown as never)
-  }
-  hivePreviewDeleteRow(req: HiveDeleteRowRequest): Promise<HiveDeleteRowPreview> {
-    return (App as unknown as { HivePreviewDeleteRow: (req: never) => Promise<HiveDeleteRowPreview> }).HivePreviewDeleteRow(req as unknown as never)
-  }
-  hiveDeleteRow(req: HiveDeleteRowRequest): Promise<void> {
-    return (App as unknown as { HiveDeleteRow: (req: never) => Promise<void> }).HiveDeleteRow(req as unknown as never)
-  }
-  hiveTruncateTable(req: HiveTruncateTableRequest): Promise<void> {
-    return (App as unknown as { HiveTruncateTable: (req: never) => Promise<void> }).HiveTruncateTable(req as unknown as never)
-  }
-  hiveDropTable(req: HiveDropTableRequest): Promise<void> {
-    return (App as unknown as { HiveDropTable: (req: never) => Promise<void> }).HiveDropTable(req as unknown as never)
-  }
-  hiveTableColumns(req: HiveTableColumnsRequest): Promise<HiveTableColumnsResult> {
-    return (App as unknown as { HiveTableColumns: (req: never) => Promise<HiveTableColumnsResult> }).HiveTableColumns(req as unknown as never)
-  }
-  hiveAlterTable(req: HiveAlterTableRequest): Promise<void> {
-    return (App as unknown as { HiveAlterTable: (req: never) => Promise<void> }).HiveAlterTable(req as unknown as never)
-  }
-  hiveExportTable(req: HiveExportTableRequest): Promise<HiveExportTableResult> {
-    return (App as unknown as { HiveExportTable: (req: never) => Promise<HiveExportTableResult> }).HiveExportTable(req as unknown as never)
-  }
+  createConnection = (conn: Connection): Promise<Connection> => call('CreateConnection', conn)
+  updateConnection = (req: UpdateConnectionRequest): Promise<Connection> => call('UpdateConnection', req)
+  listConnections = (): Promise<Connection[]> => call('ListConnections')
+  getConnection = (id: string): Promise<Connection> => call('GetConnection', id)
+  deleteConnection = (id: string): Promise<void> => call('DeleteConnection', id)
+  reorderConnections = (ids: string[]): Promise<void> => call('ReorderConnections', ids)
+  testConnection = (cfg: KafkaConfig): Promise<void> => call('TestConnection', cfg)
+  connect = (id: string): Promise<void> => call('Connect', id)
+  disconnect = (id: string): Promise<void> => call('Disconnect', id)
+  listTopics = (id: string): Promise<Topic[]> => call('ListTopics', id)
+  describeTopic = (id: string, topic: string): Promise<TopicDetail> => call('DescribeTopic', id, topic)
+  alterTopicConfig = (req: AlterTopicConfigRequest): Promise<void> => call('AlterTopicConfig', req)
+  alterTopicPartitions = (req: AlterTopicPartitionsRequest): Promise<void> => call('AlterTopicPartitions', req)
+  getTopicMessageCounts = (id: string, topics: string[]): Promise<Record<string, TopicMessageCounts>> => call('GetTopicMessageCounts', id, topics)
+  describeCluster = (id: string): Promise<ClusterHealth> => call('DescribeCluster', id)
+  listConsumerGroups = (id: string): Promise<ConsumerGroup[]> => call('ListConsumerGroups', id)
+  describeGroup = (id: string, group: string): Promise<GroupDetail> => call('DescribeGroup', id, group)
+  createTopic = (req: CreateTopicRequest): Promise<void> => call('CreateTopic', req)
+  deleteTopic = (req: DeleteTopicRequest): Promise<void> => call('DeleteTopic', req)
+  deleteTopics = (req: DeleteTopicsRequest): Promise<TopicDeleteResult[]> => call('DeleteTopics', req)
+  deleteConsumerGroup = (req: DeleteConsumerGroupRequest): Promise<void> => call('DeleteConsumerGroup', req)
+  consumeMessages = (req: ConsumeRequest): Promise<Message[]> => call('ConsumeMessages', req)
+  consumeMessagesByTimestamp = (req: ConsumeRequest): Promise<Message[]> => call('ConsumeMessagesByTimestamp', req)
+  getPartitionLag = (id: string, topic: string, group: string): Promise<Record<number, number>> => call('GetPartitionLag', id, topic, group)
+  listActiveProducers = (req: ActiveMembersRequest): Promise<ActiveProducer[]> => call('ListActiveProducers', req)
+  listActiveConsumers = (req: ActiveMembersRequest): Promise<ActiveConsumer[]> => call('ListActiveConsumers', req)
+  resetConsumerGroupOffset = (req: ResetOffsetRequest): Promise<void> => call('ResetConsumerGroupOffset', req)
+  previewResetOffset = (req: PreviewOffsetRequest): Promise<PreviewOffsetMap> => call('PreviewResetOffset', req)
+  produceMessage = (req: ProduceRequest): Promise<void> => call('ProduceMessage', req)
+  produceMessages = (req: BatchProduceRequest): Promise<ProduceResult[]> => call('ProduceMessages', req)
+  listAudit = (limit?: number): Promise<AuditEntry[]> => call('ListAudit', limit ?? 200)
+  saveTextFile = (req: SaveTextFileRequest): Promise<string> => call('SaveTextFile', req)
+  checkUpdate = (req: UpdateCheckRequest): Promise<UpdateCheckResult> => call('CheckUpdate', req)
+  downloadUpdate = (req: UpdateDownloadRequest): Promise<void> => call('DownloadUpdate', req)
+  applyUpdate = (req: ApplyUpdateRequest): Promise<void> => call('ApplyUpdate', req)
+  updateProgress = (): Promise<UpdateProgressInfo> => call('UpdateProgress')
+  openURL = (url: string): Promise<void> => call('OpenURL', url)
+  testRedisConnection = (cfg: RedisConfigShape): Promise<void> => call('TestRedisConnection', cfg)
+  listRedisDBs = (id: string): Promise<RedisDBInfo[]> => call('ListRedisDBs', id)
+  redisScan = (req: RedisScanRequest): Promise<RedisScanResult> => call('RedisScan', req)
+  redisGetKey = (req: RedisKeyRequest): Promise<RedisValue> => call('RedisGetKey', req)
+  redisRenameKey = (req: RedisKeyRequest): Promise<void> => call('RedisRenameKey', req)
+  redisDeleteKeys = (req: RedisDeleteKeysRequest): Promise<number> => call('RedisDeleteKeys', req)
+  redisSetTTL = (req: RedisKeyRequest): Promise<void> => call('RedisSetTTL', req)
+  redisSetString = (req: RedisSetStringRequest): Promise<void> => call('RedisSetString', req)
+  redisFlushDB = (req: RedisFlushRequest): Promise<void> => call('RedisFlushDB', req)
+  redisFlushAll = (req: RedisFlushRequest): Promise<void> => call('RedisFlushAll', req)
+  redisServerInfo = (id: string): Promise<RedisServerInfo> => call('RedisServerInfo', id)
+  redisHashSetField = (req: RedisHashSetFieldRequest): Promise<void> => call('RedisHashSetField', req)
+  redisHashDeleteField = (req: RedisHashDeleteFieldRequest): Promise<void> => call('RedisHashDeleteField', req)
+  redisListSetIndex = (req: RedisListSetIndexRequest): Promise<void> => call('RedisListSetIndex', req)
+  redisListPush = (req: RedisListPushRequest): Promise<void> => call('RedisListPush', req)
+  redisListDeleteIndex = (req: RedisListDeleteIndexRequest): Promise<void> => call('RedisListDeleteIndex', req)
+  redisSetAdd = (req: RedisSetAddRequest): Promise<void> => call('RedisSetAdd', req)
+  redisSetRemove = (req: RedisSetRemoveRequest): Promise<void> => call('RedisSetRemove', req)
+  redisZSetAdd = (req: RedisZSetAddRequest): Promise<void> => call('RedisZSetAdd', req)
+  redisZSetRemove = (req: RedisZSetRemoveRequest): Promise<void> => call('RedisZSetRemove', req)
+  listSavedQueries = (req: ListSavedQueriesRequest): Promise<SavedQuery[]> => call('ListSavedQueries', req)
+  saveSavedQuery = (req: SaveSavedQueryRequest): Promise<SavedQuery> => call('SaveSavedQuery', req)
+  updateSavedQuery = (req: UpdateSavedQueryRequest): Promise<SavedQuery> => call('UpdateSavedQuery', req)
+  deleteSavedQuery = (req: DeleteSavedQueryRequest): Promise<void> => call('DeleteSavedQuery', req)
+  testCHConnection = (cfg: CHConfigShape): Promise<void> => call('TestCHConnection', cfg)
+  listCHDatabases = (id: string): Promise<string[]> => call('ListCHDatabases', id)
+  listCHTables = (req: CHListTablesRequest): Promise<CHTableInfo[]> => call('ListCHTables', req)
+  chPageRows = (req: CHPageRowsRequest): Promise<CHPageRowsResult> => call('CHPageRows', req)
+  chTruncateTable = (req: CHTruncateTableRequest): Promise<void> => call('CHTruncateTable', req)
+  chPreviewDeleteRow = (req: CHDeleteRowRequest): Promise<CHDeleteRowPreview> => call('CHPreviewDeleteRow', req)
+  chDeleteRow = (req: CHDeleteRowRequest): Promise<void> => call('CHDeleteRow', req)
+  chExecute = (req: CHExecuteRequest): Promise<CHStatementResult[]> => call('CHExecute', req)
+  listDrivers = (): Promise<DriverInfo[]> => call('ListDrivers')
+  testMysqlConnection = (cfg: MysqlConfigShape): Promise<void> => call('TestMysqlConnection', cfg)
+  listMysqlDatabases = (id: string): Promise<string[]> => call('ListMysqlDatabases', id)
+  listMysqlTables = (req: MysqlListTablesRequest): Promise<MysqlTableInfo[]> => call('ListMysqlTables', req)
+  mysqlPageRows = (req: MysqlPageRowsRequest): Promise<MysqlPageRowsResult> => call('MysqlPageRows', req)
+  mysqlExecute = (req: MysqlExecuteRequest): Promise<MysqlStatementResult[]> => call('MysqlExecute', req)
+  mysqlPreviewCellUpdate = (req: MysqlCellUpdateRequest): Promise<MysqlCellUpdatePreview> => call('MysqlPreviewCellUpdate', req)
+  mysqlUpdateCell = (req: MysqlCellUpdateRequest): Promise<void> => call('MysqlUpdateCell', req)
+  mysqlTruncateTable = (req: MysqlTruncateTableRequest): Promise<void> => call('MysqlTruncateTable', req)
+  mysqlPreviewDeleteRow = (req: MysqlDeleteRowRequest): Promise<MysqlDeleteRowPreview> => call('MysqlPreviewDeleteRow', req)
+  mysqlDeleteRow = (req: MysqlDeleteRowRequest): Promise<void> => call('MysqlDeleteRow', req)
+  mysqlDropTable = (req: MysqlDropTableRequest): Promise<void> => call('MysqlDropTable', req)
+  mysqlTableColumns = (req: MysqlTableColumnsRequest): Promise<MysqlTableColumnsResult> => call('MysqlTableColumns', req)
+  mysqlAlterTable = (req: MysqlAlterTableRequest): Promise<void> => call('MysqlAlterTable', req)
+  mysqlExportTable = (req: MysqlExportTableRequest): Promise<MysqlExportTableResult> => call('MysqlExportTable', req)
+  testPostgresConnection = (cfg: PostgresConfigShape): Promise<void> => call('TestPostgresConnection', cfg)
+  listPostgresDatabases = (id: string): Promise<string[]> => call('ListPostgresDatabases', id)
+  listPostgresSchemas = (req: PostgresListSchemasRequest): Promise<string[]> => call('ListPostgresSchemas', req)
+  listPostgresTables = (req: PostgresListTablesRequest): Promise<PostgresRelationInfo[]> => call('ListPostgresTables', req)
+  postgresPageRows = (req: PostgresPageRowsRequest): Promise<PostgresPageRowsResult> => call('PostgresPageRows', req)
+  postgresExecute = (req: PostgresExecuteRequest): Promise<PostgresStatementResult[]> => call('PostgresExecute', req)
+  postgresTruncateTable = (req: PostgresTruncateTableRequest): Promise<void> => call('PostgresTruncateTable', req)
+  postgresPreviewDeleteRow = (req: PostgresDeleteRowRequest): Promise<PostgresDeleteRowPreview> => call('PostgresPreviewDeleteRow', req)
+  postgresDeleteRow = (req: PostgresDeleteRowRequest): Promise<void> => call('PostgresDeleteRow', req)
+  postgresPreviewCellUpdate = (req: PostgresCellUpdateRequest): Promise<PostgresCellUpdatePreview> => call('PostgresPreviewCellUpdate', req)
+  postgresUpdateCell = (req: PostgresCellUpdateRequest): Promise<void> => call('PostgresUpdateCell', req)
+  testEsConnection = (cfg: EsConfigShape): Promise<void> => call('TestESConnection', cfg)
+  listEsIndices = (id: string): Promise<EsIndexInfo[]> => call('ListESIndices', id)
+  esMapping = (req: EsMappingRequest): Promise<EsColumn[]> => call('ESMapping', req)
+  esPageRows = (req: EsPageRowsRequest): Promise<EsPageRowsResult> => call('ESPageRows', req)
+  esExecute = (req: EsExecuteRequest): Promise<EsStatementResult[]> => call('ESExecute', req)
+  esRefreshIndex = (req: { connection_id: string; index: string }): Promise<void> => call('EsRefreshIndex', req)
+  esGetDoc = (req: EsGetDocRequest): Promise<EsDoc> => call('ESGetDoc', req)
+  esPutDoc = (req: EsPutDocRequest): Promise<void> => call('ESPutDoc', req)
+  esCreateDoc = (req: EsCreateDocRequest): Promise<EsDoc> => call('EsCreateDoc', req)
+  esUpdateCell = (req: EsCellUpdateRequest): Promise<void> => call('ESUpdateCell', req)
+  esDeleteDoc = (req: EsDeleteDocRequest): Promise<void> => call('ESDeleteDoc', req)
+  esDeleteByQuery = (req: EsDeleteByQueryRequest): Promise<number> => call('ESDeleteByQuery', req)
+  esCreateIndex = (req: EsCreateIndexRequest): Promise<void> => call('EsCreateIndex', req)
+  esDeleteIndex = (req: EsDeleteIndexRequest): Promise<void> => call('EsDeleteIndex', req)
+  esUpdateIndexSettings = (req: EsUpdateIndexSettingsRequest): Promise<void> => call('EsUpdateIndexSettings', req)
+  esDeleteTemplate = (req: EsDeleteTemplateRequest): Promise<void> => call('DeleteEsTemplate', req)
+  listEsTemplates = (id: string): Promise<EsTemplateInfo[]> => call('ListEsTemplates', id)
+  getEsTemplate = (req: EsGetTemplateRequest): Promise<EsTemplateContent> => call('GetEsTemplate', req)
+  putEsTemplate = (req: EsPutTemplateRequest): Promise<void> => call('PutEsTemplate', req)
+  esClusterStats = (req: EsClusterStatsRequest): Promise<EsClusterStats> => call('EsClusterStats', req)
+  testHiveConnection = (cfg: HiveConfigShape): Promise<void> => call('TestHiveConnection', cfg)
+  listHiveDatabases = (id: string): Promise<string[]> => call('ListHiveDatabases', id)
+  listHiveTables = (req: HiveListTablesRequest): Promise<HiveTableInfo[]> => call('ListHiveTables', req)
+  hivePageRows = (req: HivePageRowsRequest): Promise<HivePageRowsResult> => call('HivePageRows', req)
+  hiveExecute = (req: HiveExecuteRequest): Promise<HiveStatementResult[]> => call('HiveExecute', req)
+  hivePreviewCellUpdate = (req: HiveCellUpdateRequest): Promise<HiveCellUpdatePreview> => call('HivePreviewCellUpdate', req)
+  hiveUpdateCell = (req: HiveCellUpdateRequest): Promise<void> => call('HiveUpdateCell', req)
+  hivePreviewDeleteRow = (req: HiveDeleteRowRequest): Promise<HiveDeleteRowPreview> => call('HivePreviewDeleteRow', req)
+  hiveDeleteRow = (req: HiveDeleteRowRequest): Promise<void> => call('HiveDeleteRow', req)
+  hiveTruncateTable = (req: HiveTruncateTableRequest): Promise<void> => call('HiveTruncateTable', req)
+  hiveDropTable = (req: HiveDropTableRequest): Promise<void> => call('HiveDropTable', req)
+  hiveTableColumns = (req: HiveTableColumnsRequest): Promise<HiveTableColumnsResult> => call('HiveTableColumns', req)
+  hiveAlterTable = (req: HiveAlterTableRequest): Promise<void> => call('HiveAlterTable', req)
+  hiveExportTable = (req: HiveExportTableRequest): Promise<HiveExportTableResult> => call('HiveExportTable', req)
 }
 
 let current: Api = new WailsApi()

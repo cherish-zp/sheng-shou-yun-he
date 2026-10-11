@@ -167,8 +167,10 @@ func (c *Client) ConsumeMessagesByTimestamp(ctx context.Context, topic string, p
 }
 
 // partitionsOf lists the partitions of a topic via the admin client.
+// 只拉取目标 topic 的元数据(而非全集群),数千 topic 的大集群上
+// 每次消息浏览/按时间消费可省一次全量元数据往返。
 func (c *Client) partitionsOf(ctx context.Context, topic string) ([]int32, error) {
-	details, err := c.admin.ListTopics(ctx)
+	details, err := c.admin.ListTopics(ctx, topic)
 	if err != nil {
 		return nil, fmt.Errorf("list topic metadata: %w", err)
 	}

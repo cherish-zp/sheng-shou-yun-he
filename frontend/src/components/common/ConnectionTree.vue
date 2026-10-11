@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onUnmounted, reactive, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { getApi } from '@/api/client'
 import type { Connection, Topic, ConsumerGroup, TopicMessageCounts, RedisDBInfo, CHTableInfo, MysqlTableInfo, PostgresRelationInfo, EsIndexInfo, EsTemplateInfo, HiveTableInfo } from '@/api/types'
-import { fuzzyScore } from '@/utils/fuzzy'
+import { fuzzyFilter } from '@/utils/fuzzy'
 import { formatCount } from '@/utils/format'
 import { formatBytes } from '@/utils/bytes'
 import { CSV_MIME, exportCsv, saveFile, type ExportColumn } from '@/utils/export'
@@ -175,6 +175,60 @@ const searchByConn = ref<Record<string, string>>({})
 const groupSearchByConn = ref<Record<string, string>>({})
 const activeSectionByConn = ref<Record<string, string>>({})
 
+// --- 搜索防抖:输入框即时回显,过滤结果延迟重算 ------------------------------
+// 上方 7 个搜索词 Record 仍由各搜索框 v-model 直写(输入即时回显),过滤侧
+// 统一读下方防抖副本,击键停止后才触发一次「过滤 + 排序」,避免每击键全量
+// map/filter/sort。vitest(jsdom)不推进真实定时器,而既有用例在 setValue
+// 后同刻断言过滤结果,因此测试构建(MODE === 'test')退化为 0ms 同步直通,
+// 生产构建保持 150ms 防抖,渲染输出不受影响。
+const SEARCH_DEBOUNCE_MS = import.meta.env.MODE === 'test' ? 0 : 150
+
+// useDebouncedRef 返回跟随 source 的防抖只读副本:source 内任一键变化都会
+// 重置同一计时器,到点整体快照一次;组件卸载时清理未触发的定时器。
+function useDebouncedRef<T extends Record<string, unknown>>(source: Ref<T>, delayMs: number): Readonly<Ref<T>> {
+  const debounced = ref({ ...source.value }) as Ref<T>
+  let timer: ReturnType<typeof setTimeout> | null = null
+  watch(source, () => {
+    if (delayMs <= 0) {
+      debounced.value = { ...source.value }
+      return
+    }
+    if (timer !== null) clearTimeout(timer)
+    timer = setTimeout(() => {
+      timer = null
+      debounced.value = { ...source.value }
+    }, delayMs)
+  }, { deep: true })
+  onUnmounted(() => {
+    if (timer !== null) clearTimeout(timer)
+  })
+  return debounced
+}
+
+const debouncedSearchByConn = useDebouncedRef(searchByConn, SEARCH_DEBOUNCE_MS)
+const debouncedGroupSearchByConn = useDebouncedRef(groupSearchByConn, SEARCH_DEBOUNCE_MS)
+const debouncedChTableFilterByDb = useDebouncedRef(chTableFilterByDb, SEARCH_DEBOUNCE_MS)
+const debouncedMysqlTableFilterByDb = useDebouncedRef(mysqlTableFilterByDb, SEARCH_DEBOUNCE_MS)
+const debouncedHiveTableFilterByDb = useDebouncedRef(hiveTableFilterByDb, SEARCH_DEBOUNCE_MS)
+const debouncedPgRelationFilterBySchema = useDebouncedRef(pgRelationFilterBySchema, SEARCH_DEBOUNCE_MS)
+const debouncedEsIndexFilterByConn = useDebouncedRef(esIndexFilterByConn, SEARCH_DEBOUNCE_MS)
+
+// keyedComputed 按 key 惰性创建并缓存 computed:过滤结果以「connId / db /
+// schema 组合 key」为维度各缓存一份,同一 key 在同一次渲染里被 v-for、空态
+// 与计数徽标多次读取时只求值一次,跨渲染依赖未变也直接复用,替代原先每次
+// 读取都全量 map/filter/sort 的普通函数。
+function keyedComputed<T>(compute: (key: string) => T): (key: string) => T {
+  const cache = new Map<string, ComputedRef<T>>()
+  return (key: string) => {
+    let entry = cache.get(key)
+    if (!entry) {
+      entry = computed(() => compute(key))
+      cache.set(key, entry)
+    }
+    return entry.value
+  }
+}
+
 function isExpanded(id: string): boolean {
   return !!expanded.value[id]
 }
@@ -281,19 +335,17 @@ async function toggleChDb(connId: string, db: string): Promise<void> {
 }
 
 function chTableFilterOf(connId: string, db: string): string {
-  return (chTableFilterByDb.value[chDbKey(connId, db)] ?? '').trim()
+  // 读防抖副本,与 filteredChTables/徽标共用同一份生效过滤词。
+  return (debouncedChTableFilterByDb.value[chDbKey(connId, db)] ?? '').trim()
 }
 
-// filteredChTables 对表名做本地模糊过滤(fuzzyScore),按相关度排序。
+// filteredChTables 对表名做本地模糊过滤(fuzzyFilter),按相关度排序。结果
+// 按 db key 缓存为 computed:v-for、空态与计数徽标共享同一份,不再重复排序。
+const filteredChTablesByKey = keyedComputed((key: string): CHTableInfo[] =>
+  fuzzyFilter(chTablesByDb.value[key] ?? [], debouncedChTableFilterByDb.value[key] ?? '', (t) => t.name),
+)
 function filteredChTables(connId: string, db: string): CHTableInfo[] {
-  const list = chTablesByDb.value[chDbKey(connId, db)] ?? []
-  const q = chTableFilterOf(connId, db)
-  if (!q) return list
-  return list
-    .map((t) => ({ t, score: fuzzyScore(q, t.name) }))
-    .filter((x) => x.score !== Infinity)
-    .sort((a, b) => a.score - b.score)
-    .map((x) => x.t)
+  return filteredChTablesByKey(chDbKey(connId, db))
 }
 
 // chDbCountLabel 数据库节点的表计数徽标:未过滤显示总数,过滤中显示「可见/总数」。
@@ -333,19 +385,17 @@ async function toggleMysqlDb(connId: string, db: string): Promise<void> {
 }
 
 function mysqlTableFilterOf(connId: string, db: string): string {
-  return (mysqlTableFilterByDb.value[mysqlDbKey(connId, db)] ?? '').trim()
+  // 读防抖副本,与 filteredMysqlTables/徽标共用同一份生效过滤词。
+  return (debouncedMysqlTableFilterByDb.value[mysqlDbKey(connId, db)] ?? '').trim()
 }
 
-// filteredMysqlTables 对表名做本地模糊过滤(fuzzyScore),按相关度排序。
+// filteredMysqlTables 对表名做本地模糊过滤(fuzzyFilter),按相关度排序。
+// 结果按库 key 缓存为 computed(与 filteredChTables 同构)。
+const filteredMysqlTablesByKey = keyedComputed((key: string): MysqlTableInfo[] =>
+  fuzzyFilter(mysqlTablesByDb.value[key] ?? [], debouncedMysqlTableFilterByDb.value[key] ?? '', (t) => t.name),
+)
 function filteredMysqlTables(connId: string, db: string): MysqlTableInfo[] {
-  const list = mysqlTablesByDb.value[mysqlDbKey(connId, db)] ?? []
-  const q = mysqlTableFilterOf(connId, db)
-  if (!q) return list
-  return list
-    .map((t) => ({ t, score: fuzzyScore(q, t.name) }))
-    .filter((x) => x.score !== Infinity)
-    .sort((a, b) => a.score - b.score)
-    .map((x) => x.t)
+  return filteredMysqlTablesByKey(mysqlDbKey(connId, db))
 }
 
 // mysqlDbCountLabel 数据库节点的表计数徽标:未过滤显示总数,过滤中显示「可见/总数」。
@@ -385,19 +435,17 @@ async function toggleHiveDb(connId: string, db: string): Promise<void> {
 }
 
 function hiveTableFilterOf(connId: string, db: string): string {
-  return (hiveTableFilterByDb.value[hiveDbKey(connId, db)] ?? '').trim()
+  // 读防抖副本,与 filteredHiveTables/徽标共用同一份生效过滤词。
+  return (debouncedHiveTableFilterByDb.value[hiveDbKey(connId, db)] ?? '').trim()
 }
 
-// filteredHiveTables 对表名做本地模糊过滤(fuzzyScore),按相关度排序。
+// filteredHiveTables 对表名做本地模糊过滤(fuzzyFilter),按相关度排序。
+// 结果按库 key 缓存为 computed(与 filteredChTables 同构)。
+const filteredHiveTablesByKey = keyedComputed((key: string): HiveTableInfo[] =>
+  fuzzyFilter(hiveTablesByDb.value[key] ?? [], debouncedHiveTableFilterByDb.value[key] ?? '', (t) => t.name),
+)
 function filteredHiveTables(connId: string, db: string): HiveTableInfo[] {
-  const list = hiveTablesByDb.value[hiveDbKey(connId, db)] ?? []
-  const q = hiveTableFilterOf(connId, db)
-  if (!q) return list
-  return list
-    .map((t) => ({ t, score: fuzzyScore(q, t.name) }))
-    .filter((x) => x.score !== Infinity)
-    .sort((a, b) => a.score - b.score)
-    .map((x) => x.t)
+  return filteredHiveTablesByKey(hiveDbKey(connId, db))
 }
 
 // hiveDbCountLabel 数据库节点的表计数徽标:未过滤显示总数,过滤中显示「可见/总数」。
@@ -465,7 +513,8 @@ async function togglePgSchema(connId: string, db: string, schema: string): Promi
 }
 
 function pgRelationFilterOf(connId: string, db: string, schema: string): string {
-  return (pgRelationFilterBySchema.value[pgSchemaKey(connId, db, schema)] ?? '').trim()
+  // 读防抖副本,与 filteredPgRelations/徽标共用同一份生效过滤词。
+  return (debouncedPgRelationFilterBySchema.value[pgSchemaKey(connId, db, schema)] ?? '').trim()
 }
 
 // openPgRelation 打开 PG relation 详情页;双击与键盘(Enter/Space)共用入口。
@@ -473,16 +522,13 @@ function openPgRelation(connId: string, db: string, r: PostgresRelationInfo): vo
   emit('open-postgres-table', connId, db, r.schema, r.relation, r.relation_type)
 }
 
-// filteredPgRelations 对 relation 名做本地模糊过滤(fuzzyScore),按相关度排序。
+// filteredPgRelations 对 relation 名做本地模糊过滤(fuzzyFilter),按相关度
+// 排序。结果按 schema key 缓存为 computed(与 filteredChTables 同构)。
+const filteredPgRelationsByKey = keyedComputed((key: string): PostgresRelationInfo[] =>
+  fuzzyFilter(pgRelationsBySchema.value[key] ?? [], debouncedPgRelationFilterBySchema.value[key] ?? '', (r) => r.relation),
+)
 function filteredPgRelations(connId: string, db: string, schema: string): PostgresRelationInfo[] {
-  const list = pgRelationsBySchema.value[pgSchemaKey(connId, db, schema)] ?? []
-  const q = pgRelationFilterOf(connId, db, schema)
-  if (!q) return list
-  return list
-    .map((r) => ({ r, score: fuzzyScore(q, r.relation) }))
-    .filter((x) => x.score !== Infinity)
-    .sort((a, b) => a.score - b.score)
-    .map((x) => x.r)
+  return filteredPgRelationsByKey(pgSchemaKey(connId, db, schema))
 }
 
 // pgSchemaCountLabel schema 节点的 relation 计数徽标:未过滤显示总数,
@@ -497,19 +543,17 @@ function pgSchemaCountLabel(connId: string, db: string, schema: string): string 
 // --- ES 索引过滤(一级树,过滤词按连接缓存,与 MySQL 表过滤同构) ---
 
 function esIndexFilterOf(connId: string): string {
-  return (esIndexFilterByConn.value[connId] ?? '').trim()
+  // 读防抖副本,与 filteredEsIndices/徽标共用同一份生效过滤词。
+  return (debouncedEsIndexFilterByConn.value[connId] ?? '').trim()
 }
 
-// filteredEsIndices 对索引名做本地模糊过滤(fuzzyScore),按相关度排序。
+// filteredEsIndices 对索引名做本地模糊过滤(fuzzyFilter),按相关度排序。
+// 结果按连接 key 缓存为 computed(与 filteredChTables 同构)。
+const filteredEsIndicesByKey = keyedComputed((key: string): EsIndexInfo[] =>
+  fuzzyFilter(esIndices.value[key] ?? [], debouncedEsIndexFilterByConn.value[key] ?? '', (i) => i.name),
+)
 function filteredEsIndices(connId: string): EsIndexInfo[] {
-  const list = esIndices.value[connId] ?? []
-  const q = esIndexFilterOf(connId)
-  if (!q) return list
-  return list
-    .map((i) => ({ i, score: fuzzyScore(q, i.name) }))
-    .filter((x) => x.score !== Infinity)
-    .sort((a, b) => a.score - b.score)
-    .map((x) => x.i)
+  return filteredEsIndicesByKey(connId)
 }
 
 // esIndexCountLabel 索引计数徽标:未过滤显示总数,过滤中显示「可见/总数」。
@@ -664,33 +708,31 @@ function retainedOf(connId: string, topic: string): number | null {
 }
 
 function hasSearch(connId: string): boolean {
-  return (searchByConn.value[connId] ?? '').trim().length > 0
+  // 与 filteredTopics 同源:读防抖后的生效过滤词,保证空态文案与列表一致。
+  return (debouncedSearchByConn.value[connId] ?? '').trim().length > 0
 }
 
 function hasGroupSearch(connId: string): boolean {
-  return (groupSearchByConn.value[connId] ?? '').trim().length > 0
+  // 与 filteredGroups 同源:读防抖后的生效过滤词,保证空态文案与列表一致。
+  return (debouncedGroupSearchByConn.value[connId] ?? '').trim().length > 0
 }
 
+// filteredTopics 对 topic 名做本地模糊过滤(fuzzyFilter),按相关度排序。
+// 结果按连接 key 缓存为 computed:v-for、空态与全选判断共享同一份。
+const filteredTopicsByKey = keyedComputed((key: string): Topic[] =>
+  fuzzyFilter(topicsByConn.value[key] ?? [], debouncedSearchByConn.value[key] ?? '', (t) => t.name),
+)
 function filteredTopics(connId: string): Topic[] {
-  const q = (searchByConn.value[connId] ?? '').trim()
-  const list = topicsByConn.value[connId] ?? []
-  if (!q) return list
-  return list
-    .map((t) => ({ t, score: fuzzyScore(q, t.name) }))
-    .filter((x) => x.score !== Infinity)
-    .sort((a, b) => a.score - b.score)
-    .map((x) => x.t)
+  return filteredTopicsByKey(connId)
 }
 
+// filteredGroups 对消费组名做本地模糊过滤(fuzzyFilter),按相关度排序。
+// 结果按连接 key 缓存为 computed(与 filteredTopics 同构)。
+const filteredGroupsByKey = keyedComputed((key: string): ConsumerGroup[] =>
+  fuzzyFilter(groupsByConn.value[key] ?? [], debouncedGroupSearchByConn.value[key] ?? '', (g) => g.name),
+)
 function filteredGroups(connId: string): ConsumerGroup[] {
-  const q = (groupSearchByConn.value[connId] ?? '').trim()
-  const list = groupsByConn.value[connId] ?? []
-  if (!q) return list
-  return list
-    .map((g) => ({ g, score: fuzzyScore(q, g.name) }))
-    .filter((x) => x.score !== Infinity)
-    .sort((a, b) => a.score - b.score)
-    .map((x) => x.g)
+  return filteredGroupsByKey(connId)
 }
 
 // activeSection returns the currently selected object collection for a
@@ -1259,8 +1301,20 @@ function toggleSelectMode(conn: Connection): void {
   }
 }
 
+// selectedSetsByConn 把「连接 → 已选名称数组」转成 Set 供行内判断:多选模式
+// 下每一行渲染都要查一次勾选态,原 selectedOf(connId).includes(name) 是
+// O(已选数),行数多了平方级;这里集中建一次 Set,行内判断 O(1)。
+// (命名与 selectedByConn 数组版区分,selection 的增删仍走数组以保留勾选顺序。)
+const selectedSetsByConn = computed<Record<string, Set<string>>>(() => {
+  const sets: Record<string, Set<string>> = {}
+  for (const [connId, names] of Object.entries(selectedByConn.value)) {
+    sets[connId] = new Set(names)
+  }
+  return sets
+})
+
 function isTopicSelected(connId: string, name: string): boolean {
-  return selectedOf(connId).includes(name)
+  return selectedSetsByConn.value[connId]?.has(name) ?? false
 }
 
 function toggleTopicSelected(connId: string, name: string): void {

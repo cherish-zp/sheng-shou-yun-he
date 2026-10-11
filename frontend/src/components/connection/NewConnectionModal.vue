@@ -3,6 +3,7 @@ import { reactive, ref, computed, watch } from 'vue'
 import { getApi } from '@/api/client'
 import { useConnectionsStore, type NewConnectionInput } from '@/store/connections'
 import type { Connection, CHConfigShape, EsConfigShape, HiveConfigShape, KafkaConfig, MysqlConfigShape, PostgresConfigShape, RedisConfigShape, SASLConfig, TLSConfig } from '@/api/types'
+import PasswordInput from '@/components/common/PasswordInput.vue'
 
 const props = defineProps<{ show: boolean; connection?: Connection | null }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -96,14 +97,7 @@ const saveError = ref<string | null>(null)
 const deleteConfirmOpen = ref(false)
 const deleting = ref(false)
 const deleteError = ref<string | null>(null)
-// 密码可见性:各密码框(kafka/redis/clickhouse/mysql/es)独立切换,默认密文。
-const showKafkaPassword = ref(false)
-const showRedisPassword = ref(false)
-const showChPassword = ref(false)
-const showMysqlPassword = ref(false)
-const showEsPassword = ref(false)
-const showPgPassword = ref(false)
-const showHivePassword = ref(false)
+// 密码可见性:由 common/PasswordInput 内部管理,各密码框实例独立切换,默认密文。
 
 const editing = computed(() => !!props.connection)
 
@@ -513,26 +507,7 @@ function close(): void {
           </div>
           <div class="field">
             <label class="label">密码(可选)</label>
-            <div class="password-wrap">
-              <input v-model="form.redisPassword" :type="showRedisPassword ? 'text' : 'password'" data-test="input-redis-password" class="input password-input" />
-              <button
-                type="button"
-                class="eye-btn"
-                tabindex="-1"
-                data-test="toggle-password-redis"
-                :aria-label="showRedisPassword ? '隐藏密码' : '显示密码'"
-                @click="showRedisPassword = !showRedisPassword"
-              >
-                <svg v-if="showRedisPassword" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                  <line x1="1" y1="1" x2="23" y2="23" />
-                </svg>
-                <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                  <circle cx="12" cy="12" r="3" />
-                </svg>
-              </button>
-            </div>
+            <PasswordInput v-model="form.redisPassword" data-test="input-redis-password" toggle-testid="toggle-password-redis" />
           </div>
           <div class="field">
             <label class="label">DB(集群模式固定 0)</label>
@@ -559,26 +534,7 @@ function close(): void {
           </div>
           <div class="field">
             <label class="label">密码</label>
-            <div class="password-wrap">
-              <input v-model="form.chPassword" :type="showChPassword ? 'text' : 'password'" data-test="input-ch-password" class="input password-input" />
-              <button
-                type="button"
-                class="eye-btn"
-                tabindex="-1"
-                data-test="toggle-password-ch"
-                :aria-label="showChPassword ? '隐藏密码' : '显示密码'"
-                @click="showChPassword = !showChPassword"
-              >
-                <svg v-if="showChPassword" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                  <line x1="1" y1="1" x2="23" y2="23" />
-                </svg>
-                <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                  <circle cx="12" cy="12" r="3" />
-                </svg>
-              </button>
-            </div>
+            <PasswordInput v-model="form.chPassword" data-test="input-ch-password" toggle-testid="toggle-password-ch" />
           </div>
           <div class="field">
             <label class="label">数据库</label>
@@ -609,26 +565,7 @@ function close(): void {
           </div>
           <div class="field">
             <label class="label">密码</label>
-            <div class="password-wrap">
-              <input v-model="form.mysqlPassword" :type="showMysqlPassword ? 'text' : 'password'" data-test="input-mysql-password" class="input password-input" />
-              <button
-                type="button"
-                class="eye-btn"
-                tabindex="-1"
-                data-test="toggle-password-mysql"
-                :aria-label="showMysqlPassword ? '隐藏密码' : '显示密码'"
-                @click="showMysqlPassword = !showMysqlPassword"
-              >
-                <svg v-if="showMysqlPassword" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                  <line x1="1" y1="1" x2="23" y2="23" />
-                </svg>
-                <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                  <circle cx="12" cy="12" r="3" />
-                </svg>
-              </button>
-            </div>
+            <PasswordInput v-model="form.mysqlPassword" data-test="input-mysql-password" toggle-testid="toggle-password-mysql" />
           </div>
           <div class="field">
             <label class="label">数据库</label>
@@ -662,26 +599,7 @@ function close(): void {
           </div>
           <div class="field">
             <label class="label">密码</label>
-            <div class="password-wrap">
-              <input v-model="form.pgPassword" :type="showPgPassword ? 'text' : 'password'" data-test="input-postgres-password" class="input password-input" />
-              <button
-                type="button"
-                class="eye-btn"
-                tabindex="-1"
-                data-test="toggle-password-postgres"
-                :aria-label="showPgPassword ? '隐藏密码' : '显示密码'"
-                @click="showPgPassword = !showPgPassword"
-              >
-                <svg v-if="showPgPassword" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                  <line x1="1" y1="1" x2="23" y2="23" />
-                </svg>
-                <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                  <circle cx="12" cy="12" r="3" />
-                </svg>
-              </button>
-            </div>
+            <PasswordInput v-model="form.pgPassword" data-test="input-postgres-password" toggle-testid="toggle-password-postgres" />
           </div>
           <div class="field">
             <label class="label">数据库 <span class="req">*</span></label>
@@ -736,26 +654,7 @@ function close(): void {
             </div>
             <div class="field">
               <label class="label">密码</label>
-              <div class="password-wrap">
-                <input v-model="form.hivePassword" :type="showHivePassword ? 'text' : 'password'" data-test="hive-password" class="input password-input" />
-                <button
-                  type="button"
-                  class="eye-btn"
-                  tabindex="-1"
-                  data-test="toggle-password-hive"
-                  :aria-label="showHivePassword ? '隐藏密码' : '显示密码'"
-                  @click="showHivePassword = !showHivePassword"
-                >
-                  <svg v-if="showHivePassword" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                    <line x1="1" y1="1" x2="23" y2="23" />
-                  </svg>
-                  <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
-                </button>
-              </div>
+              <PasswordInput v-model="form.hivePassword" data-test="hive-password" toggle-testid="toggle-password-hive" />
             </div>
           </template>
           <template v-else-if="form.hiveAuthMode === 'kerberos'">
@@ -801,26 +700,7 @@ function close(): void {
             </div>
             <div class="field">
               <label class="label">密码</label>
-              <div class="password-wrap">
-                <input v-model="form.esPassword" :type="showEsPassword ? 'text' : 'password'" data-test="input-es-password" class="input password-input" />
-                <button
-                  type="button"
-                  class="eye-btn"
-                  tabindex="-1"
-                  data-test="toggle-password-es"
-                  :aria-label="showEsPassword ? '隐藏密码' : '显示密码'"
-                  @click="showEsPassword = !showEsPassword"
-                >
-                  <svg v-if="showEsPassword" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                    <line x1="1" y1="1" x2="23" y2="23" />
-                  </svg>
-                  <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
-                </button>
-              </div>
+              <PasswordInput v-model="form.esPassword" data-test="input-es-password" toggle-testid="toggle-password-es" />
             </div>
           </template>
           <template v-else-if="form.esAuthMode === 'apikey'">
@@ -868,26 +748,7 @@ function close(): void {
             </div>
             <div class="field">
               <label class="label">密码</label>
-              <div class="password-wrap">
-                <input v-model="form.password" :type="showKafkaPassword ? 'text' : 'password'" data-test="input-password" class="input password-input" />
-                <button
-                  type="button"
-                  class="eye-btn"
-                  tabindex="-1"
-                  data-test="toggle-password-kafka"
-                  :aria-label="showKafkaPassword ? '隐藏密码' : '显示密码'"
-                  @click="showKafkaPassword = !showKafkaPassword"
-                >
-                  <svg v-if="showKafkaPassword" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                    <line x1="1" y1="1" x2="23" y2="23" />
-                  </svg>
-                  <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
-                </button>
-              </div>
+              <PasswordInput v-model="form.password" data-test="input-password" toggle-testid="toggle-password-kafka" />
             </div>
           </template>
           <template v-else>
@@ -1003,16 +864,6 @@ function close(): void {
   transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
 .input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--accent-soft); }
-.password-wrap { position: relative; }
-/* 右侧留白加大,避免输入文字被眼睛图标遮挡。 */
-.password-input { padding-right: 34px; }
-.eye-btn {
-  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
-  display: flex; align-items: center; justify-content: center;
-  width: 24px; height: 24px; padding: 0; border: none; background: none;
-  color: var(--text-tertiary); cursor: pointer; border-radius: 5px;
-}
-.eye-btn:hover { color: var(--text); background: var(--bg-hover); }
 .textarea { resize: vertical; }
 .checkbox-label { font-size: 13px; color: var(--text); display: flex; gap: 6px; align-items: center; }
 .hint { display: block; font-size: 12px; color: var(--text-tertiary); margin-top: 4px; }

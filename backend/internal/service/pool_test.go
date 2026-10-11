@@ -56,6 +56,22 @@ func TestPoolGetMissing(t *testing.T) {
 	}
 }
 
+// Put 覆盖旧实例时必须关闭旧实例:重复连接同一 id(或并发首次连接后互相
+// 覆盖)会让旧客户端滞留,其后台 goroutine 与 TCP/TLS 连接随之泄漏。
+func TestPoolPutDuplicateClosesOld(t *testing.T) {
+	p := NewPool()
+	ds1 := &fakeDataSource{name: "a"}
+	ds2 := &fakeDataSource{name: "b"}
+	_ = p.Put("conn-1", ds1)
+	_ = p.Put("conn-1", ds2)
+	if !ds1.closed {
+		t.Fatal("Put must close the replaced instance")
+	}
+	if ds2.closed {
+		t.Fatal("Put must not close the newly registered instance")
+	}
+}
+
 func TestPoolPutDuplicateReplaces(t *testing.T) {
 	p := NewPool()
 	ds1 := &fakeDataSource{name: "a"}

@@ -90,7 +90,10 @@ function onCursor(pos: { line: number; col: number }): void {
   cursorPos.value = pos
 }
 
-const stmtCount = computed(() => splitSqlStatements(sql.value).length)
+// 语句列表只按当前文档解析一次,状态栏计数与语句标记共用,避免大文档每次击键解析两遍。
+const statements = computed(() => splitSqlStatements(sql.value))
+
+const stmtCount = computed(() => statements.value.length)
 
 // --- CodeMirror 补全来源:当前连接的 topic 列表映射为 {name: topic} ----------
 // 仅作补全提示,拉取失败静默降级为空(不阻塞控制台主流程)。
@@ -174,7 +177,7 @@ function locateStatementText(doc: string, executed: string): string | null {
 
 const statementMarks = computed<{ from: number; status: 'ok' | 'fail' | 'running'; detail?: string }[]>(() => {
   if (markEntries.value.length === 0) return []
-  const stmts = splitSqlStatements(sql.value)
+  const stmts = statements.value
   const out: { from: number; status: 'ok' | 'fail' | 'running'; detail?: string }[] = []
   for (const m of markEntries.value) {
     const hit = stmts.find((s) => s.text.trim() === m.text)

@@ -22,7 +22,9 @@ func NewPool() *Pool {
 	return &Pool{conns: make(map[string]DataSource)}
 }
 
-// Put registers (or replaces) a data source under id.
+// Put registers (or replaces) a data source under id. Replacing closes the
+// previous instance (best-effort): a stale client would otherwise keep its
+// background goroutines and TCP/TLS connections alive.
 func (p *Pool) Put(id string, ds DataSource) error {
 	if id == "" {
 		return errors.New("connection id must not be empty")
@@ -31,6 +33,9 @@ func (p *Pool) Put(id string, ds DataSource) error {
 		return errors.New("data source must not be nil")
 	}
 	p.mu.Lock()
+	if old := p.conns[id]; old != nil && old != ds {
+		_ = old.Close()
+	}
 	p.conns[id] = ds
 	p.mu.Unlock()
 	return nil

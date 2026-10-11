@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { useBrowseStore } from './browse'
+import { useGroupsStore } from './groups'
 
 export type TabKind = 'topic' | 'group' | 'sql' | 'lag' | 'health' | 'redis-keys' | 'ch-table' | 'ch-sql' | 'mysql-table' | 'mysql-sql' | 'es-index' | 'es-sql' | 'es-templates' | 'es-monitor' | 'postgres-table' | 'postgres-sql' | 'hive-table' | 'hive-sql'
 
@@ -450,6 +452,9 @@ export const useTabsStore = defineStore('tabs', () => {
     if (activeTabId.value === id) {
       activeTabId.value = openTabs.value[idx]?.id ?? openTabs.value[idx - 1]?.id ?? null
     }
+    // tab 关闭后其 id 不会再复用,清掉按 tabId 缓存的消息/消费组数据,避免大 payload 常驻内存。
+    useBrowseStore().clear(id)
+    useGroupsStore().clear(id)
   }
 
   // closeOthers keeps only the requested tab and focuses it. A no-op when the
@@ -457,12 +462,22 @@ export const useTabsStore = defineStore('tabs', () => {
   function closeOthers(id: string): void {
     const keep = openTabs.value.find((t) => t.id === id)
     if (!keep) return
+    for (const t of openTabs.value) {
+      if (t.id !== id) {
+        useBrowseStore().clear(t.id)
+        useGroupsStore().clear(t.id)
+      }
+    }
     openTabs.value = [keep]
     activeTabId.value = keep.id
   }
 
   // closeAll empties the tabbar and clears the active selection.
   function closeAll(): void {
+    for (const t of openTabs.value) {
+      useBrowseStore().clear(t.id)
+      useGroupsStore().clear(t.id)
+    }
     openTabs.value = []
     activeTabId.value = null
   }
