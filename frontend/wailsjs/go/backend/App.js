@@ -354,6 +354,10 @@ export function MysqlTableColumns(arg1) {
   return window['go']['backend']['App']['MysqlTableColumns'](arg1);
 }
 
+export function MysqlTableDDL(arg1) {
+  return window['go']['backend']['App']['MysqlTableDDL'](arg1);
+}
+
 export function MysqlTruncateTable(arg1) {
   return window['go']['backend']['App']['MysqlTruncateTable'](arg1);
 }

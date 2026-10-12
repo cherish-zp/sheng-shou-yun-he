@@ -25,6 +25,13 @@ type MysqlTruncateTableRequest struct {
 	Table        string `json:"table"`
 }
 
+// MysqlTableDDLRequest addresses the table whose CREATE statement is fetched.
+type MysqlTableDDLRequest struct {
+	ConnectionID string `json:"connection_id"`
+	Database     string `json:"database"`
+	Table        string `json:"table"`
+}
+
 // MysqlExecuteRequest carries the multi-statement SQL script with the
 // console's current database context; 与 Hive 执行请求同形,共享
 // app_requests.go 的 DatabaseExecuteRequest。
@@ -58,6 +65,14 @@ func (a *App) MysqlPageRows(req MysqlPageRowsRequest) (model.MysqlPageRowsResult
 	ctx, cancel := a.newContext()
 	defer cancel()
 	return a.svc.MysqlPageRows(ctx, req.ConnectionID, req.Database, req.Table, req.Where, req.OrderBy, req.Asc, req.Limit, req.Offset)
+}
+
+// MysqlTableDDL returns the table's SHOW CREATE TABLE text verbatim (read-only,
+// not audited; served from the service layer's 30s per-client cache).
+func (a *App) MysqlTableDDL(req MysqlTableDDLRequest) (string, error) {
+	ctx, cancel := a.newContext()
+	defer cancel()
+	return a.svc.MysqlTableCreateSQL(ctx, req.ConnectionID, req.Database, req.Table)
 }
 
 // MysqlTruncateTable empties a table (dangerous, audited).

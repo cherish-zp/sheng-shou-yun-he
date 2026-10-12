@@ -186,6 +186,47 @@ func TestAppMysqlExportTableAudited(t *testing.T) {
 	}
 }
 
+// TestAppMysqlTableDDLDelegates 建表语句查询绑定:委托 service 并原样返回
+// SHOW CREATE TABLE 文本;只读、不落审计(与 MysqlTableColumns 同风格)。
+func TestAppMysqlTableDDLDelegates(t *testing.T) {
+	const ddl = "CREATE TABLE `users` (`id` int) ENGINE=InnoDB"
+	conn := &appDdlConn{respond: func(query string) (driver.Rows, error) {
+		if strings.HasPrefix(strings.ToUpper(query), "SHOW CREATE TABLE") {
+			if strings.Contains(query, "`ghost`") {
+				return &appDdlRows{cols: []string{"Table", "Create Table"}}, nil // 无行 → not found
+			}
+			return &appDdlRows{
+				cols: []string{"Table", "Create Table"},
+				vals: [][]driver.Value{{"users", ddl}},
+			}, nil
+		}
+		return nil, fmt.Errorf("unexpected query: %s", query)
+	}}
+	app, connID := newMysqlDdlApp(t, conn)
+
+	got, err := app.MysqlTableDDL(MysqlTableDDLRequest{ConnectionID: connID, Database: "app", Table: "users"})
+	if err != nil {
+		t.Fatalf("MysqlTableDDL: %v", err)
+	}
+	if got != ddl {
+		t.Fatalf("binding must return the DDL verbatim, got %q want %q", got, ddl)
+	}
+	// 错误透出,不落审计。
+	if _, err := app.MysqlTableDDL(MysqlTableDDLRequest{ConnectionID: connID, Database: "app", Table: "ghost"}); err == nil {
+		t.Fatal("missing table must surface")
+	}
+	list, err := app.ListAudit(10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	for _, e := range list {
+		// 连接创建本身落审计,这里只断言只读查询没有追加任何 mysql_* 审计。
+		if strings.HasPrefix(e.Action, "mysql_") {
+			t.Fatalf("read-only DDL lookup must not be audited, got %+v", list)
+		}
+	}
+}
+
 // TestAppMysqlDdlRequestJSONShapes locks the wire contract: request fields are
 // all snake_case and match the hand-written frontend types.
 func TestAppMysqlDdlRequestJSONShapes(t *testing.T) {
@@ -206,6 +247,16 @@ func TestAppMysqlDdlRequestJSONShapes(t *testing.T) {
 	for _, key := range []string{"connection_id", "database", "table"} {
 		if !strings.Contains(string(b), `"`+key+`"`) {
 			t.Fatalf("MysqlTableColumnsRequest JSON must expose %q, got %s", key, b)
+		}
+	}
+
+	b, err = json.Marshal(MysqlTableDDLRequest{ConnectionID: "c", Database: "d", Table: "t"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, key := range []string{"connection_id", "database", "table"} {
+		if !strings.Contains(string(b), `"`+key+`"`) {
+			t.Fatalf("MysqlTableDDLRequest JSON must expose %q, got %s", key, b)
 		}
 	}
 

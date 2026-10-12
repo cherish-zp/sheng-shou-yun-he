@@ -181,6 +181,8 @@ export function MysqlPreviewDeleteRow(arg1:service.MysqlDeleteRowRequest):Promis
 
 export function MysqlTableColumns(arg1:backend.MysqlTableColumnsRequest):Promise<service.MysqlTableColumnsResult>;
 
+export function MysqlTableDDL(arg1:backend.MysqlTableDDLRequest):Promise<string>;
+
 export function MysqlTruncateTable(arg1:backend.MysqlTruncateTableRequest):Promise<void>;
 
 export function MysqlUpdateCell(arg1:model.MysqlCellUpdateRequest):Promise<void>;

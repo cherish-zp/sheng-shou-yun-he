@@ -844,6 +844,158 @@ func TestMysqlClientExportIncludeCreateDBFallback(t *testing.T) {
 	}
 }
 
+// --- 建表语句查询(TableCreateSQL,走 30s DDL 缓存) ---
+
+// tableCreateStub 构造只应答 SHOW CREATE TABLE 的 fake 连接,返回指定 DDL 原文。
+func tableCreateStub(ddl string) *ddlFakeConn {
+	return &ddlFakeConn{respond: func(query string) (driver.Rows, error) {
+		if strings.HasPrefix(strings.ToUpper(query), "SHOW CREATE TABLE") {
+			return &ddlFakeRows{
+				cols: []string{"Table", "Create Table"},
+				vals: [][]driver.Value{{"users", ddl}},
+			}, nil
+		}
+		return nil, fmt.Errorf("unexpected query: %s", query)
+	}}
+}
+
+// showCreateQueryCount 统计 fake 连接收到多少条 SHOW CREATE TABLE 查询。
+func showCreateQueryCount(conn *ddlFakeConn) int {
+	n := 0
+	for _, q := range conn.queries {
+		if strings.HasPrefix(strings.ToUpper(q), "SHOW CREATE TABLE") {
+			n++
+		}
+	}
+	return n
+}
+
+// TestMysqlClientTableCreateSQLReturnsVerbatimDDL fake 返回 SHOW CREATE TABLE
+// 两列结果集:返回第二列原文(含索引/字符集/自增),语句反引号限定 db.table;
+// 空结果集沿用 mysqlCreateTableDDL 的 not found 错误文案。
+func TestMysqlClientTableCreateSQLReturnsVerbatimDDL(t *testing.T) {
+	ddl := "CREATE TABLE `users` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `name` varchar(64) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_name` (`name`)\n) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4"
+	conn := tableCreateStub(ddl)
+	c := newDDLFakeClient(t, conn)
+	ctx := context.Background()
+	got, err := c.TableCreateSQL(ctx, "app", "users")
+	if err != nil {
+		t.Fatalf("TableCreateSQL: %v", err)
+	}
+	if got != ddl {
+		t.Fatalf("DDL must be returned verbatim:\n got %q\nwant %q", got, ddl)
+	}
+	if showCreateQueryCount(conn) != 1 || conn.queries[0] != "SHOW CREATE TABLE `app`.`users`" {
+		t.Fatalf("unexpected queries: %+v", conn.queries)
+	}
+
+	empty := &ddlFakeConn{respond: func(string) (driver.Rows, error) {
+		return &ddlFakeRows{cols: []string{"Table", "Create Table"}}, nil // 无行
+	}}
+	c2 := newDDLFakeClient(t, empty)
+	if _, err := c2.TableCreateSQL(ctx, "app", "ghost"); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("missing table must surface not found, got %v", err)
+	}
+}
+
+// TestMysqlClientTableCreateSQLCaches 同参数二次调用命中缓存,不再发
+// SHOW CREATE TABLE;TTL 置负立即过期、重新回源;不同表是不同键,互不串扰。
+func TestMysqlClientTableCreateSQLCaches(t *testing.T) {
+	conn := tableCreateStub("CREATE TABLE `users` (`id` int)")
+	c := newDDLFakeClient(t, conn)
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		if _, err := c.TableCreateSQL(ctx, "app", "users"); err != nil {
+			t.Fatalf("TableCreateSQL #%d: %v", i+1, err)
+		}
+	}
+	if got := showCreateQueryCount(conn); got != 1 {
+		t.Fatalf("second call must hit the cache, got %d SHOW CREATE TABLE queries", got)
+	}
+	oldTTL := browseDDLTTL
+	browseDDLTTL = -time.Second
+	defer func() { browseDDLTTL = oldTTL }()
+	if _, err := c.TableCreateSQL(ctx, "app", "users"); err != nil {
+		t.Fatalf("TableCreateSQL after ttl: %v", err)
+	}
+	if got := showCreateQueryCount(conn); got != 2 {
+		t.Fatalf("expired entry must be refetched, got %d queries", got)
+	}
+	if _, err := c.TableCreateSQL(ctx, "app", "orders"); err != nil {
+		t.Fatalf("TableCreateSQL other table: %v", err)
+	}
+	if got := showCreateQueryCount(conn); got != 3 {
+		t.Fatalf("a distinct table must be a distinct key, got %d queries", got)
+	}
+}
+
+// TestMysqlTableDDLCacheInvalidatedByWritePaths TruncateTable/DropTable/
+// AlterTable(校验通过、执行前)失效 DDL 缓存:下次查询重新回源;ALTER 校验
+// 失败不触碰缓存,翻页仍命中。
+func TestMysqlTableDDLCacheInvalidatedByWritePaths(t *testing.T) {
+	ctx := context.Background()
+	const ddl = "CREATE TABLE `users` (`id` int)"
+
+	// TRUNCATE。
+	conn := tableCreateStub(ddl)
+	c := newDDLFakeClient(t, conn)
+	if _, err := c.TableCreateSQL(ctx, "app", "users"); err != nil {
+		t.Fatalf("TableCreateSQL: %v", err)
+	}
+	if err := c.TruncateTable(ctx, "app", "users"); err != nil {
+		t.Fatalf("TruncateTable: %v", err)
+	}
+	if _, err := c.TableCreateSQL(ctx, "app", "users"); err != nil {
+		t.Fatalf("TableCreateSQL after truncate: %v", err)
+	}
+	if got := showCreateQueryCount(conn); got != 2 {
+		t.Fatalf("truncate must invalidate the ddl cache, got %d queries", got)
+	}
+
+	// DROP TABLE。
+	conn = tableCreateStub(ddl)
+	c = newDDLFakeClient(t, conn)
+	if _, err := c.TableCreateSQL(ctx, "app", "users"); err != nil {
+		t.Fatalf("TableCreateSQL: %v", err)
+	}
+	if err := c.DropTable(ctx, "app", "users"); err != nil {
+		t.Fatalf("DropTable: %v", err)
+	}
+	if _, err := c.TableCreateSQL(ctx, "app", "users"); err != nil {
+		t.Fatalf("TableCreateSQL after drop: %v", err)
+	}
+	if got := showCreateQueryCount(conn); got != 2 {
+		t.Fatalf("drop must invalidate the ddl cache, got %d queries", got)
+	}
+
+	// ALTER TABLE:校验通过即失效(执行前,部分失败也覆盖)。
+	conn = tableCreateStub(ddl)
+	c = newDDLFakeClient(t, conn)
+	if _, err := c.TableCreateSQL(ctx, "app", "users"); err != nil {
+		t.Fatalf("TableCreateSQL: %v", err)
+	}
+	spec := MysqlAlterTableSpec{Database: "app", Table: "users", DropColumns: []string{"d"}}
+	if err := c.AlterTable(ctx, spec); err != nil {
+		t.Fatalf("AlterTable: %v", err)
+	}
+	if _, err := c.TableCreateSQL(ctx, "app", "users"); err != nil {
+		t.Fatalf("TableCreateSQL after alter: %v", err)
+	}
+	if got := showCreateQueryCount(conn); got != 2 {
+		t.Fatalf("alter must invalidate the ddl cache, got %d queries", got)
+	}
+	// 校验失败(空变更)不得触碰缓存。
+	if err := c.AlterTable(ctx, MysqlAlterTableSpec{Database: "app", Table: "users"}); err == nil {
+		t.Fatal("empty spec must be rejected")
+	}
+	if _, err := c.TableCreateSQL(ctx, "app", "users"); err != nil {
+		t.Fatalf("TableCreateSQL after rejected alter: %v", err)
+	}
+	if got := showCreateQueryCount(conn); got != 2 {
+		t.Fatalf("validation failure must keep the ddl cache, got %d queries", got)
+	}
+}
+
 // --- Service 层:断言 *MysqlClient 的类型守卫与委托 ---
 
 func TestMysqlDdlServiceDelegation(t *testing.T) {
@@ -864,6 +1016,9 @@ func TestMysqlDdlServiceDelegation(t *testing.T) {
 	}
 	if _, err := svc.MysqlTableColumns(ctx, c.ID, "app", "users"); err == nil {
 		t.Fatal("non-MysqlClient pooled client must be rejected for columns too")
+	}
+	if _, err := svc.MysqlTableCreateSQL(ctx, c.ID, "app", "users"); err == nil {
+		t.Fatal("non-MysqlClient pooled client must be rejected for DDL too")
 	}
 
 	// 生产 *MysqlClient(fake 驱动)走通全部四个委托。
@@ -898,6 +1053,10 @@ func TestMysqlDdlServiceDelegation(t *testing.T) {
 	cols, err := svc.MysqlTableColumns(ctx, c.ID, "app", "users")
 	if err != nil || len(cols.Columns) != 1 || !cols.Columns[0].IsPrimaryKey || cols.DDL == "" {
 		t.Fatalf("MysqlTableColumns: %v %+v", err, cols)
+	}
+	ddl, err := svc.MysqlTableCreateSQL(ctx, c.ID, "app", "users")
+	if err != nil || ddl != "CREATE TABLE `users`" {
+		t.Fatalf("MysqlTableCreateSQL must delegate and return the DDL verbatim: %v %q", err, ddl)
 	}
 	if err := svc.MysqlAlterTable(ctx, c.ID, MysqlAlterTableSpec{Database: "app", Table: "users", DropColumns: []string{"id"}}); err != nil {
 		t.Fatalf("MysqlAlterTable: %v", err)

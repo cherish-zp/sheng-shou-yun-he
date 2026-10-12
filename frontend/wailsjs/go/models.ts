@@ -810,6 +810,22 @@ export namespace backend {
 	        this.table = source["table"];
 	    }
 	}
+	export class MysqlTableDDLRequest {
+	    connection_id: string;
+	    database: string;
+	    table: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MysqlTableDDLRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connection_id = source["connection_id"];
+	        this.database = source["database"];
+	        this.table = source["table"];
+	    }
+	}
 	export class MysqlTablesRequest {
 	    connection_id: string;
 	    database: string;

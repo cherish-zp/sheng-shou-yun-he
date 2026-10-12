@@ -180,6 +180,24 @@ func (c *MysqlClient) mysqlCreateTableDDL(ctx context.Context, database, table s
 	return ddl, rows.Err()
 }
 
+// TableCreateSQL returns the table's SHOW CREATE TABLE text (second column;
+// 含索引/字符集/自增),走 30s 的 per-client DDL 缓存,未命中回源
+// mysqlCreateTableDDL。Truncate/Drop/Alter 的浏览缓存失效点会同步清掉本
+// 缓存;经 SQL 控制台执行的 CREATE/DROP/ALTER 依赖 TTL 兜底(与元数据缓存
+// 现状一致,不解析任意 SQL)。
+func (c *MysqlClient) TableCreateSQL(ctx context.Context, database, table string) (string, error) {
+	key := mysqlBrowseMetaKey(database, table)
+	if ddl, ok := c.ddlCache.get(key, browseDDLTTL); ok {
+		return ddl, nil
+	}
+	ddl, err := c.mysqlCreateTableDDL(ctx, database, table)
+	if err != nil {
+		return "", err
+	}
+	c.ddlCache.put(key, ddl)
+	return ddl, nil
+}
+
 // --- 编辑表字段(ALTER TABLE) ---
 
 // mysqlCurrentDefaultRe 全文匹配 CURRENT_TIMESTAMP/CURRENT_DATE 一族默认值
@@ -635,6 +653,15 @@ func (s *Service) MysqlTableColumns(ctx context.Context, id, database, table str
 		return MysqlTableColumnsResult{}, err
 	}
 	return m.TableColumns(ctx, database, table)
+}
+
+// MysqlTableCreateSQL returns the table's SHOW CREATE TABLE text (cached 30s).
+func (s *Service) MysqlTableCreateSQL(ctx context.Context, id, database, table string) (string, error) {
+	m, err := s.mysqlClient(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	return m.TableCreateSQL(ctx, database, table)
 }
 
 // MysqlAlterTable applies the ADD → MODIFY → DROP structure changes.

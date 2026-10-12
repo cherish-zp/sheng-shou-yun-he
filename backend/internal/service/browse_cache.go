@@ -1,7 +1,7 @@
-// 表浏览器的查询结果缓存:表元数据(MySQL)与行数计数(MySQL/PG)。
-// 两者均为 per-client 状态(随客户端生灭,不跨连接共享),mutex 保护、TTL
-// 内命中直接复用;写路径(数据写/DDL/TRUNCATE)按表失效。键空间以「用户
-// 浏览过的表 × where 变体」为界,无淘汰策略:过期条目在同键写入时覆盖、
+// 表浏览器的查询结果缓存:表元数据(MySQL)、行数计数(MySQL/PG)与建表语句
+// (MySQL)。三者均为 per-client 状态(随客户端生灭,不跨连接共享),mutex
+// 保护、TTL 内命中直接复用;写路径(数据写/DDL/TRUNCATE)按表失效。键空间以
+// 「用户浏览过的表 × where 变体」为界,无淘汰策略:过期条目在同键写入时覆盖、
 // 在失效时删除,客户端关闭后整体随对象回收。kafka 等其他数据源不经过本文件。
 package service
 
@@ -13,11 +13,12 @@ import (
 	"sheng-shou-yun-he/backend/internal/model"
 )
 
-// 浏览缓存的存活时间:翻页与 SQL 控制台在 TTL 内复用元数据/计数。包内变量
-// 便于测试收缩(置为负值即全部条目立即过期,确定性触发回源)。
+// 浏览缓存的存活时间:翻页与 SQL 控制台在 TTL 内复用元数据/计数/建表语句。
+// 包内变量便于测试收缩(置为负值即全部条目立即过期,确定性触发回源)。
 var (
 	browseMetaTTL  = 30 * time.Second
 	browseCountTTL = 30 * time.Second
+	browseDDLTTL   = 30 * time.Second
 )
 
 // --- 表元数据缓存(MySQL:engine + 列 + 主键) ---
@@ -141,6 +142,50 @@ func (c *browseCountCache) dropPrefix(prefix string) {
 			delete(c.entries, k)
 		}
 	}
+}
+
+// --- 建表语句缓存(MySQL:SHOW CREATE TABLE 第二列原文) ---
+
+// mysqlDDLEntry 缓存一表的建表语句原文(SHOW CREATE TABLE 的第二列)。
+type mysqlDDLEntry struct {
+	ddl     string
+	fetched time.Time
+}
+
+// mysqlDDLCache 是 MysqlClient 的建表语句缓存,键为
+// mysqlBrowseMetaKey(database, table)。string 天然不可变,直接存原文,
+// 无深拷贝。零值即可用(entries 惰性初始化)。
+type mysqlDDLCache struct {
+	mu      sync.Mutex
+	entries map[string]mysqlDDLEntry
+}
+
+// get 返回未过期的建表语句。
+func (c *mysqlDDLCache) get(key string, ttl time.Duration) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	if !ok || time.Since(e.fetched) >= ttl {
+		return "", false
+	}
+	return e.ddl, true
+}
+
+// put 写入建表语句(同键覆盖,即未命中回源后的常规写入)。
+func (c *mysqlDDLCache) put(key, ddl string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = map[string]mysqlDDLEntry{}
+	}
+	c.entries[key] = mysqlDDLEntry{ddl: ddl, fetched: time.Now()}
+}
+
+// drop 清掉一表的建表语句条目(DDL/TRUNCATE 后失效)。
+func (c *mysqlDDLCache) drop(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, key)
 }
 
 // --- 键拼装与切片深拷贝 ---

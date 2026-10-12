@@ -55,10 +55,12 @@ type MysqlClient struct {
 	// defaultDB 是连接配置的默认库:请求未显式指定库名时兜底使用。
 	defaultDB string
 
-	// 浏览性能缓存:表元数据(engine/列/主键)与行数计数,TTL 内被翻页与
-	// SQL 控制台复用,写路径按表失效。零值即可用,构造点无需初始化。
+	// 浏览性能缓存:表元数据(engine/列/主键)、行数计数与建表语句,TTL 内
+	// 被翻页、SQL 控制台与建表语句查询复用,写路径按表失效。零值即可用,
+	// 构造点无需初始化。
 	metaCache  mysqlTableMetaCache
 	countCache browseCountCache
+	ddlCache   mysqlDDLCache
 }
 
 // compile-time proof that MysqlClient implements the MySQL data source.
@@ -569,11 +571,13 @@ func (c *MysqlClient) TruncateTable(ctx context.Context, database, table string)
 	return nil
 }
 
-// invalidateMysqlBrowseCache 清掉一表的元数据条目与全部 where 变体的行数
-// 计数缓存(DDL/TRUNCATE 后调用:结构可能变化、行数必然变化)。
+// invalidateMysqlBrowseCache 清掉一表的元数据条目、全部 where 变体的行数
+// 计数缓存与建表语句缓存(DDL/TRUNCATE 后调用:结构可能变化、行数必然
+// 变化)——三张浏览缓存的失效收敛在本方法,调用点无需逐张清。
 func (c *MysqlClient) invalidateMysqlBrowseCache(database, table string) {
 	c.metaCache.drop(mysqlBrowseMetaKey(database, table))
 	c.countCache.dropPrefix(mysqlBrowseCountPrefix(database, table))
+	c.ddlCache.drop(mysqlBrowseMetaKey(database, table))
 }
 
 // invalidateMysqlBrowseCounts 仅清一表全部 where 变体的行数计数缓存(数据写
