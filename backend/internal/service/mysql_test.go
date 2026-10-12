@@ -633,6 +633,15 @@ type fakeMysqlDrvConn struct {
 	// 时的第三层回退桩)。
 	showIndexRows    *fakeMysqlDrvRows
 	showIndexQueries int
+	// engineByTable 按 "schema.table" 给出 information_schema.tables 的 engine,
+	// 模拟 tableMeta 的引擎查询(独立桩,不记入业务 queries);缺键即表不存在
+	// (空行集 → tableMeta 报 not found)。
+	engineByTable map[string]string
+	engineQueries int
+	// countQueries/dataQueries 记录业务查询(非 information_schema、非 SHOW
+	// INDEX)中 COUNT(*) 与普通查询的条数,供浏览缓存的命中断言。
+	countQueries int
+	dataQueries  int
 }
 
 // pkResultRows 把桩数据渲染成 information_schema.columns 形状的结果集
@@ -704,19 +713,37 @@ func (s *fakeMysqlDrvStmt) Query(args []driver.Value) (driver.Rows, error) {
 			vals: vals,
 		}, nil
 	}
+	// information_schema.tables 的 engine 查询(tableMeta)由桩应答,不记入
+	// 业务 queries。
+	if strings.Contains(s.query, "SELECT engine FROM information_schema.tables") {
+		s.conn.engineQueries++
+		var vals [][]driver.Value
+		if len(args) >= 2 {
+			key := args[0].(string) + "." + args[1].(string)
+			if engine, ok := s.conn.engineByTable[key]; ok {
+				vals = append(vals, []driver.Value{engine})
+			}
+		}
+		return &fakeMysqlDrvRows{cols: []string{"engine"}, vals: vals}, nil
+	}
 	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(s.query)), "SHOW INDEX") {
 		s.conn.showIndexQueries++
 		if s.conn.showIndexRows != nil {
-			return s.conn.showIndexRows, nil
+			return s.conn.showIndexRows.clone(), nil
 		}
 		return &fakeMysqlDrvRows{cols: []string{"Key_name", "Column_name"}}, nil
 	}
 	s.conn.queries = append(s.conn.queries, s.query)
+	if strings.Contains(strings.ToUpper(s.query), "COUNT(*)") {
+		s.conn.countQueries++
+	} else {
+		s.conn.dataQueries++
+	}
 	if s.conn.countRows != nil && strings.Contains(strings.ToUpper(s.query), "COUNT(*)") {
-		return s.conn.countRows, nil
+		return s.conn.countRows.clone(), nil
 	}
 	if s.conn.queryRows != nil {
-		return s.conn.queryRows, nil
+		return s.conn.queryRows.clone(), nil
 	}
 	return &fakeMysqlDrvRows{cols: []string{"1"}}, nil
 }
@@ -729,6 +756,15 @@ type fakeMysqlDrvRows struct {
 }
 
 func (r *fakeMysqlDrvRows) Columns() []string { return r.cols }
+
+// clone 返回一个未消费的同内容副本:桩结果集是共享实例,同一客户端上的多次
+// 查询(如翻页缓存失效断言里的两次 COUNT/页查询)各自需要独立游标。
+func (r *fakeMysqlDrvRows) clone() *fakeMysqlDrvRows {
+	if r == nil {
+		return nil
+	}
+	return &fakeMysqlDrvRows{cols: r.cols, types: r.types, vals: r.vals}
+}
 
 // ColumnTypeDatabaseTypeName 让 database/sql 的 ColumnTypes 报告列类型名,
 // 供按列类型格式化时间单元格的路径使用。
@@ -1623,5 +1659,155 @@ func TestValidateCellEditRejectsEmptyDatabase(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "库") {
 		t.Fatalf("error must mention database, got %v", err)
+	}
+}
+
+// --- 表浏览器翻页缓存:元数据(engine/列/主键)与行数计数 ---
+
+// newBrowseCacheFakeClient 构造带全量桩数据的客户端:engine/列/主键/页数据/
+// COUNT 各有独立应答,配合 fake 的查询计数供缓存命中断言。
+func newBrowseCacheFakeClient(t *testing.T) (*MysqlClient, *fakeMysqlDrvConn) {
+	t.Helper()
+	conn := &fakeMysqlDrvConn{
+		engineByTable: map[string]string{"app.users": "InnoDB"},
+		colsByTable:   map[string][][2]string{"app.users": {{"id", "PRI"}, {"name", ""}}},
+		queryRows: &fakeMysqlDrvRows{cols: []string{"id", "name"}, vals: [][]driver.Value{
+			{int64(1), "a"}, {int64(2), "b"},
+		}},
+		countRows: &fakeMysqlDrvRows{cols: []string{"COUNT(*)"}, vals: [][]driver.Value{{int64(42)}}},
+	}
+	c, _ := newFakeMysqlClient(t, conn)
+	return c, conn
+}
+
+// TestMysqlPageRowsCachesMetaAndCount 同参数连续翻页:第二次不再发 engine/
+// 列元数据/COUNT 查询,页数据照常每页一条;where 仅 TrimSpace 归一,空白
+// 差异命中同一计数键,实质不同的 where 各自计数(计数查询本身不依赖 where,
+// 未命中路径行为与现有一致)。
+func TestMysqlPageRowsCachesMetaAndCount(t *testing.T) {
+	c, conn := newBrowseCacheFakeClient(t)
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		res, err := c.PageRows(ctx, "app", "users", "", "", true, 10, 0)
+		if err != nil {
+			t.Fatalf("PageRows #%d: %v", i+1, err)
+		}
+		if res.Engine != "InnoDB" || res.TotalRows != 42 {
+			t.Fatalf("PageRows #%d meta mismatch: engine=%q total=%d", i+1, res.Engine, res.TotalRows)
+		}
+		if len(res.PrimaryKey) != 1 || res.PrimaryKey[0] != "id" ||
+			len(res.Columns) != 2 || len(res.Rows) != 2 {
+			t.Fatalf("PageRows #%d shape mismatch: %+v", i+1, res)
+		}
+	}
+	if conn.engineQueries != 1 || len(conn.pkArgs) != 1 {
+		t.Fatalf("second page must reuse cached metadata: engine=%d pk=%d", conn.engineQueries, len(conn.pkArgs))
+	}
+	if conn.countQueries != 1 {
+		t.Fatalf("second page must reuse the cached count, got %d count queries", conn.countQueries)
+	}
+	if conn.dataQueries != 2 {
+		t.Fatalf("page data must still be queried per page, got %d", conn.dataQueries)
+	}
+	// where 归一:纯空白差异命中同一键。
+	if _, err := c.PageRows(ctx, "app", "users", "   ", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows blank where: %v", err)
+	}
+	if conn.countQueries != 1 {
+		t.Fatalf("blank-space where must hit the same count key, got %d count queries", conn.countQueries)
+	}
+	// 实质不同的 where 是不同键:重新计数。
+	if _, err := c.PageRows(ctx, "app", "users", "id = 1", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows filtered: %v", err)
+	}
+	if conn.countQueries != 2 {
+		t.Fatalf("a distinct where must be a distinct count key, got %d count queries", conn.countQueries)
+	}
+}
+
+// TestMysqlPageRowsCountCacheInvalidatedByUpdateCell 数据写(UpdateCell 成功)
+// 失效计数缓存:下次翻页重新 COUNT;元数据不受数据写影响,编辑校验的主键
+// 探测同样命中缓存、不再发查询。
+func TestMysqlPageRowsCountCacheInvalidatedByUpdateCell(t *testing.T) {
+	c, conn := newBrowseCacheFakeClient(t)
+	ctx := context.Background()
+	if _, err := c.PageRows(ctx, "app", "users", "", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows: %v", err)
+	}
+	set := model.MysqlCellValue{Column: "name", Value: strPtrOf("x")}
+	where := []model.MysqlCellValue{{Column: "id", Value: strPtrOf("1")}}
+	if err := c.UpdateCell(ctx, "app", "users", set, where); err != nil {
+		t.Fatalf("UpdateCell: %v", err)
+	}
+	if _, err := c.PageRows(ctx, "app", "users", "", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows after update: %v", err)
+	}
+	if conn.countQueries != 2 {
+		t.Fatalf("count cache must be invalidated by UpdateCell, got %d count queries", conn.countQueries)
+	}
+	if conn.engineQueries != 1 || len(conn.pkArgs) != 1 {
+		t.Fatalf("data writes must not invalidate the metadata cache: engine=%d pk=%d",
+			conn.engineQueries, len(conn.pkArgs))
+	}
+}
+
+// TestMysqlPageRowsTTLExpiry TTL 置负(全部条目立即过期)后连续翻页必须
+// 全量回源:元数据与计数各自重新查询。
+func TestMysqlPageRowsTTLExpiry(t *testing.T) {
+	oldMeta, oldCount := browseMetaTTL, browseCountTTL
+	browseMetaTTL, browseCountTTL = -time.Second, -time.Second
+	defer func() { browseMetaTTL, browseCountTTL = oldMeta, oldCount }()
+	c, conn := newBrowseCacheFakeClient(t)
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		if _, err := c.PageRows(ctx, "app", "users", "", "", true, 10, 0); err != nil {
+			t.Fatalf("PageRows #%d: %v", i+1, err)
+		}
+	}
+	if conn.engineQueries != 2 || len(conn.pkArgs) != 2 || conn.countQueries != 2 {
+		t.Fatalf("expired entries must be refetched: engine=%d pk=%d count=%d",
+			conn.engineQueries, len(conn.pkArgs), conn.countQueries)
+	}
+}
+
+// TestMysqlTruncateTableInvalidatesBrowseCache TRUNCATE 后元数据与计数一并
+// 失效,下次翻页全量回源。
+func TestMysqlTruncateTableInvalidatesBrowseCache(t *testing.T) {
+	c, conn := newBrowseCacheFakeClient(t)
+	ctx := context.Background()
+	if _, err := c.PageRows(ctx, "app", "users", "", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows: %v", err)
+	}
+	if err := c.TruncateTable(ctx, "app", "users"); err != nil {
+		t.Fatalf("TruncateTable: %v", err)
+	}
+	if _, err := c.PageRows(ctx, "app", "users", "", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows after truncate: %v", err)
+	}
+	if conn.engineQueries != 2 || len(conn.pkArgs) != 2 || conn.countQueries != 2 {
+		t.Fatalf("truncate must invalidate both caches: engine=%d pk=%d count=%d",
+			conn.engineQueries, len(conn.pkArgs), conn.countQueries)
+	}
+}
+
+// TestMysqlExecuteReusesCachedPrimaryKey 控制台与翻页共享同一份元数据缓存:
+// 两条同表 SELECT 只探测一次主键,结果仍各自携带主键。
+func TestMysqlExecuteReusesCachedPrimaryKey(t *testing.T) {
+	conn := &fakeMysqlDrvConn{pkByTable: map[string][]string{"app.users": {"id"}}}
+	c, _ := newFakeMysqlClient(t, conn)
+	results, err := c.Execute(context.Background(), "app", "SELECT * FROM users; SELECT * FROM users", 0, 0)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %+v", results)
+	}
+	for i, res := range results {
+		if !reflect.DeepEqual(res.PrimaryKey, []string{"id"}) {
+			t.Fatalf("result #%d must carry primary key from cache, got %+v", i+1, res.PrimaryKey)
+		}
+	}
+	if len(conn.pkArgs) != 1 {
+		t.Fatalf("second lookup must be served from cache, got %d pk queries", len(conn.pkArgs))
 	}
 }

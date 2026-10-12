@@ -155,6 +155,31 @@ func TestMysqlDeleteRowRejectsPkLessTable(t *testing.T) {
 	}
 }
 
+// TestMysqlDeleteRowInvalidatesCountCache 按行删除成功后行数计数失效,
+// 下次翻页重新 COUNT;元数据不受数据写影响。
+func TestMysqlDeleteRowInvalidatesCountCache(t *testing.T) {
+	c, conn := newBrowseCacheFakeClient(t)
+	ctx := context.Background()
+	if _, err := c.PageRows(ctx, "app", "users", "", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows: %v", err)
+	}
+	req := MysqlDeleteRowRequest{Database: "app", Table: "users",
+		Where: []model.MysqlCellValue{{Column: "id", Value: strPtrOf("7")}}}
+	if err := c.DeleteRow(ctx, req); err != nil {
+		t.Fatalf("DeleteRow: %v", err)
+	}
+	if _, err := c.PageRows(ctx, "app", "users", "", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows after delete: %v", err)
+	}
+	if conn.countQueries != 2 {
+		t.Fatalf("count cache must be invalidated by DeleteRow, got %d count queries", conn.countQueries)
+	}
+	if conn.engineQueries != 1 || len(conn.pkArgs) != 1 {
+		t.Fatalf("data writes must not invalidate the metadata cache: engine=%d pk=%d",
+			conn.engineQueries, len(conn.pkArgs))
+	}
+}
+
 // --- Service 层委托:断言池中 *MysqlClient(而非接口 fake) ---
 
 func TestMysqlDeleteRowServiceDelegation(t *testing.T) {

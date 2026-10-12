@@ -977,3 +977,61 @@ func TestMysqlExportUsesDedicatedConnectionNotPooled(t *testing.T) {
 		t.Fatalf("unexpected export content: %q", res.Content)
 	}
 }
+
+// --- 表级 DDL 的浏览缓存失效:DDL 后翻页必须全量回源 ---
+
+// TestMysqlDropTableInvalidatesBrowseCache DROP TABLE 后元数据与计数一并
+// 失效,下次翻页重新查询(engine/列/主键/COUNT 各发两次)。
+func TestMysqlDropTableInvalidatesBrowseCache(t *testing.T) {
+	c, conn := newBrowseCacheFakeClient(t)
+	ctx := context.Background()
+	if _, err := c.PageRows(ctx, "app", "users", "", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows: %v", err)
+	}
+	if err := c.DropTable(ctx, "app", "users"); err != nil {
+		t.Fatalf("DropTable: %v", err)
+	}
+	if _, err := c.PageRows(ctx, "app", "users", "", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows after drop: %v", err)
+	}
+	if conn.engineQueries != 2 || len(conn.pkArgs) != 2 || conn.countQueries != 2 {
+		t.Fatalf("drop must invalidate both caches: engine=%d pk=%d count=%d",
+			conn.engineQueries, len(conn.pkArgs), conn.countQueries)
+	}
+}
+
+// TestMysqlAlterTableInvalidatesBrowseCache ALTER TABLE 改变列元数据:
+// 失效后翻页重新拉取列/主键与计数(执行前先失效,部分失败的 ALTER 也覆盖)。
+func TestMysqlAlterTableInvalidatesBrowseCache(t *testing.T) {
+	c, conn := newBrowseCacheFakeClient(t)
+	ctx := context.Background()
+	if _, err := c.PageRows(ctx, "app", "users", "", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows: %v", err)
+	}
+	spec := MysqlAlterTableSpec{
+		Database: "app", Table: "users",
+		AddColumns: []MysqlColumnDef{{Name: "note", ColumnType: "varchar(8)", Nullable: true}},
+	}
+	if err := c.AlterTable(ctx, spec); err != nil {
+		t.Fatalf("AlterTable: %v", err)
+	}
+	if _, err := c.PageRows(ctx, "app", "users", "", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows after alter: %v", err)
+	}
+	if conn.engineQueries != 2 || len(conn.pkArgs) != 2 || conn.countQueries != 2 {
+		t.Fatalf("alter must invalidate both caches: engine=%d pk=%d count=%d",
+			conn.engineQueries, len(conn.pkArgs), conn.countQueries)
+	}
+	// 校验失败(没有可执行变更)不得触碰缓存:翻页仍命中,不回源。
+	specBad := MysqlAlterTableSpec{Database: "app", Table: "users"}
+	if err := c.AlterTable(ctx, specBad); err == nil {
+		t.Fatal("empty spec must be rejected")
+	}
+	if _, err := c.PageRows(ctx, "app", "users", "", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows after rejected alter: %v", err)
+	}
+	if conn.engineQueries != 2 || len(conn.pkArgs) != 2 || conn.countQueries != 2 {
+		t.Fatalf("validation failure must keep the caches: engine=%d pk=%d count=%d",
+			conn.engineQueries, len(conn.pkArgs), conn.countQueries)
+	}
+}

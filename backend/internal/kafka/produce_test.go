@@ -2,6 +2,8 @@ package kafka
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"sheng-shou-yun-he/backend/internal/model"
@@ -64,6 +66,93 @@ func TestProduceMessagesBatch(t *testing.T) {
 	}
 	if len(other) != 0 {
 		t.Fatalf("partition 0 must be empty, got %+v", other)
+	}
+}
+
+// TestProduceMessagesLargeBatchBackfillsAllRecords verifies that a larger
+// batch lands completely and that every result gets its Index plus the
+// produced partition/offset backfilled in input order.
+func TestProduceMessagesLargeBatchBackfillsAllRecords(t *testing.T) {
+	c := newCluster(t, 2, "big")
+	cl := newKafkaClient(t, c)
+	ctx := context.Background()
+
+	const n = 20
+	msgs := make([]model.BatchProduceMessage, 0, n)
+	for i := 0; i < n; i++ {
+		msgs = append(msgs, model.BatchProduceMessage{Key: fmt.Sprintf("k-%d", i), Value: fmt.Sprintf("v-%d", i)})
+	}
+	results, err := cl.ProduceMessages(ctx, "big", 1, msgs)
+	if err != nil {
+		t.Fatalf("ProduceMessages: %v", err)
+	}
+	if len(results) != n {
+		t.Fatalf("expected %d results, got %d", n, len(results))
+	}
+	seenOffsets := map[int64]bool{}
+	for i, r := range results {
+		if r.Index != i {
+			t.Fatalf("result %d: expected index %d, got %+v", i, i, r)
+		}
+		if r.Error != "" {
+			t.Fatalf("result %d: unexpected error %q", i, r.Error)
+		}
+		if r.Partition != 1 {
+			t.Fatalf("result %d: expected partition 1, got %d", i, r.Partition)
+		}
+		if r.Offset < 0 || seenOffsets[r.Offset] {
+			t.Fatalf("result %d: offset %d missing or duplicated", i, r.Offset)
+		}
+		seenOffsets[r.Offset] = true
+	}
+	// All n records must be visible on partition 1 with their original order
+	// preserved (single-partition produce keeps input order).
+	got, err := cl.ConsumeMessages(ctx, "big", 1, model.OffsetEarliest, n)
+	if err != nil {
+		t.Fatalf("ConsumeMessages: %v", err)
+	}
+	if len(got) != n {
+		t.Fatalf("expected %d records on disk, got %d", n, len(got))
+	}
+	for i, m := range got {
+		if m.Key != msgs[i].Key || m.Value != msgs[i].Value {
+			t.Fatalf("record %d: expected %q/%q, got %q/%q", i, msgs[i].Key, msgs[i].Value, m.Key, m.Value)
+		}
+	}
+}
+
+// TestProduceMessagesPerRecordErrorKeepsCallSuccess pins the failure
+// semantics: a record that cannot be produced carries its error in
+// ProduceResult.Error (prefixed "produce record:") while the call itself
+// still succeeds and returns one result per input message.
+func TestProduceMessagesPerRecordErrorKeepsCallSuccess(t *testing.T) {
+	c := newCluster(t, 2, "two")
+	cl := newKafkaClient(t, c)
+	ctx := context.Background()
+
+	msgs := []model.BatchProduceMessage{
+		{Key: "a", Value: "va"},
+		{Key: "b", Value: "vb"},
+	}
+	// Partition 99 does not exist on a 2-partition topic: every record fails
+	// immediately, but results must still be collected per message.
+	results, err := cl.ProduceMessages(ctx, "two", 99, msgs)
+	if err != nil {
+		t.Fatalf("ProduceMessages must not fail wholesale on per-record errors: %v", err)
+	}
+	if len(results) != len(msgs) {
+		t.Fatalf("expected %d results, got %d", len(msgs), len(results))
+	}
+	for i, r := range results {
+		if r.Index != i {
+			t.Fatalf("result %d: expected index %d, got %+v", i, i, r)
+		}
+		if r.Error == "" {
+			t.Fatalf("result %d: expected a per-record error, got %+v", i, r)
+		}
+		if !strings.HasPrefix(r.Error, "produce record:") {
+			t.Fatalf("result %d: error %q must keep the \"produce record:\" prefix", i, r.Error)
+		}
 	}
 }
 

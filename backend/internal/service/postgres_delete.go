@@ -82,7 +82,8 @@ func (c *PostgresClient) PreviewDeleteRow(ctx context.Context, req PostgresDelet
 }
 
 // DeleteRow executes the parameterized DELETE. Only primary-key columns may
-// appear in WHERE. 执行路径重新走一遍校验与语句构造。
+// appear in WHERE. 执行路径重新走一遍校验与语句构造。成功后失效该关系的
+// 行数计数缓存。
 func (c *PostgresClient) DeleteRow(ctx context.Context, req PostgresDeleteRowRequest) error {
 	if err := validatePostgresDeleteKind(req.RelationKind); err != nil {
 		return err
@@ -106,6 +107,7 @@ func (c *PostgresClient) DeleteRow(ctx context.Context, req PostgresDeleteRowReq
 	if _, err := db.ExecContext(ctx, statement, args...); err != nil {
 		return fmt.Errorf("delete row: %w", err)
 	}
+	c.invalidatePostgresBrowseCounts(names.database, names.schema, names.relation)
 	return nil
 }
 

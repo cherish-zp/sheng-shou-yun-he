@@ -231,7 +231,12 @@ func (c *Client) AlterTopicPartitions(ctx context.Context, name string, target i
 		return fmt.Errorf("alter topic %q partitions: %w", name, err)
 	}
 	r, rerr := resp.On(name, nil)
-	return firstErr(rerr, r.Err)
+	if err := firstErr(rerr, r.Err); err != nil {
+		return err
+	}
+	// 扩分区成功即失效缓存:否则 partsTTL 窗口内新分区不可见。
+	c.invalidatePartsCache(name)
+	return nil
 }
 
 // mapTopicConfigs keeps only the whitelisted keys of a described topic config
@@ -307,6 +312,8 @@ func (c *Client) DeleteTopic(ctx context.Context, name string) error {
 	if resp.Err != nil {
 		return fmt.Errorf("delete topic %q: %w", name, resp.Err)
 	}
+	// 删除成功即失效缓存:避免 TTL 窗口内浏览返回幽灵分区列表。
+	c.invalidatePartsCache(name)
 	return nil
 }
 
@@ -321,6 +328,8 @@ func (c *Client) DeleteTopics(ctx context.Context, names []string) ([]*model.Top
 	if err != nil {
 		return nil, fmt.Errorf("delete topics: %w", err)
 	}
+	// 批量删除后整体失效(失败的 topic 多清一次无害)。
+	c.invalidatePartsCache(names...)
 	return mapDeleteResults(resp), nil
 }
 

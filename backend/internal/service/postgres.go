@@ -47,6 +47,10 @@ type PostgresClient struct {
 
 	mu  sync.Mutex
 	dbs map[string]*sql.DB
+
+	// countCache 是表浏览器的行数计数缓存(TTL 内翻页复用,数据写/TRUNCATE
+	// 后按关系失效)。零值即可用,构造点无需初始化。
+	countCache browseCountCache
 }
 
 var _ PostgresDataSource = (*PostgresClient)(nil)
@@ -314,10 +318,18 @@ func (c *PostgresClient) PageRows(ctx context.Context, database, schema, relatio
 		return res, err
 	}
 	res.PrimaryKey = pk
-	if err := db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM "+postgresQualifiedName(names.schema, names.relation),
-	).Scan(&res.TotalRows); err != nil {
-		return res, fmt.Errorf("count rows: %w", err)
+	// 行数计数走 TTL 缓存;键里的库名归一为实际池名(空 = 默认库),与写路径
+	// 的失效键一致。未命中路径的语句与现有一字不差(计数本身不依赖 where)。
+	countKey := postgresBrowseCountKey(c.browseCacheDatabase(names.database), names.schema, names.relation, where)
+	if total, ok := c.countCache.get(countKey, browseCountTTL); ok {
+		res.TotalRows = total
+	} else {
+		if err := db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM "+postgresQualifiedName(names.schema, names.relation),
+		).Scan(&res.TotalRows); err != nil {
+			return res, fmt.Errorf("count rows: %w", err)
+		}
+		c.countCache.put(countKey, res.TotalRows)
 	}
 	// where is a native SQL fragment supplied by the SQL console/grid filter.
 	// It has the same trust boundary as the SQL console: identifiers and order
@@ -495,7 +507,24 @@ func (c *PostgresClient) TruncateTable(ctx context.Context, database, schema, re
 	if _, err := db.ExecContext(ctx, "TRUNCATE TABLE "+postgresQualifiedName(names.schema, names.relation)); err != nil {
 		return fmt.Errorf("truncate table: %w", err)
 	}
+	c.invalidatePostgresBrowseCounts(names.database, names.schema, names.relation)
 	return nil
+}
+
+// browseCacheDatabase 把请求库名归一为 getDB 的实际池名(空 = 默认库),
+// 保证 PageRows 存的计数键与写路径的失效键一致(同一客户端跨多库池化)。
+func (c *PostgresClient) browseCacheDatabase(database string) string {
+	name := strings.TrimSpace(database)
+	if name == "" {
+		name = c.defaultDB
+	}
+	return name
+}
+
+// invalidatePostgresBrowseCounts 清掉一关系全部 where 变体的行数计数缓存
+// (数据写/TRUNCATE 成功后调用)。
+func (c *PostgresClient) invalidatePostgresBrowseCounts(database, schema, relation string) {
+	c.countCache.dropPrefix(postgresBrowseCountPrefix(c.browseCacheDatabase(database), schema, relation))
 }
 
 // PreviewCellUpdate builds and counts a parameterized UPDATE without running it.
@@ -534,7 +563,7 @@ func (c *PostgresClient) PreviewCellUpdate(ctx context.Context, req model.Postgr
 }
 
 // UpdateCell executes the parameterized UPDATE. Only primary-key columns may
-// appear in WHERE.
+// appear in WHERE. 成功后失效该关系的行数计数缓存。
 func (c *PostgresClient) UpdateCell(ctx context.Context, req model.PostgresCellUpdateRequest) error {
 	if err := validatePostgresEditableKind(req.RelationKind); err != nil {
 		return err
@@ -558,6 +587,7 @@ func (c *PostgresClient) UpdateCell(ctx context.Context, req model.PostgresCellU
 	if _, err := db.ExecContext(ctx, statement, args...); err != nil {
 		return fmt.Errorf("update cell: %w", err)
 	}
+	c.invalidatePostgresBrowseCounts(names.database, names.schema, names.relation)
 	return nil
 }
 

@@ -93,12 +93,13 @@ type MysqlExportTableResult struct {
 
 // --- 删除表 ---
 
-// DropTable drops the table (structure and data).
+// DropTable drops the table (structure and data). 成功后清空该表的浏览缓存。
 func (c *MysqlClient) DropTable(ctx context.Context, database, table string) error {
 	query := "DROP TABLE " + quoteMysqlIdent(database) + "." + quoteMysqlIdent(table)
 	if _, err := c.db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("drop table: %w", err)
 	}
+	c.invalidateMysqlBrowseCache(database, table)
 	return nil
 }
 
@@ -287,11 +288,19 @@ func validateMysqlAlterSpec(spec MysqlAlterTableSpec) error {
 
 // AlterTable executes the ADD → MODIFY → DROP statements one by one
 // (autocommit); the first failure aborts the run and surfaces its error.
+// 校验通过即先失效该表的浏览缓存再执行:任一 ALTER 都会改变列元数据,失败
+// 时前面的语句也可能已生效——多失效一次只是多一次元数据回源,漏失效会翻出
+// 30s 的旧结构。
 func (c *MysqlClient) AlterTable(ctx context.Context, spec MysqlAlterTableSpec) error {
 	if err := validateMysqlAlterSpec(spec); err != nil {
 		return err
 	}
-	for _, stmt := range buildMysqlAlterStatements(spec.Database, spec.Table, spec.AddColumns, spec.ModifyColumns, spec.DropColumns) {
+	stmts := buildMysqlAlterStatements(spec.Database, spec.Table, spec.AddColumns, spec.ModifyColumns, spec.DropColumns)
+	if len(stmts) == 0 {
+		return nil
+	}
+	c.invalidateMysqlBrowseCache(spec.Database, spec.Table)
+	for _, stmt := range stmts {
 		if _, err := c.db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("alter table: %w", err)
 		}

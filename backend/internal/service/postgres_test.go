@@ -801,3 +801,131 @@ func TestPostgresExecuteClampsNegativePaging(t *testing.T) {
 		t.Fatalf("total_rows must stay unset without paging, got %+v", res[0].TotalRows)
 	}
 }
+
+// --- 表浏览器行数计数缓存(MySQL/PG 共用同一套失效纪律) ---
+
+// newBrowsePGConn 供给主键 ["id"]、COUNT=42 与页数据的桩应答。
+func newBrowsePGConn() *recordingPGConn {
+	return &recordingPGConn{rowsFor: func(query string) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "indisprimary"):
+			return &staticPGRows{columns: []string{"coalesce"}, rows: [][]driver.Value{{`["id"]`}}}, nil
+		case strings.Contains(query, "SELECT COUNT(*)"):
+			return &staticPGRows{columns: []string{"count"}, rows: [][]driver.Value{{int64(42)}}}, nil
+		}
+		return &staticPGRows{columns: []string{"id"}, rows: [][]driver.Value{{int64(1)}}}, nil
+	}}
+}
+
+// countPGCommands 统计录制到的精确 COUNT 语句条数(PageRows 的计数查询,
+// 区别于控制台包装计数)。
+func countPGCommands(conn *recordingPGConn, sql string) int {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	n := 0
+	for _, cmd := range conn.commands {
+		if cmd.SQL == sql {
+			n++
+		}
+	}
+	return n
+}
+
+// TestPostgresPageRowsCachesCount 同参数连续翻页:COUNT 只发一次,主键元数据
+// 与页数据照常每页各自查询(PG 不缓存元数据,只有计数入缓存)。
+func TestPostgresPageRowsCachesCount(t *testing.T) {
+	conn := newBrowsePGConn()
+	client := newPagedPGClient(t, conn)
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		res, err := client.PageRows(ctx, "app", "public", "users", "table", "", "", true, 10, 0)
+		if err != nil {
+			t.Fatalf("PageRows #%d: %v", i+1, err)
+		}
+		if res.TotalRows != 42 || len(res.PrimaryKey) != 1 || res.PrimaryKey[0] != "id" || len(res.Rows) != 1 {
+			t.Fatalf("PageRows #%d shape mismatch: %+v", i+1, res)
+		}
+	}
+	const countSQL = `SELECT COUNT(*) FROM "public"."users"`
+	if got := countPGCommands(conn, countSQL); got != 1 {
+		t.Fatalf("second page must reuse the cached count, got %d count queries", got)
+	}
+	// where 归一:纯空白差异命中同一键。
+	if _, err := client.PageRows(ctx, "app", "public", "users", "table", "   ", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows blank where: %v", err)
+	}
+	if got := countPGCommands(conn, countSQL); got != 1 {
+		t.Fatalf("blank-space where must hit the same count key, got %d count queries", got)
+	}
+	// 实质不同的 where 是不同键:重新计数。
+	if _, err := client.PageRows(ctx, "app", "public", "users", "table", "id = 1", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows filtered: %v", err)
+	}
+	if got := countPGCommands(conn, countSQL); got != 2 {
+		t.Fatalf("a distinct where must be a distinct count key, got %d count queries", got)
+	}
+}
+
+// TestPostgresPageRowsCountCacheInvalidatedByUpdateCell UpdateCell 成功后
+// 计数失效,下次翻页重新 COUNT;请求库名为空时按默认库归一,失效键与
+// PageRows 的存键一致。
+func TestPostgresPageRowsCountCacheInvalidatedByUpdateCell(t *testing.T) {
+	conn := newBrowsePGConn()
+	client := newPagedPGClient(t, conn)
+	ctx := context.Background()
+	if _, err := client.PageRows(ctx, "app", "public", "users", "table", "", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows: %v", err)
+	}
+	req := model.PostgresCellUpdateRequest{
+		Database: "", // 空 = 默认库 app,失效键必须归一到同一池名
+		Schema:   "public", Relation: "users", RelationKind: model.PostgresRelationKindTable,
+		Set:   model.PostgresCellValue{Column: "note", Value: strP("x")},
+		Where: []model.PostgresCellValue{{Column: "id", Value: strP("1")}},
+	}
+	if err := client.UpdateCell(ctx, req); err != nil {
+		t.Fatalf("UpdateCell: %v", err)
+	}
+	if _, err := client.PageRows(ctx, "app", "public", "users", "table", "", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows after update: %v", err)
+	}
+	if got := countPGCommands(conn, `SELECT COUNT(*) FROM "public"."users"`); got != 2 {
+		t.Fatalf("count cache must be invalidated by UpdateCell, got %d count queries", got)
+	}
+}
+
+// TestPostgresPageRowsCountTTLExpiry TTL 置负后连续翻页必须重新 COUNT。
+func TestPostgresPageRowsCountTTLExpiry(t *testing.T) {
+	oldCount := browseCountTTL
+	browseCountTTL = -time.Second
+	defer func() { browseCountTTL = oldCount }()
+	conn := newBrowsePGConn()
+	client := newPagedPGClient(t, conn)
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		if _, err := client.PageRows(ctx, "app", "public", "users", "table", "", "", true, 10, 0); err != nil {
+			t.Fatalf("PageRows #%d: %v", i+1, err)
+		}
+	}
+	if got := countPGCommands(conn, `SELECT COUNT(*) FROM "public"."users"`); got != 2 {
+		t.Fatalf("expired count must be refetched, got %d count queries", got)
+	}
+}
+
+// TestPostgresTruncateTableInvalidatesCountCache TRUNCATE 后计数失效。
+func TestPostgresTruncateTableInvalidatesCountCache(t *testing.T) {
+	conn := newBrowsePGConn()
+	client := newPagedPGClient(t, conn)
+	ctx := context.Background()
+	if _, err := client.PageRows(ctx, "app", "public", "users", "table", "", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows: %v", err)
+	}
+	if err := client.TruncateTable(ctx, "app", "public", "users", "table"); err != nil {
+		t.Fatalf("TruncateTable: %v", err)
+	}
+	if _, err := client.PageRows(ctx, "app", "public", "users", "table", "", "", true, 10, 0); err != nil {
+		t.Fatalf("PageRows after truncate: %v", err)
+	}
+	if got := countPGCommands(conn, `SELECT COUNT(*) FROM "public"."users"`); got != 2 {
+		t.Fatalf("truncate must invalidate the count cache, got %d count queries", got)
+	}
+}

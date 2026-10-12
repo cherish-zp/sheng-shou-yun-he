@@ -54,6 +54,11 @@ type MysqlClient struct {
 	connType model.ConnectionType
 	// defaultDB 是连接配置的默认库:请求未显式指定库名时兜底使用。
 	defaultDB string
+
+	// 浏览性能缓存:表元数据(engine/列/主键)与行数计数,TTL 内被翻页与
+	// SQL 控制台复用,写路径按表失效。零值即可用,构造点无需初始化。
+	metaCache  mysqlTableMetaCache
+	countCache browseCountCache
 }
 
 // compile-time proof that MysqlClient implements the MySQL data source.
@@ -262,25 +267,27 @@ func (c *MysqlClient) Tables(ctx context.Context, database string) ([]model.Mysq
 
 // PageRows returns one page of `SELECT *` over the table with pre-formatted
 // string cells (nil = NULL), plus the engine, exact total row count (COUNT(*))
-// and primary key metadata.
+// and primary key metadata. 元数据与计数走 TTL 缓存(browse_cache.go),未命中
+// 路径的查询顺序与语句文本与无缓存时逐字一致。
 func (c *MysqlClient) PageRows(ctx context.Context, database, table, where, orderBy string, asc bool, limit, offset int) (model.MysqlPageRowsResult, error) {
 	var res model.MysqlPageRowsResult
 
-	engine, err := c.tableMeta(ctx, database, table)
+	engine, cols, pk, err := c.browseTableMeta(ctx, c.db, database, table)
 	if err != nil {
 		return res, err
 	}
 	res.Engine = engine
-
-	cols, pk, err := c.tableColumnsWithPK(ctx, c.db, database, table)
-	if err != nil {
-		return res, err
-	}
 	res.Columns, res.PrimaryKey = cols, pk
 
-	if err := c.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM "+quoteMysqlIdent(database)+"."+quoteMysqlIdent(table)).Scan(&res.TotalRows); err != nil {
-		return res, fmt.Errorf("count rows: %w", err)
+	countKey := mysqlBrowseCountKey(database, table, where)
+	if total, ok := c.countCache.get(countKey, browseCountTTL); ok {
+		res.TotalRows = total
+	} else {
+		if err := c.db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM "+quoteMysqlIdent(database)+"."+quoteMysqlIdent(table)).Scan(&res.TotalRows); err != nil {
+			return res, fmt.Errorf("count rows: %w", err)
+		}
+		c.countCache.put(countKey, res.TotalRows)
 	}
 
 	query := "SELECT * FROM " + quoteMysqlIdent(database) + "." + quoteMysqlIdent(table)
@@ -342,14 +349,60 @@ func (c *MysqlClient) tableMeta(ctx context.Context, database, table string) (st
 	return engine.String, rows.Err()
 }
 
+// browseTableMeta 返回表浏览分页所需的 engine 与列/主键元数据,优先命中
+// metaCache;未命中时按原有顺序拉取 engine(information_schema.tables)与
+// 列+主键(information_schema.columns)并整体入缓存。控制台列元数据路径先建
+// 的条目不带 engine,命中后发现为空则补拉一次并回填,保证 PageRows 的
+// engine 语义不因缓存变空;表不存在仍由 tableMeta 原样报错。
+func (c *MysqlClient) browseTableMeta(ctx context.Context, exec mysqlExecutor, database, table string) (string, []model.MysqlColumn, []string, error) {
+	key := mysqlBrowseMetaKey(database, table)
+	if e, ok := c.metaCache.get(key, browseMetaTTL); ok {
+		engine := e.engine
+		if engine == "" {
+			var err error
+			if engine, err = c.tableMeta(ctx, database, table); err != nil {
+				return "", nil, nil, err
+			}
+			c.metaCache.setEngine(key, engine)
+		}
+		return engine, e.cols, e.pk, nil
+	}
+	engine, err := c.tableMeta(ctx, database, table)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	cols, pk, err := c.tableColumnsWithPKFetch(ctx, exec, database, table)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	c.metaCache.put(key, mysqlTableMetaEntry{engine: engine, cols: cols, pk: pk})
+	return engine, cols, pk, nil
+}
+
 // tableColumnsWithPK reads the table's column metadata in definition order
-// plus the primary key column names (information_schema.columns.column_key =
-// 'PRI', in ordinal position order). 单元格编辑的 WHERE、分页与单表 SELECT
-// 结果的 primary_key 元数据同源于这一条查询。COLUMN_KEY 不可信的变体服务器
-// (分片代理/OceanBase 等恒返回空)回退 primaryKeyFromIndexes 逐层探测。
-// exec 由调用方给出(连接池或 USE 固定的专用连接),查询只读且全限定,不
-// 依赖会话状态。
+// plus the primary key column names, served from the per-client metadata cache
+// within browseMetaTTL(表浏览分页与 SQL 控制台的单表 SELECT、单元格编辑、按行
+// 删除共用同一份元数据)。命中直接返回深拷贝;未命中回源并入缓存——只缓存
+// 确有列定义的表,查无此表的空结果不入缓存,保持「表不存在」路径原语义。
 func (c *MysqlClient) tableColumnsWithPK(ctx context.Context, exec mysqlExecutor, database, table string) ([]model.MysqlColumn, []string, error) {
+	key := mysqlBrowseMetaKey(database, table)
+	if e, ok := c.metaCache.get(key, browseMetaTTL); ok {
+		return e.cols, e.pk, nil
+	}
+	cols, pk, err := c.tableColumnsWithPKFetch(ctx, exec, database, table)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(cols) > 0 {
+		c.metaCache.put(key, mysqlTableMetaEntry{cols: cols, pk: pk})
+	}
+	return cols, pk, nil
+}
+
+// tableColumnsWithPKFetch 是 tableColumnsWithPK 的回源实现:读 information_schema
+// 的列元数据与主键(COLUMN_KEY 不可信的变体服务器逐层回退探测)。原查询语义
+// 见 tableColumnsWithPK 注释。
+func (c *MysqlClient) tableColumnsWithPKFetch(ctx context.Context, exec mysqlExecutor, database, table string) ([]model.MysqlColumn, []string, error) {
 	rows, err := exec.QueryContext(ctx,
 		"SELECT column_name, column_type, column_comment, column_key FROM information_schema.columns"+
 			" WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position", database, table)
@@ -505,13 +558,28 @@ func collectShowIndexPrimaryKey(rows *sql.Rows) []string {
 	return out
 }
 
-// TruncateTable empties the table.
+// TruncateTable empties the table. 成功后清空该表的浏览缓存(行数必然归零,
+// 元数据一并失效)。
 func (c *MysqlClient) TruncateTable(ctx context.Context, database, table string) error {
 	query := "TRUNCATE TABLE " + quoteMysqlIdent(database) + "." + quoteMysqlIdent(table)
 	if _, err := c.db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("truncate: %w", err)
 	}
+	c.invalidateMysqlBrowseCache(database, table)
 	return nil
+}
+
+// invalidateMysqlBrowseCache 清掉一表的元数据条目与全部 where 变体的行数
+// 计数缓存(DDL/TRUNCATE 后调用:结构可能变化、行数必然变化)。
+func (c *MysqlClient) invalidateMysqlBrowseCache(database, table string) {
+	c.metaCache.drop(mysqlBrowseMetaKey(database, table))
+	c.countCache.dropPrefix(mysqlBrowseCountPrefix(database, table))
+}
+
+// invalidateMysqlBrowseCounts 仅清一表全部 where 变体的行数计数缓存(数据写
+// 后调用:行数可能变化,结构未动、元数据继续命中)。
+func (c *MysqlClient) invalidateMysqlBrowseCounts(database, table string) {
+	c.countCache.dropPrefix(mysqlBrowseCountPrefix(database, table))
 }
 
 // mysqlExecutor abstracts the shared query/exec surface of *sql.DB and
@@ -922,7 +990,8 @@ func (c *MysqlClient) PreviewCellUpdate(ctx context.Context, database, table str
 }
 
 // UpdateCell executes the cell update as a parameterized UPDATE (? 占位 +
-// 值参数)。执行路径不使用预览文本;主键校验与语句构造重新走一遍。
+// 值参数)。执行路径不使用预览文本;主键校验与语句构造重新走一遍。成功后
+// 失效该表的行数计数缓存(元数据不受数据写影响)。
 func (c *MysqlClient) UpdateCell(ctx context.Context, database, table string, set model.MysqlCellValue, where []model.MysqlCellValue) error {
 	db := c.resolveDatabase(database)
 	if err := c.validateCellEdit(ctx, db, table, where); err != nil {
@@ -935,6 +1004,7 @@ func (c *MysqlClient) UpdateCell(ctx context.Context, database, table string, se
 	if _, err := c.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("update cell: %w", err)
 	}
+	c.invalidateMysqlBrowseCounts(db, table)
 	return nil
 }
 

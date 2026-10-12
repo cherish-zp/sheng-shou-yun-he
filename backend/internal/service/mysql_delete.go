@@ -56,6 +56,7 @@ func (c *MysqlClient) PreviewDeleteRow(ctx context.Context, req MysqlDeleteRowRe
 }
 
 // DeleteRow 执行按主键定位的 DELETE。执行路径重新走一遍校验与语句构造。
+// 成功后失效该表的行数计数缓存(元数据不受数据写影响)。
 func (c *MysqlClient) DeleteRow(ctx context.Context, req MysqlDeleteRowRequest) error {
 	db := c.resolveDatabase(req.Database)
 	if err := c.validateMysqlDelete(ctx, db, req.Table, req.Where); err != nil {
@@ -68,6 +69,7 @@ func (c *MysqlClient) DeleteRow(ctx context.Context, req MysqlDeleteRowRequest) 
 	if _, err := c.db.ExecContext(ctx, stmt); err != nil {
 		return fmt.Errorf("delete row: %w", err)
 	}
+	c.invalidateMysqlBrowseCounts(db, req.Table)
 	return nil
 }
 
