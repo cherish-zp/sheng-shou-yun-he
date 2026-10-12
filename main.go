@@ -12,6 +12,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 
 	"sheng-shou-yun-he/backend"
 )
@@ -43,7 +44,18 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
+		// 标题栏双栏合一:隐藏原生标题文字、内容铺满整窗(红绿灯保留并悬浮),
+		// 应用内 topbar 上移占据原生标题栏那一行,换取更多垂直空间。
+		Mac: &mac.Options{
+			TitleBar: &mac.TitleBar{
+				TitlebarAppearsTransparent: true,
+				FullSizeContent:            true,
+				HideTitle:                  true,
+				HideTitleBar:               false, // 保留红绿灯
+			},
+		},
+		// 与默认主题「少女粉」--bg(#fff5f9)同色,消除启动瞬间窗口底色闪色。
+		BackgroundColour: &options.RGBA{R: 255, G: 245, B: 249, A: 1},
 		OnStartup:        app.Startup,
 		Bind: []interface{}{
 			app,

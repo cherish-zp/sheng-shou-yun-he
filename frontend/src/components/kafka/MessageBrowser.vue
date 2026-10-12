@@ -4,7 +4,7 @@ import { useBrowseStore } from '@/store/browse'
 import type { MessageQuery } from '@/store/browse'
 import { OffsetEarliest, OffsetLatest } from '@/api/types'
 import type { Message } from '@/api/types'
-import { formatTime, displayValue } from '@/utils/format'
+import { formatTime, truncateCell } from '@/utils/format'
 import { CSV_MIME, JSONL_MIME, MESSAGE_EXPORT_COLUMNS, exportCsv, exportJsonl, saveFile } from '@/utils/export'
 import ExportDropdown from '@/components/common/ExportDropdown.vue'
 import MessageDetailDrawer from './MessageDetailDrawer.vue'
@@ -239,8 +239,8 @@ onMounted(runQuery)
             <td>{{ m.partition }}</td>
             <td class="mono">{{ m.offset }}</td>
             <td class="mono">{{ formatTime(m.timestamp) }}</td>
-            <td class="mono truncate">{{ displayValue(m.key) }}</td>
-            <td class="truncate">{{ displayValue(m.value) }}</td>
+            <td class="mono truncate">{{ truncateCell(m.key) }}</td>
+            <td class="truncate">{{ truncateCell(m.value) }}</td>
           </tr>
           <tr v-if="st.messages.length === 0 && !st.loading">
             <td colspan="5" class="empty" data-test="browse-empty">暂无消息</td>

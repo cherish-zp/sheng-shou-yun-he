@@ -4,7 +4,7 @@ import { getApi } from '@/api/client'
 import type { Message } from '@/api/types'
 import { OffsetEarliest } from '@/api/types'
 import { parseSelect, matchesWhere } from '@/utils/sql'
-import { formatTime, displayValue } from '@/utils/format'
+import { formatTime, truncateCell } from '@/utils/format'
 import { splitSqlStatements } from '@/utils/sqlSplit'
 import PromptDialog from '@/components/common/PromptDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -477,8 +477,10 @@ const resultRows = computed<(string | null)[][]>(() =>
     String(m.partition),
     String(m.offset),
     formatTime(m.timestamp),
-    displayValue(m.key),
-    displayValue(m.value),
+    // 列表单元格截断展示:超长 value 全量进 DOM 会拖垮大结果渲染,
+    // 与消息浏览列表同策略(200 字符 + …)。
+    truncateCell(m.key),
+    truncateCell(m.value),
   ]),
 )
 

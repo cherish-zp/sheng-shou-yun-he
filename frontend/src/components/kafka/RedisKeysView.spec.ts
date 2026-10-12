@@ -228,6 +228,47 @@ describe('RedisKeysView', () => {
     })
   })
 
+  // --- SCAN 累积上限(2 万键) -------------------------------------------------
+
+  // 2 万行渲染在 jsdom 下开销大,行计数走原生 querySelectorAll,且上限全路径
+  // (截断→提示→游标清零→重扫重置)合并进单条用例,只做一次大规模首渲染。
+  const rowCount = (wrapper: { element: Element }): number =>
+    wrapper.element.querySelectorAll('[data-test="redis-key-row"]').length
+
+  const manyKeys = (n: number, prefix = 'k'): RedisKeyInfo[] =>
+    Array.from({ length: n }, (_, i) => key(`${prefix}${i}`))
+
+  it('stops accumulating at 20000 keys with a notice and resets on a fresh scan', async () => {
+    ;(api.redisScan as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ cursor: 7, keys: manyKeys(19995) })
+      .mockResolvedValueOnce({ cursor: 0, keys: manyKeys(10, 'm') })
+      .mockResolvedValueOnce({ cursor: 0, keys: [key('user:1')] })
+    const wrapper = mount(RedisKeysView, { props: { connectionId: 'r1', db: 0 } })
+    await vi.waitFor(() => {
+      expect(rowCount(wrapper)).toBe(19995)
+    })
+    // 游标未走完:加载更多可用,尚无上限提示。
+    expect(wrapper.find('[data-test="btn-redis-more"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="redis-limit-notice"]').exists()).toBe(false)
+
+    // 加载更多越过上限:追加被截断到 2 万,提示出现,游标清零后加载入口消失。
+    await wrapper.find('[data-test="btn-redis-more"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="redis-limit-notice"]').exists()).toBe(true)
+    })
+    expect(rowCount(wrapper)).toBe(20000)
+    expect(api.redisScan).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 7 }))
+    expect(wrapper.find('[data-test="btn-redis-more"]').exists()).toBe(false)
+
+    // 重扫(match 改动/切换库同路径):上限重置,提示消失,新结果正常渲染。
+    await wrapper.find('[data-test="redis-match"]').setValue('user:*')
+    await wrapper.find('[data-test="btn-redis-scan"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(rowCount(wrapper)).toBe(1)
+      expect(wrapper.find('[data-test="redis-limit-notice"]').exists()).toBe(false)
+    })
+  }, 60000)
+
   // 挂载并选中一个键,redisGetKey 返回给定值(编辑类用例共用)。
   async function mountWithValue(val: { key: string; type: string } & Record<string, unknown>) {
     ;(api.redisScan as ReturnType<typeof vi.fn>).mockResolvedValue({

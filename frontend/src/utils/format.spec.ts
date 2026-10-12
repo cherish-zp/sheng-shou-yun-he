@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { prettyJSON, formatTime, displayValue, formatCount } from './format'
+import { prettyJSON, formatTime, displayValue, truncateCell, formatCount } from './format'
 
 describe('prettyJSON', () => {
   it('formats valid JSON with indentation', () => {
@@ -23,6 +23,27 @@ describe('displayValue', () => {
     expect(displayValue(null)).toBe('(empty)')
     expect(displayValue(undefined)).toBe('(empty)')
     expect(displayValue('hello')).toBe('hello')
+  })
+})
+
+describe('truncateCell', () => {
+  it('marks null/empty as (empty) like displayValue and passes blanks through untrimmed', () => {
+    expect(truncateCell(null)).toBe('(empty)')
+    expect(truncateCell(undefined)).toBe('(empty)')
+    expect(truncateCell('')).toBe('(empty)')
+    expect(truncateCell('  ')).toBe('  ')
+  })
+  it('passes short values through verbatim', () => {
+    expect(truncateCell('hello')).toBe('hello')
+    expect(truncateCell('x'.repeat(200))).toBe('x'.repeat(200))
+  })
+  it('truncates overlong values to 200 chars with an ellipsis', () => {
+    expect(truncateCell('x'.repeat(201))).toBe(`${'x'.repeat(200)}…`)
+    expect(truncateCell('x'.repeat(1000))).toBe(`${'x'.repeat(200)}…`)
+  })
+  it('does not touch the untruncated displayValue', () => {
+    // 详情抽屉仍走 displayValue:完整值语义不被截断函数影响。
+    expect(displayValue('x'.repeat(1000))).toBe('x'.repeat(1000))
   })
 })
 

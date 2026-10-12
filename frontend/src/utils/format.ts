@@ -16,6 +16,17 @@ export function displayValue(v: string | undefined | null): string {
   return v
 }
 
+// 列表单元格截断展示:沿用 displayValue 的空值语义(null/空串 → '(empty)',
+// 保留消息列表原可见行为,仅新增截断),>200 字符截断 + … 后缀,空白串原样
+// 透传不 trim。列表 DOM 只保留截断文本,完整值仍由详情抽屉用不截断的
+// displayValue 呈现。
+export const CELL_TRUNCATE = 200
+
+export function truncateCell(v: string | undefined | null): string {
+  if (v == null || v === '') return '(empty)'
+  return v.length > CELL_TRUNCATE ? `${v.slice(0, CELL_TRUNCATE)}…` : v
+}
+
 // formatCount abbreviates a record count for the tree badges: 1200 -> "1.2K",
 // 1000000 -> "1M" (trailing zeros dropped). Small and negative counts render
 // verbatim.

@@ -325,6 +325,16 @@ describe('Layout', () => {
     expect(topbar.find('[data-test="btn-producer"]').exists()).toBe(false)
   })
 
+  it('marks the topbar as window-draggable and its buttons as no-drag', () => {
+    const { wrapper } = mountLayout([conn('a')])
+    // 标题栏双栏合一:topbar 整行承载 Wails 窗口拖拽契约,红绿灯浮在其左端。
+    expect(wrapper.find('[data-test="topbar"]').attributes('style')).toContain('--wails-draggable: drag')
+    // 6 个交互按钮逐个 no-drag 保证可点击(更新红点在 btn-update 内部继承)。
+    for (const id of ['btn-refresh-active', 'btn-update', 'btn-new-query', 'btn-settings', 'btn-docs-open', 'btn-sql-files']) {
+      expect(wrapper.find(`[data-test="${id}"]`).attributes('style')).toContain('--wails-draggable: no-drag')
+    }
+  })
+
   it('opens the producer panel from the message browser toolbar', async () => {
     const { wrapper } = mountLayout([conn('a')])
     emitTree(wrapper, 'open-topic', 'a', 'orders', [0, 1])
@@ -332,7 +342,10 @@ describe('Layout', () => {
       expect(wrapper.find('[data-test="message-browser"]').exists()).toBe(true)
     })
     await wrapper.findComponent(MessageBrowser).vm.$emit('open-producer')
-    expect(wrapper.find('[data-test="producer-panel"]').exists()).toBe(true)
+    // ProducerPanel 为异步分包组件:等模块解析完成再断言。
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="producer-panel"]').exists()).toBe(true)
+    })
     await wrapper.find('[data-test="modal-close"]').trigger('click')
     expect(wrapper.find('[data-test="producer-panel"]').exists()).toBe(false)
   })

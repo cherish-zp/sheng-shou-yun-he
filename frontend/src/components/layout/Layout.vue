@@ -5,9 +5,21 @@ import type { Connection } from '@/api/types'
 import ConnectionTree from '@/components/common/ConnectionTree.vue'
 import CommandPalette from '@/components/common/CommandPalette.vue'
 import BrandLogo from '@/components/common/BrandLogo.vue'
-import MessageBrowser from '@/components/kafka/MessageBrowser.vue'
-import ConsumerGroupView from '@/components/kafka/ConsumerGroupView.vue'
-import ProducerPanel from '@/components/kafka/ProducerPanel.vue'
+// tab 级重量视图统一异步分包:首屏只保留连接树/欢迎页等必需内容,以下面板
+// 在对应 tab 首次打开时按需加载(props/事件接线与静态导入完全一致)。
+const MessageBrowser = defineAsyncComponent(() => import('@/components/kafka/MessageBrowser.vue'))
+const ConsumerGroupView = defineAsyncComponent(() => import('@/components/kafka/ConsumerGroupView.vue'))
+const ProducerPanel = defineAsyncComponent(() => import('@/components/kafka/ProducerPanel.vue'))
+const GlobalLagView = defineAsyncComponent(() => import('@/components/kafka/GlobalLagView.vue'))
+const RedisKeysView = defineAsyncComponent(() => import('@/components/kafka/RedisKeysView.vue'))
+const ClusterHealthPanel = defineAsyncComponent(() => import('@/components/kafka/ClusterHealthPanel.vue'))
+const CHTableBrowser = defineAsyncComponent(() => import('@/components/kafka/CHTableBrowser.vue'))
+const MysqlTableBrowser = defineAsyncComponent(() => import('@/components/kafka/MysqlTableBrowser.vue'))
+const PostgresTableBrowser = defineAsyncComponent(() => import('@/components/kafka/PostgresTableBrowser.vue'))
+const HiveTableBrowser = defineAsyncComponent(() => import('@/components/kafka/HiveTableBrowser.vue'))
+const EsTableBrowser = defineAsyncComponent(() => import('@/components/kafka/EsTableBrowser.vue'))
+const EsTemplatesPanel = defineAsyncComponent(() => import('@/components/kafka/EsTemplatesPanel.vue'))
+const EsClusterMonitor = defineAsyncComponent(() => import('@/components/kafka/EsClusterMonitor.vue'))
 // SQL 控制台携带 CodeMirror 编辑器体系,体积大且非首屏必需:异步分包,
 // 首次打开对应 tab 时按需加载(props/事件接线与静态导入完全一致)。
 const SqlConsole = defineAsyncComponent(() => import('@/components/kafka/SqlConsole.vue'))
@@ -16,16 +28,8 @@ const MysqlSqlConsole = defineAsyncComponent(() => import('@/components/kafka/My
 const PostgresSqlConsole = defineAsyncComponent(() => import('@/components/kafka/PostgresSqlConsole.vue'))
 const EsSqlConsole = defineAsyncComponent(() => import('@/components/kafka/EsSqlConsole.vue'))
 const HiveSqlConsole = defineAsyncComponent(() => import('@/components/kafka/HiveSqlConsole.vue'))
-import GlobalLagView from '@/components/kafka/GlobalLagView.vue'
-import RedisKeysView from '@/components/kafka/RedisKeysView.vue'
-import ClusterHealthPanel from '@/components/kafka/ClusterHealthPanel.vue'
-import CHTableBrowser from '@/components/kafka/CHTableBrowser.vue'
-import MysqlTableBrowser from '@/components/kafka/MysqlTableBrowser.vue'
-import PostgresTableBrowser from '@/components/kafka/PostgresTableBrowser.vue'
-import HiveTableBrowser from '@/components/kafka/HiveTableBrowser.vue'
-import EsTableBrowser from '@/components/kafka/EsTableBrowser.vue'
-import EsTemplatesPanel from '@/components/kafka/EsTemplatesPanel.vue'
-import EsClusterMonitor from '@/components/kafka/EsClusterMonitor.vue'
+// 设置/更新/文档三个弹窗在 Layout 常驻渲染(无 v-if),异步化也会启动即拉取,
+// 保持静态导入;StatusBar/QueryFilesPanel/HomeView 同理为首屏轻量组件。
 import SettingsPanel from '@/components/settings/SettingsPanel.vue'
 import UpdateDialog from './UpdateDialog.vue'
 import DocsDialog from '@/components/docs/DocsDialog.vue'
@@ -551,7 +555,9 @@ function onTabDragEnd(): void {
 
 <template>
   <div class="layout" :class="{ resizing, 'files-resizing': filesResizing }" data-test="layout">
-    <header class="topbar" data-test="topbar">
+    <!-- 标题栏双栏合一:topbar 整行可拖动窗口(--wails-draggable 是 Wails v2 的
+         窗口拖拽 CSS 契约),交互按钮逐个降级为 no-drag 保证可点击。 -->
+    <header class="topbar" data-test="topbar" style="--wails-draggable: drag">
       <div class="brand" data-test="brand">
         <BrandLogo class="brand-logo" />
         <span>圣手运河</span>
@@ -561,6 +567,7 @@ function onTabDragEnd(): void {
         class="btn ghost"
         type="button"
         data-test="btn-refresh-active"
+        style="--wails-draggable: no-drag"
         :disabled="!active || active.kind === 'sql' || active.kind === 'ch-sql' || active.kind === 'mysql-sql' || active.kind === 'es-sql' || active.kind === 'hive-sql'"
         @click="refreshActive"
       >
@@ -571,6 +578,7 @@ function onTabDragEnd(): void {
         :class="{ 'has-update': updateAvailable }"
         type="button"
         data-test="btn-update"
+        style="--wails-draggable: no-drag"
         :title="updateAvailable ? `发现新版本 ${latestVersion}，点击查看` : '检查更新'"
         @click="openUpdate"
       >
@@ -584,18 +592,20 @@ function onTabDragEnd(): void {
         class="btn ghost"
         type="button"
         data-test="btn-new-query"
+        style="--wails-draggable: no-drag"
         :disabled="!canNewQuery"
         :title="canNewQuery ? '新建查询' : '请先打开 Kafka/ClickHouse 连接的标签页'"
         @click="openNewQuery"
       >
         新建查询
       </button>
-      <button class="btn ghost" type="button" data-test="btn-settings" @click="showSettings = true">设置</button>
-      <button class="btn ghost" type="button" data-test="btn-docs-open" @click="showDocs = true">文档</button>
+      <button class="btn ghost" type="button" data-test="btn-settings" style="--wails-draggable: no-drag" @click="showSettings = true">设置</button>
+      <button class="btn ghost" type="button" data-test="btn-docs-open" style="--wails-draggable: no-drag" @click="showDocs = true">文档</button>
       <button
         class="btn ghost icon-btn"
         type="button"
         data-test="btn-sql-files"
+        style="--wails-draggable: no-drag"
         title="SQL文件"
         @click="toggleFilesPanel"
       >
@@ -890,7 +900,12 @@ function onTabDragEnd(): void {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px;
+  /* 标题栏双栏合一:定高 40px 与 macOS 标题栏视觉融合,内容垂直居中;
+     padding-left 78px 给左上角红绿灯留位(标准位三枚按钮约 60px 宽,
+     余量让品牌标识与红绿灯不贴)。flex:none 防止极矮窗口被压缩。 */
+  height: 40px;
+  flex: none;
+  padding: 0 16px 0 78px;
   border-bottom: 1px solid var(--border);
   background: var(--topbar-bg);
   -webkit-backdrop-filter: var(--glass-blur);

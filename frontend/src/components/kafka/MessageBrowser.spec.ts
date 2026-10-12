@@ -184,6 +184,51 @@ describe('MessageBrowser', () => {
     expect(row.text()).not.toContain('5Lit')
   })
 
+  it('truncates long list cells at 200 chars with an ellipsis (DOM 截断)', async () => {
+    const longValue = 'x'.repeat(300)
+    const { wrapper } = mountBrowser({
+      consumeMessages: vi.fn(async () => [{ ...msg(0), key: 'k', value: longValue, headers: [] }]),
+    })
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('[data-test="message-row"]')).toHaveLength(1)
+    })
+    const cells = wrapper.find('[data-test="message-row"]').findAll('td')
+    const valueCell = cells[cells.length - 1]
+    // 与 TableDataGrid 同语义:200 字符 + …,长尾不进 DOM。
+    expect(valueCell.text()).toBe(`${'x'.repeat(200)}…`)
+    expect(valueCell.text()).not.toContain('x'.repeat(201))
+  })
+
+  it('renders a null key as NULL in the list cell', async () => {
+    const { wrapper } = mountBrowser({
+      consumeMessages: vi.fn(async () => [{ ...msg(0), key: null as unknown as string }]),
+    })
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('[data-test="message-row"]')).toHaveLength(1)
+    })
+    const cells = wrapper.find('[data-test="message-row"]').findAll('td')
+    expect(cells[cells.length - 2].text()).toBe('(empty)')
+  })
+
+  it('keeps the full value in the detail drawer while the list truncates', async () => {
+    const longValue = `${'y'.repeat(250)}TAIL`
+    const { wrapper } = mountBrowser({
+      consumeMessages: vi.fn(async () => [{ ...msg(0), key: 'k', value: longValue, headers: [] }]),
+    })
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('[data-test="message-row"]')).toHaveLength(1)
+    })
+    // 列表截断,长尾不可见。
+    const cells = wrapper.find('[data-test="message-row"]').findAll('td')
+    expect(cells[cells.length - 1].text()).not.toContain('TAIL')
+    // 详情抽屉仍展示原始完整值。
+    await wrapper.find('[data-test="message-row"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="message-drawer"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-test="value-body"]').text()).toBe(longValue)
+  })
+
   it('uses timestamp mode when selected', async () => {
     const { wrapper, api } = mountBrowser({
       consumeMessagesByTimestamp: vi.fn(async () => [msg(9)]),

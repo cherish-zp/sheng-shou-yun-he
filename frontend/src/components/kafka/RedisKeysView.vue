@@ -13,6 +13,10 @@ const cursor = ref(0)
 const match = ref('')
 const loading = ref(false)
 const error = ref<string | null>(null)
+// SCAN 累积上限:无 match 全库扫描时防止结果无限累积撑爆响应式数组与 DOM。
+// 达到上限后停止追加与续扫;下一次 scan(true)(切换库/改 match/重扫)即重置。
+const KEY_LIMIT = 20000
+const limitReached = ref(false)
 // 选中键与其值
 const selectedKey = ref<string | null>(null)
 const value = ref<RedisValue | null>(null)
@@ -24,8 +28,11 @@ const confirmDelete = ref(false)
 const confirmFlush = ref(false)
 
 async function scan(reset: boolean): Promise<void> {
+  // 已达上限时拒绝继续加载更多(reset 语义的重扫不受限,会先重置上限)。
+  if (!reset && limitReached.value) return
   loading.value = true
   error.value = null
+  if (reset) limitReached.value = false
   try {
     const res = await getApi().redisScan({
       connection_id: props.connectionId,
@@ -34,8 +41,16 @@ async function scan(reset: boolean): Promise<void> {
       match: match.value.trim() || '*',
       count: 50,
     })
-    keys.value = reset ? res.keys : [...keys.value, ...res.keys]
-    cursor.value = res.cursor
+    const merged = reset ? res.keys : [...keys.value, ...res.keys]
+    if (merged.length >= KEY_LIMIT) {
+      // 截断到上限并清零游标:隐藏「加载更多」,界面给出缩小范围的提示。
+      keys.value = merged.slice(0, KEY_LIMIT)
+      limitReached.value = true
+      cursor.value = 0
+    } else {
+      keys.value = merged
+      cursor.value = res.cursor
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -371,6 +386,10 @@ const ttlOfSelected = computed(() => value.value?.ttl_seconds ?? -1)
     </div>
 
     <div v-if="error" class="msg err" data-test="redis-error">{{ error }}</div>
+
+    <div v-if="limitReached" class="msg warn" data-test="redis-limit-notice">
+      已达 2 万键展示上限，请使用 match 前缀过滤缩小范围
+    </div>
 
     <div class="columns">
       <div class="keys-col">
