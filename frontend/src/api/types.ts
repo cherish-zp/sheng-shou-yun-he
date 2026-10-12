@@ -732,6 +732,15 @@ export interface MysqlTruncateTableRequest {
   table: string
 }
 
+// --- MySQL/TiDB 建表语句(SQL 控制台 Ctrl+表名悬停/固定查看) ---
+
+// 返回该表的 CREATE TABLE 全文(SHOW CREATE TABLE 原文)。
+export interface MysqlTableDDLRequest {
+  connection_id: string
+  database: string
+  table: string
+}
+
 // --- MySQL/TiDB 按行删除(控制台结果与表浏览器共用) ---
 
 // where 只允许主键列(后端强制);与单元格编辑的定位形状一致,value 为 null 表示 NULL。

@@ -7,6 +7,7 @@ import {
   Range,
   RangeSet,
   RangeValue,
+  StateEffect,
   type ChangeSpec,
   type Extension,
 } from '@codemirror/state'
@@ -63,6 +64,14 @@ export interface CursorPos {
   col: number
 }
 
+// Ctrl+表名探测事件载荷:x/y 为鼠标 client 坐标,name 为 props.tables 中
+// 命中的规范表名(大小写以表清单为准)。
+export interface TableProbePayload {
+  name: string
+  x: number
+  y: number
+}
+
 const props = withDefaults(
   defineProps<{
     modelValue: string
@@ -77,6 +86,8 @@ const props = withDefaults(
     highlightCursorStatement?: boolean
     /** 右键执行菜单(执行选中语句 / 执行当前语句 / 运行全部),默认关闭。 */
     enableRunMenu?: boolean
+    /** Ctrl+表名探测层(悬停预览建表语句),默认关闭,仅 MySQL 控制台开启。 */
+    tableProbe?: boolean
   }>(),
   {
     height: '180px',
@@ -86,6 +97,7 @@ const props = withDefaults(
     statementMarks: () => [],
     highlightCursorStatement: false,
     enableRunMenu: false,
+    tableProbe: false,
   },
 )
 
@@ -99,6 +111,14 @@ const emit = defineEmits<{
   (e: 'run-current'): void
   /** 右键菜单「运行全部」。 */
   (e: 'run-all'): void
+  /** Ctrl 按住且鼠标在表名上悬停 300ms(防抖期内移动重置)。 */
+  (e: 'table-hover', payload: TableProbePayload): void
+  /** 鼠标离开编辑器 / 离开表名 / Ctrl 松开(仅存在活跃悬停时发出)。 */
+  (e: 'table-leave'): void
+  /** Ctrl+mousedown 命中表名(已 preventDefault,不扰动光标)。 */
+  (e: 'table-pin', payload: TableProbePayload): void
+  /** Ctrl+mousedown 落在非表名处(消费方据此收起固定卡)。 */
+  (e: 'table-unpin'): void
 }>()
 
 const host = ref<HTMLElement | null>(null)
@@ -111,6 +131,7 @@ const placeholderCompartment = new Compartment()
 const runGutterCompartment = new Compartment()
 const marksGutterCompartment = new Compartment()
 const cursorDecoCompartment = new Compartment()
+const probeCompartment = new Compartment()
 
 function schemaOf(tables: SqlTableSchema[]): Record<string, string[]> {
   const out: Record<string, string[]> = {}
@@ -167,18 +188,20 @@ const editorTheme = EditorView.theme({
     backgroundColor: 'var(--accent-soft)',
     color: 'var(--accent)',
   },
-  // —— 语句 ▶ 运行按钮(绿色三角)——
+  // —— 语句 ▶ 运行按钮(主题色三角,hover 放大)——
   '.cm-run-statement': {
-    color: 'var(--ok)',
+    color: 'var(--primary)',
     cursor: 'pointer',
-    fontSize: '10px',
+    fontSize: '13px',
     lineHeight: '19px',
     background: 'none',
     border: 'none',
     padding: '0 4px',
-    opacity: '0.75',
+    borderRadius: '4px',
+    transition: 'transform .12s ease, background .12s ease',
   },
-  '.cm-run-statement:hover': { opacity: '1' },
+  '.cm-run-statement:hover': { background: 'var(--primary-weak)', transform: 'scale(1.2)' },
+  '.cm-run-statement:active': { transform: 'scale(0.95)' },
   // —— 语句执行状态标记(行号旁 ✓/✗/⟳)——
   '.cm-statement-gutter .cm-gutterElement, .cm-marks-gutter .cm-gutterElement': {
     padding: '0 2px',
@@ -192,6 +215,11 @@ const editorTheme = EditorView.theme({
   },
   // —— 光标所在语句微高亮 ——
   '.cm-current-statement': { backgroundColor: 'var(--accent-soft)' },
+  // —— Ctrl+表名探测下划线(tableProbe 开启时) ——
+  '.cm-table-probe': {
+    textDecoration: 'underline dotted var(--primary)',
+    cursor: 'pointer',
+  },
 })
 
 // 语法高亮复用现有 --json-* / --text-* 变量,深浅色主题均已定义。
@@ -230,7 +258,11 @@ class RunStatementMarker extends GutterMarker {
   }
 }
 
-// ▶ 槽:每条语句首行一个按钮(渲染在行号左侧)。
+// ▶ 槽:每条语句一个按钮。CM 的 gutter 只收集锚在行首(from == line.from)的
+// marker(见 @codemirror/view UpdateContext.line → advanceCursor),挂在行中
+// seg.from 的 marker 会被静默丢弃;因此同行多条语句的 marker 统一锚定到所在
+// 行行首,按段序逐个入 RangeSet(同位置多个 marker 均被收集、依序并排渲染),
+// 各自携带段文本,不再互相去重——每个 ▶ 点击执行自己的语句。
 function runGutterExtension(): Extension {
   return gutter({
     class: 'cm-statement-gutter',
@@ -238,8 +270,7 @@ function runGutterExtension(): Extension {
       const doc = view.state.doc
       const ranges: Range<GutterMarker>[] = []
       for (const seg of splitSqlStatements(doc.toString())) {
-        const lineFrom = doc.lineAt(seg.from).from
-        ranges.push(new RunStatementMarker(seg.text).range(lineFrom))
+        ranges.push(new RunStatementMarker(seg.text).range(doc.lineAt(seg.from).from))
       }
       return ranges.length ? RangeSet.of(ranges, true) : RangeSet.empty
     },
@@ -321,6 +352,194 @@ const cursorStatementPlugin = ViewPlugin.fromClass(
   },
   { decorations: (v) => v.decorations },
 )
+
+// —— Ctrl+表名探测层(tableProbe,默认关闭;MySQL 控制台开启)——
+//
+// Ctrl(或 mac ⌘)按住时:文档中所有命中表清单的标识符加 cm-table-probe 点状
+// 下划线装饰;悬停某表名 300ms emit table-hover,Ctrl+mousedown 命中表名 emit
+// table-pin(阻断编辑器默认行为),落在非表名处 emit table-unpin。
+
+// 探测快照:表集合(小写键 → 规范名)+ Ctrl 按住状态,经 effect 推给装饰插件
+// 触发装饰重建(文档变化由插件按 docChanged 自行重建)。
+interface ProbeSnapshot {
+  tables: ReadonlyMap<string, string>
+  ctrl: boolean
+}
+
+const probeSnapshotEffect = StateEffect.define<ProbeSnapshot>()
+
+// 表名规范化:剥反引号,取 `库.` 前缀最后一段。
+function normalizeTableName(raw: string): string {
+  const stripped = raw.replace(/`/g, '').trim()
+  const parts = stripped.split('.')
+  return (parts[parts.length - 1] ?? '').trim()
+}
+
+function probeTableMap(tables: SqlTableSchema[]): ReadonlyMap<string, string> {
+  const map = new Map<string, string>()
+  for (const table of tables ?? []) {
+    const name = normalizeTableName(table.name)
+    if (name) map.set(name.toLowerCase(), name)
+  }
+  return map
+}
+
+// 扫描文档中的标识符(含反引号包裹形式),规范化后命中表集合 → 加探测装饰。
+// matches 按出现序天然有序,Decoration.set(sorted) 直接收。
+function buildProbeDeco(v: EditorView, snap: ProbeSnapshot): DecorationSet {
+  if (!snap.ctrl || snap.tables.size === 0) return Decoration.none
+  const text = v.state.doc.toString()
+  const ranges: Range<Decoration>[] = []
+  const tokenRe = /`[^`\n]*`|[\w$]+/g
+  let m: RegExpExecArray | null
+  while ((m = tokenRe.exec(text)) !== null) {
+    const name = normalizeTableName(m[0])
+    if (!name || !snap.tables.has(name.toLowerCase())) continue
+    ranges.push(Decoration.mark({ class: 'cm-table-probe' }).range(m.index, m.index + m[0].length))
+  }
+  return ranges.length ? Decoration.set(ranges, true) : Decoration.none
+}
+
+// —— 探测层组件作用域状态(仅 tableProbe 开启时活动)——
+
+const TABLE_HOVER_DEBOUNCE_MS = 300
+
+let probeTables: ReadonlyMap<string, string> = new Map()
+let probeCtrl = false
+let probeHoverTimer: ReturnType<typeof setTimeout> | null = null
+let probeHoverName: string | null = null
+
+function dispatchProbeSnapshot(): void {
+  view?.dispatch({ effects: probeSnapshotEffect.of({ tables: probeTables, ctrl: probeCtrl }) })
+}
+
+function clearProbeHoverTimer(): void {
+  if (probeHoverTimer !== null) {
+    clearTimeout(probeHoverTimer)
+    probeHoverTimer = null
+  }
+}
+
+// 结束悬停:存在活跃悬停才 emit table-leave(notify=false 仅静默清理,用于 pin)。
+function endProbeHover(notify = true): void {
+  clearProbeHoverTimer()
+  if (probeHoverName !== null) {
+    probeHoverName = null
+    if (notify) emit('table-leave')
+  }
+}
+
+function scheduleProbeHover(name: string, x: number, y: number): void {
+  clearProbeHoverTimer()
+  probeHoverTimer = setTimeout(() => {
+    probeHoverTimer = null
+    probeHoverName = name
+    emit('table-hover', { name, x, y })
+  }, TABLE_HOVER_DEBOUNCE_MS)
+}
+
+// 坐标 → 命中的规范表名;未命中(非表名词/无法定位)返回 null。
+function probeTableNameAt(v: EditorView, x: number, y: number): string | null {
+  if (probeTables.size === 0) return null
+  const pos = v.posAtCoords({ x, y })
+  if (pos == null) return null
+  const word = v.state.wordAt(pos)
+  if (!word) return null
+  const lower = normalizeTableName(v.state.sliceDoc(word.from, word.to)).toLowerCase()
+  return probeTables.get(lower) ?? null
+}
+
+function setProbeCtrl(down: boolean): void {
+  if (down === probeCtrl) return
+  probeCtrl = down
+  dispatchProbeSnapshot()
+  // Ctrl 松开:清悬停计时器并结束活跃悬停。
+  if (!down) endProbeHover()
+}
+
+function onProbeWindowKeydown(e: KeyboardEvent): void {
+  setProbeCtrl(e.ctrlKey || e.metaKey)
+}
+
+function onProbeWindowKeyup(e: KeyboardEvent): void {
+  // 修饰键自身抬起后 ctrlKey/metaKey 均为 false;普通键抬起不影响按住状态。
+  if (!e.ctrlKey && !e.metaKey) setProbeCtrl(false)
+}
+
+function onProbeWindowBlur(): void {
+  setProbeCtrl(false)
+}
+
+function setProbeListeners(on: boolean): void {
+  if (on) {
+    window.addEventListener('keydown', onProbeWindowKeydown)
+    window.addEventListener('keyup', onProbeWindowKeyup)
+    window.addEventListener('blur', onProbeWindowBlur)
+  } else {
+    window.removeEventListener('keydown', onProbeWindowKeydown)
+    window.removeEventListener('keyup', onProbeWindowKeyup)
+    window.removeEventListener('blur', onProbeWindowBlur)
+  }
+}
+
+function tableProbeExtension(): Extension {
+  const probePlugin = ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet
+      snap: ProbeSnapshot
+      constructor(v: EditorView) {
+        this.snap = { tables: probeTables, ctrl: probeCtrl }
+        this.decorations = buildProbeDeco(v, this.snap)
+      }
+      update(u: ViewUpdate) {
+        let dirty = u.docChanged
+        for (const tr of u.transactions) {
+          for (const e of tr.effects) {
+            if (e.is(probeSnapshotEffect)) {
+              this.snap = e.value
+              dirty = true
+            }
+          }
+        }
+        if (dirty) this.decorations = buildProbeDeco(u.view, this.snap)
+      }
+    },
+    { decorations: (v) => v.decorations },
+  )
+  return [
+    probePlugin,
+    EditorView.domEventHandlers({
+      mousemove(ev, v) {
+        if (!probeCtrl) return
+        const name = probeTableNameAt(v, ev.clientX, ev.clientY)
+        if (name === null) {
+          endProbeHover()
+          return
+        }
+        // 同一表名内移动不重发;换表/防抖期内移动 → 重置计时。
+        if (name === probeHoverName) return
+        scheduleProbeHover(name, ev.clientX, ev.clientY)
+      },
+      mouseleave() {
+        endProbeHover()
+      },
+      mousedown(ev, v) {
+        if (!probeCtrl) return
+        const name = probeTableNameAt(v, ev.clientX, ev.clientY)
+        if (name !== null) {
+          // 阻断编辑器默认行为(Ctrl+点击不应扰动光标/选区)。
+          ev.preventDefault()
+          endProbeHover(false)
+          emit('table-pin', { name, x: ev.clientX, y: ev.clientY })
+          return true
+        }
+        // Ctrl+点击非表名处:通知消费方收起固定卡(hover 模式由消费方忽略)。
+        emit('table-unpin')
+        return
+      },
+    }),
+  ]
+}
 
 // —— 更新监听:v-model 回写 + cursor 事件 ——
 
@@ -432,6 +651,8 @@ function onDocKeydown(ev: KeyboardEvent): void {
 
 onMounted(() => {
   if (!host.value) return
+  // 探测层表集合初值(tables watcher 不在挂载时触发)。
+  probeTables = probeTableMap(props.tables)
   const extensions: Extension[] = [
     // 允许多光标/多选区(默认会折叠为单光标),复制当前行等命令依赖它。
     EditorState.allowMultipleSelections.of(true),
@@ -441,6 +662,7 @@ onMounted(() => {
       props.statementMarks.length ? marksGutterExtension(props.statementMarks) : [],
     ),
     cursorDecoCompartment.of(props.highlightCursorStatement ? cursorStatementPlugin : []),
+    probeCompartment.of(props.tableProbe ? tableProbeExtension() : []),
     drawSelection(),
     history(),
     indentOnInput(),
@@ -471,12 +693,15 @@ onMounted(() => {
   view.contentDOM.addEventListener('contextmenu', onContentContextmenu)
   document.addEventListener('mousedown', onDocMouseDown)
   document.addEventListener('keydown', onDocKeydown)
+  if (props.tableProbe) setProbeListeners(true)
 })
 
-// tables 变化(如异步加载完元数据)→ 热替换 sql schema。
+// tables 变化(如异步加载完元数据)→ 热替换 sql schema,并同步探测层表集合。
 watch(
   () => props.tables,
   (tables) => {
+    probeTables = probeTableMap(tables)
+    if (props.tableProbe) dispatchProbeSnapshot()
     view?.dispatch({ effects: sqlCompartment.reconfigure(sqlExtension(tables)) })
   },
   { deep: true },
@@ -525,10 +750,29 @@ watch(
   },
 )
 
+// 探测层开关:热替换扩展;关闭时复位 Ctrl 状态并清理悬停计时。
+watch(
+  () => props.tableProbe,
+  (on) => {
+    if (on) {
+      setProbeListeners(true)
+    } else {
+      setProbeListeners(false)
+      probeCtrl = false
+      endProbeHover()
+    }
+    view?.dispatch({
+      effects: probeCompartment.reconfigure(on ? tableProbeExtension() : []),
+    })
+  },
+)
+
 onBeforeUnmount(() => {
   view?.contentDOM.removeEventListener('contextmenu', onContentContextmenu)
   document.removeEventListener('mousedown', onDocMouseDown)
   document.removeEventListener('keydown', onDocKeydown)
+  if (props.tableProbe) setProbeListeners(false)
+  clearProbeHoverTimer()
   view?.destroy()
   view = null
 })

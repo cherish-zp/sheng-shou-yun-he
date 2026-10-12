@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { getApi } from '@/api/client'
 import type { RedisKeyInfo, RedisListPushRequest, RedisServerInfo, RedisValue } from '@/api/types'
 import { formatBytes } from '@/utils/bytes'
+import { useToastStore } from '@/store/toast'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const props = defineProps<{ connectionId: string; db: number }>()
@@ -332,11 +333,20 @@ async function doZSetRemove(member: string): Promise<void> {
 }
 
 async function doFlushDB(): Promise<void> {
-  await getApi().redisFlushDB({ connection_id: props.connectionId, db: props.db })
+  // 成败都先收确认框:卡住的确认框正是「点了确定没反应」的观感来源;
+  // 失败经 toast 给出后端原文,绝不静默吞错。
+  confirmFlush.value = false
+  try {
+    await getApi().redisFlushDB({ connection_id: props.connectionId, db: props.db })
+  } catch (e) {
+    useToastStore().show(`清空 DB${props.db} 失败:${e instanceof Error ? e.message : String(e)}`)
+    return
+  }
   selectedKey.value = null
   value.value = null
   await refreshAfterMutation()
   await loadSummary()
+  useToastStore().show(`DB${props.db} 已清空`)
 }
 
 async function refreshAfterMutation(): Promise<void> {

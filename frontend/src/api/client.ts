@@ -80,6 +80,7 @@ import type {
   MysqlExecuteRequest,
   MysqlStatementResult,
   MysqlTruncateTableRequest,
+  MysqlTableDDLRequest,
   MysqlCellUpdateRequest,
   MysqlCellUpdatePreview,
   MysqlDropTableRequest,
@@ -247,6 +248,9 @@ export interface Api {
   mysqlTableColumns?(req: MysqlTableColumnsRequest): Promise<MysqlTableColumnsResult>
   mysqlAlterTable?(req: MysqlAlterTableRequest): Promise<void>
   mysqlExportTable?(req: MysqlExportTableRequest): Promise<MysqlExportTableResult>
+  // 建表语句(SQL 控制台 Ctrl+表名查看):MysqlTableDDL 绑定由后端添加中
+  // (wailsjs 尚未重生成),声明为可选成员(既有 fake 零改动);调用方用可选链(?.)访问。
+  mysqlTableDDL?(req: MysqlTableDDLRequest): Promise<string>
   testPostgresConnection?(cfg: PostgresConfigShape): Promise<void>
   listPostgresDatabases?(id: string): Promise<string[]>
   listPostgresSchemas?(req: PostgresListSchemasRequest): Promise<string[]>
@@ -413,6 +417,7 @@ export class WailsApi implements Api {
   mysqlTableColumns = (req: MysqlTableColumnsRequest): Promise<MysqlTableColumnsResult> => call('MysqlTableColumns', req)
   mysqlAlterTable = (req: MysqlAlterTableRequest): Promise<void> => call('MysqlAlterTable', req)
   mysqlExportTable = (req: MysqlExportTableRequest): Promise<MysqlExportTableResult> => call('MysqlExportTable', req)
+  mysqlTableDDL = (req: MysqlTableDDLRequest): Promise<string> => call('MysqlTableDDL', req)
   testPostgresConnection = (cfg: PostgresConfigShape): Promise<void> => call('TestPostgresConnection', cfg)
   listPostgresDatabases = (id: string): Promise<string[]> => call('ListPostgresDatabases', id)
   listPostgresSchemas = (req: PostgresListSchemasRequest): Promise<string[]> => call('ListPostgresSchemas', req)

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { EditorSelection } from '@codemirror/state'
@@ -148,6 +148,21 @@ describe('SqlEditor 语句级增强', () => {
     // 在句间插入新语句 → 3 条。
     cmView(wrapper).dispatch({ changes: { from: 9, insert: 'SELECT 3;\n' } })
     expect(wrapper.findAll('.cm-run-statement')).toHaveLength(3)
+  })
+
+  it('statementGutter:同一行多条语句各渲染独立 ▶,点击各自 emit 对应段文本', async () => {
+    // 两条语句同处第 1 行:各自得到独立且按文档序排列的按钮,不再互相去重。
+    const wrapper = mount(SqlEditor, {
+      props: { modelValue: 'USE msms; DROP TABLE t ;', statementGutter: true },
+    })
+    const btns = wrapper.findAll('.cm-run-statement')
+    expect(btns).toHaveLength(2)
+    await btns[1].trigger('mousedown')
+    const emitted = wrapper.emitted('run-statement')
+    expect(emitted).toHaveLength(1)
+    expect(emitted?.[0]).toEqual(['DROP TABLE t ;'])
+    await btns[0].trigger('mousedown')
+    expect(wrapper.emitted('run-statement')?.[1]).toEqual(['USE msms;'])
   })
 
   it('statementMarks:✓/✗ 渲染并悬浮 detail,映射不到的 from 忽略', () => {
@@ -469,5 +484,185 @@ describe('SqlEditor 复制当前行快捷键', () => {
     undo(view)
     expect(view.state.doc.toString()).toBe('a\nbc\nd')
     wrapper.unmount()
+  })
+})
+
+// —— Ctrl+表名探测层(tableProbe,默认关闭)——
+describe('SqlEditor Ctrl+表名探测', () => {
+  // 'SELECT * FROM users':users 词为 offset 14..19;SELECT 为 0..6。
+  const doc = 'SELECT * FROM users'
+  const tables = [{ name: 'users', columns: ['id'] }]
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  // Ctrl 按住(window keydown);Ctrl 修饰键自身抬起(keyup 后 ctrlKey=false)。
+  function pressCtrl(): void {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true }))
+  }
+  function releaseCtrl(): void {
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Control' }))
+  }
+
+  it('tableProbe 默认关闭:Ctrl 按住不出现探测装饰', () => {
+    const wrapper = mount(SqlEditor, { props: { modelValue: doc, tables } })
+    pressCtrl()
+    expect(wrapper.find('.cm-table-probe').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('Ctrl 按住:命中表清单的词加探测装饰,松开清除', async () => {
+    const wrapper = mount(SqlEditor, {
+      props: { modelValue: doc, tableProbe: true, tables },
+    })
+    expect(wrapper.find('.cm-table-probe').exists()).toBe(false)
+    pressCtrl()
+    const probes = wrapper.findAll('.cm-table-probe')
+    expect(probes).toHaveLength(1)
+    expect(probes[0].text()).toBe('users')
+    releaseCtrl()
+    expect(wrapper.find('.cm-table-probe').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('表名识别:大小写不敏感,命中规范名;库前缀各自成词只命中表段', () => {
+    // `shop` 与 `users` 为两个独立 token:shop 不在表清单,users 命中。
+    const wrapper = mount(SqlEditor, {
+      props: { modelValue: 'SELECT * FROM `shop`.`Users`', tableProbe: true, tables: [{ name: 'users' }] },
+    })
+    pressCtrl()
+    const probes = wrapper.findAll('.cm-table-probe')
+    expect(probes).toHaveLength(1)
+    expect(probes[0].text()).toBe('`Users`')
+    wrapper.unmount()
+  })
+
+  it('Ctrl 按下后编辑文档:装饰随新文档重建', async () => {
+    const wrapper = mount(SqlEditor, {
+      props: { modelValue: doc, tableProbe: true, tables },
+    })
+    pressCtrl()
+    expect(wrapper.findAll('.cm-table-probe')).toHaveLength(1)
+    cmView(wrapper).dispatch({ changes: { from: 19, insert: ' JOIN users' } })
+    expect(wrapper.findAll('.cm-table-probe')).toHaveLength(2)
+    wrapper.unmount()
+  })
+
+  it('Ctrl+mousedown 命中表名:emit table-pin(载荷含规范名与 client 坐标)并阻止默认', () => {
+    const wrapper = mount(SqlEditor, {
+      props: { modelValue: doc, tableProbe: true, tables },
+      attachTo: document.body,
+    })
+    const view = cmView(wrapper)
+    // jsdom 无布局,posAtCoords 以桩定位到 users 词内(offset 16)。
+    vi.spyOn(view, 'posAtCoords').mockReturnValue(16)
+    pressCtrl()
+    const ev = new MouseEvent('mousedown', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 40,
+      clientY: 50,
+    })
+    view.contentDOM.dispatchEvent(ev)
+    expect(ev.defaultPrevented).toBe(true)
+    expect(wrapper.emitted('table-pin')).toEqual([[{ name: 'users', x: 40, y: 50 }]])
+    wrapper.unmount()
+  })
+
+  it('Ctrl+mousedown 落在非表名处:emit table-unpin', () => {
+    const wrapper = mount(SqlEditor, {
+      props: { modelValue: doc, tableProbe: true, tables },
+      attachTo: document.body,
+    })
+    const view = cmView(wrapper)
+    vi.spyOn(view, 'posAtCoords').mockReturnValue(2) // SELECT 词内
+    pressCtrl()
+    view.contentDOM.dispatchEvent(
+      new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: 1, clientY: 2 }),
+    )
+    expect(wrapper.emitted('table-unpin')).toHaveLength(1)
+    expect(wrapper.emitted('table-pin')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('Ctrl 悬停表名 300ms emit table-hover(防抖期内移动重置);离开 emit table-leave', () => {
+    const wrapper = mount(SqlEditor, {
+      props: { modelValue: doc, tableProbe: true, tables },
+      attachTo: document.body,
+    })
+    const view = cmView(wrapper)
+    vi.spyOn(view, 'posAtCoords').mockReturnValue(16)
+    pressCtrl()
+    const content = view.contentDOM
+    content.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 40, clientY: 50 }))
+    expect(wrapper.emitted('table-hover')).toBeUndefined()
+    // 防抖期内移动 → 重置计时。
+    vi.advanceTimersByTime(200)
+    content.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 41, clientY: 51 }))
+    vi.advanceTimersByTime(299)
+    expect(wrapper.emitted('table-hover')).toBeUndefined()
+    vi.advanceTimersByTime(1)
+    expect(wrapper.emitted('table-hover')).toEqual([[{ name: 'users', x: 41, y: 51 }]])
+    // 已触发悬停后在同表内移动:不重发。
+    content.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 42, clientY: 52 }))
+    vi.advanceTimersByTime(500)
+    expect(wrapper.emitted('table-hover')).toHaveLength(1)
+    // 鼠标离开编辑器 → table-leave。
+    content.dispatchEvent(new MouseEvent('mouseleave'))
+    expect(wrapper.emitted('table-leave')).toHaveLength(1)
+    // leave 后再移动:重新进入防抖,未触发前松开 Ctrl 不产生 hover/leave。
+    content.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 40, clientY: 50 }))
+    releaseCtrl()
+    vi.advanceTimersByTime(1000)
+    expect(wrapper.emitted('table-hover')).toHaveLength(1)
+    expect(wrapper.emitted('table-leave')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('悬停中松开 Ctrl:装饰清除并 emit table-leave;window blur 复位', () => {
+    const wrapper = mount(SqlEditor, {
+      props: { modelValue: doc, tableProbe: true, tables },
+      attachTo: document.body,
+    })
+    const view = cmView(wrapper)
+    vi.spyOn(view, 'posAtCoords').mockReturnValue(16)
+    const content = view.contentDOM
+    pressCtrl()
+    content.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 40, clientY: 50 }))
+    vi.advanceTimersByTime(300)
+    expect(wrapper.emitted('table-hover')).toHaveLength(1)
+    releaseCtrl()
+    expect(wrapper.find('.cm-table-probe').exists()).toBe(false)
+    expect(wrapper.emitted('table-leave')).toHaveLength(1)
+    // blur 复位:再次按住后触发 hover,blur 应结束悬停。
+    window.dispatchEvent(new Event('blur'))
+    pressCtrl()
+    content.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 40, clientY: 50 }))
+    vi.advanceTimersByTime(300)
+    expect(wrapper.emitted('table-hover')).toHaveLength(2)
+    window.dispatchEvent(new Event('blur'))
+    expect(wrapper.emitted('table-leave')).toHaveLength(2)
+    expect(wrapper.find('.cm-table-probe').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('卸载后清理悬停计时器:不再 emit', () => {
+    const wrapper = mount(SqlEditor, {
+      props: { modelValue: doc, tableProbe: true, tables },
+      attachTo: document.body,
+    })
+    const view = cmView(wrapper)
+    vi.spyOn(view, 'posAtCoords').mockReturnValue(16)
+    pressCtrl()
+    view.contentDOM.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 40, clientY: 50 }))
+    wrapper.unmount()
+    vi.advanceTimersByTime(1000)
+    expect(wrapper.emitted('table-hover')).toBeUndefined()
   })
 })

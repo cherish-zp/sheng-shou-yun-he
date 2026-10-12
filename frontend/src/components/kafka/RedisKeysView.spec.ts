@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { setApi } from '@/api/client'
 import type { Api } from '@/api/client'
 import type { RedisKeyInfo } from '@/api/types'
+import { useToastStore } from '@/store/toast'
 import RedisKeysView from './RedisKeysView.vue'
 
 function fakeApi(overrides: Partial<Api> = {}): Api {
@@ -211,7 +212,7 @@ describe('RedisKeysView', () => {
     })
   })
 
-  it('flushes the db through the confirm dialog', async () => {
+  it('flushes the db through the confirm dialog: calls API, closes the dialog, refreshes', async () => {
     const flush = vi.fn(async () => {})
     ;(api.redisFlushDB as ReturnType<typeof vi.fn>).mockImplementation(flush)
     const wrapper = mount(RedisKeysView, { props: { connectionId: 'r1', db: 3 } })
@@ -225,6 +226,30 @@ describe('RedisKeysView', () => {
     ;(document.body.querySelector('[data-test="confirm-dialog-ok"]') as HTMLElement).click()
     await vi.waitFor(() => {
       expect(flush).toHaveBeenCalledWith({ connection_id: 'r1', db: 3 })
+    })
+    // 回归:确认框必须关闭——卡住不关正是用户看到的「点了确定没反应」。
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-test="confirm-dialog"]')).toBeNull()
+    })
+  })
+
+  it('flush failure: toasts the backend error verbatim and closes the dialog', async () => {
+    ;(api.redisFlushDB as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('FLUSHDB 被服务器禁用'))
+    const wrapper = mount(RedisKeysView, { props: { connectionId: 'r1', db: 3 } })
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="btn-flushdb"]').exists()).toBe(true)
+    })
+    await wrapper.find('[data-test="btn-flushdb"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-test="confirm-dialog"]')).not.toBeNull()
+    })
+    ;(document.body.querySelector('[data-test="confirm-dialog-ok"]') as HTMLElement).click()
+    // 失败不再静默:后端原文经 toast 展示,弹窗同样收起。
+    await vi.waitFor(() => {
+      expect(useToastStore().message).toContain('FLUSHDB 被服务器禁用')
+    })
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-test="confirm-dialog"]')).toBeNull()
     })
   })
 

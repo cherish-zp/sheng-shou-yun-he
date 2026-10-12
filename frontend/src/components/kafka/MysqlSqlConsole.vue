@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, unref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, unref, watch } from 'vue'
 import type { SqlTableSchema } from '@/components/common/SqlEditor.vue'
+import { getApi } from '@/api/client'
+import type { MysqlTableDDLRequest } from '@/api/types'
 import { parseCHSingleTableSelect } from '@/utils/chSql'
 import { splitSqlStatements } from '@/utils/sqlSplit'
 import { useQueryFiles } from '@/composables/queryFiles'
@@ -13,11 +15,13 @@ import { useConsoleCellEdit, resolveSourceTable } from '@/composables/useConsole
 import { useConsoleRowDelete, pkLocateHint, buildPkWhere } from '@/composables/useConsoleRowDelete'
 import { refreshStatementInPlace } from '@/composables/useConsoleStatementRefresh'
 import { useTabsStore } from '@/store/tabs'
+import { useToastStore } from '@/store/toast'
 import SqlEditor from '@/components/common/SqlEditor.vue'
 import SqlResultCard from '@/components/common/SqlResultCard.vue'
 import SqlResultTabs, { type ResultTabItem } from '@/components/common/SqlResultTabs.vue'
 import PromptDialog from '@/components/common/PromptDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import TableDdlCard from '@/components/common/TableDdlCard.vue'
 import * as App from '../../../wailsjs/go/backend/App'
 
 // tabId 必填:控制台据此把 tabs store 中自己的 tab 重命名为当前关联文件名。
@@ -340,6 +344,189 @@ function onRunSelection(text: string): void {
   if (!text.trim()) return
   void runSingle(text)
 }
+
+// --- Ctrl+表名查看建表语句(tableProbe;悬停轻预览 + Ctrl+点击固定) ---------
+// SqlEditor 负责表名探测与 300ms 悬停防抖;本层维护 { none|hover|pinned }
+// 状态机、数据获取(300ms 防抖 + 30s TTL Map 缓存,切连接/库清空)、
+// hover 离开 150ms 延迟收起与 pinned 的 Esc/点外关闭。
+
+type DdlMode = 'none' | 'hover' | 'pinned'
+const DDL_FETCH_DEBOUNCE_MS = 300
+const DDL_CACHE_TTL_MS = 30_000
+const DDL_HIDE_DELAY_MS = 150
+
+const toast = useToastStore()
+const ddlCard = ref<{ mode: DdlMode; tableName: string; x: number; y: number }>({
+  mode: 'none',
+  tableName: '',
+  x: 0,
+  y: 0,
+})
+const ddlLoading = ref(false)
+const ddlError = ref('')
+const ddlText = ref('')
+// 组件内缓存:键 = 表名,值 = { ddl, at };切换连接/库清空。
+const ddlCache = new Map<string, { ddl: string; at: number }>()
+// 在途请求序号:目标切换(换表/收起/固定)后,旧响应按序号失配丢弃。
+let ddlRequestId = 0
+let ddlFetchTimer: ReturnType<typeof setTimeout> | null = null
+let ddlHideTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearDdlTimers(): void {
+  if (ddlFetchTimer !== null) {
+    clearTimeout(ddlFetchTimer)
+    ddlFetchTimer = null
+  }
+  if (ddlHideTimer !== null) {
+    clearTimeout(ddlHideTimer)
+    ddlHideTimer = null
+  }
+}
+
+// 命中 30s 内缓存直接展示(不发请求);返回是否命中。
+function applyDdlCache(name: string): boolean {
+  const hit = ddlCache.get(name)
+  if (!hit || Date.now() - hit.at >= DDL_CACHE_TTL_MS) return false
+  ddlText.value = hit.ddl
+  ddlError.value = ''
+  ddlLoading.value = false
+  return true
+}
+
+function fetchDdl(name: string): void {
+  if (applyDdlCache(name)) return
+  ddlRequestId += 1
+  const id = ddlRequestId
+  ddlLoading.value = true
+  ddlError.value = ''
+  ddlText.value = ''
+  const req: MysqlTableDDLRequest = {
+    connection_id: props.connectionId,
+    database: activeDb.value,
+    table: name,
+  }
+  getApi()
+    .mysqlTableDDL?.(req)
+    .then((ddl) => {
+      if (id !== ddlRequestId) return
+      ddlCache.set(name, { ddl, at: Date.now() })
+      ddlText.value = ddl
+      ddlLoading.value = false
+    })
+    .catch((e: unknown) => {
+      if (id !== ddlRequestId) return
+      // 错误文案沿用后端原文。
+      ddlError.value = e instanceof Error ? e.message : String(e)
+      ddlLoading.value = false
+    })
+}
+
+// hover 展示:pinned 态忽略悬停;命中缓存立即展示,否则防抖后拉取。
+function showDdlHover(name: string, x: number, y: number): void {
+  if (ddlCard.value.mode === 'pinned') return
+  if (ddlHideTimer !== null) {
+    clearTimeout(ddlHideTimer)
+    ddlHideTimer = null
+  }
+  ddlCard.value = { mode: 'hover', tableName: name, x, y }
+  if (applyDdlCache(name)) return
+  if (ddlFetchTimer !== null) clearTimeout(ddlFetchTimer)
+  ddlFetchTimer = setTimeout(() => {
+    ddlFetchTimer = null
+    fetchDdl(name)
+  }, DDL_FETCH_DEBOUNCE_MS)
+}
+
+// hover 离开:150ms 延迟收起(防抖动;期内重新悬停同表则继续展示)。
+function hideDdlHover(): void {
+  if (ddlCard.value.mode !== 'hover') return
+  if (ddlHideTimer !== null) clearTimeout(ddlHideTimer)
+  ddlHideTimer = setTimeout(() => {
+    ddlHideTimer = null
+    if (ddlCard.value.mode !== 'hover') return
+    ddlCard.value = { mode: 'none', tableName: '', x: 0, y: 0 }
+  }, DDL_HIDE_DELAY_MS)
+}
+
+// Ctrl+点击固定:立即拉取(命中缓存直接展示),悬停不再改变卡片。
+function pinDdl(target: { name: string; x: number; y: number }): void {
+  clearDdlTimers()
+  ddlCard.value = { mode: 'pinned', tableName: target.name, x: target.x, y: target.y }
+  fetchDdl(target.name)
+}
+
+function closeDdlCard(): void {
+  ddlRequestId += 1
+  clearDdlTimers()
+  ddlLoading.value = false
+  ddlCard.value = { mode: 'none', tableName: '', x: 0, y: 0 }
+}
+
+function onTableHover(p: { name: string; x: number; y: number }): void {
+  showDdlHover(p.name, p.x, p.y)
+}
+
+function onTableLeave(): void {
+  hideDdlHover()
+}
+
+function onTablePin(p: { name: string; x: number; y: number }): void {
+  pinDdl(p)
+}
+
+function onTableUnpin(): void {
+  if (ddlCard.value.mode === 'pinned') closeDdlCard()
+}
+
+// pinned 态:Esc 关闭;点击卡片外(编辑器内 Ctrl+点表名/空白由 table-unpin
+// emit 与此殊途同归)关闭。
+function onDocDdlPointerDown(ev: MouseEvent): void {
+  if (ddlCard.value.mode !== 'pinned') return
+  const card = ddlCardEl.value?.$el
+  if (card && ev.target instanceof Node && card.contains(ev.target)) return
+  closeDdlCard()
+}
+
+function onDocDdlKeydown(ev: KeyboardEvent): void {
+  if (ddlCard.value.mode === 'pinned' && ev.key === 'Escape') closeDdlCard()
+}
+
+const ddlCardEl = ref<{ $el: HTMLElement } | null>(null)
+
+// 复制 DDL:clipboard 失败/缺失时降级 execCommand(与 SqlResultCard 同策略)。
+async function copyDdl(): Promise<void> {
+  let ok = false
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(ddlText.value)
+      ok = true
+    }
+  } catch {
+    ok = false
+  }
+  if (!ok) {
+    const textarea = document.createElement('textarea')
+    textarea.value = ddlText.value
+    textarea.setAttribute('readonly', '')
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    try {
+      ok = document.execCommand('copy')
+    } catch {
+      ok = false
+    }
+    textarea.remove()
+  }
+  if (ok) toast.show('已复制建表语句')
+}
+
+// 切换连接/库:清空缓存并收起卡片(缓存按连接+库生效,避免跨库误用)。
+watch([() => props.connectionId, activeDb], () => {
+  ddlCache.clear()
+  if (ddlCard.value.mode !== 'none') closeDdlCard()
+})
 
 // --- IDE 式布局:可拖拽结果区(useConsoleLayout 组合式;高度持久化与
 // 双击恢复语义不变) ---
@@ -669,6 +856,15 @@ defineExpose({
 onMounted(() => {
   void loadDatabases()
   void loadTables()
+  // Ctrl+表名固定卡的全局关闭监听:仅 pinned 态生效,其余为廉价空操作。
+  document.addEventListener('mousedown', onDocDdlPointerDown)
+  document.addEventListener('keydown', onDocDdlKeydown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onDocDdlPointerDown)
+  document.removeEventListener('keydown', onDocDdlKeydown)
+  clearDdlTimers()
 })
 
 // database 变化(如表浏览器入口切库)→ 同步 activeDb 并重拉该库的补全。
@@ -708,6 +904,7 @@ watch(
           :statement-marks="statementMarks"
           highlight-cursor-statement
           enable-run-menu
+          table-probe
           data-test="mysql-sql-input"
           placeholder="SELECT * FROM users WHERE id = 1"
           @run-statement="onRunStatement"
@@ -715,6 +912,10 @@ watch(
           @run-current="runCurrentStatement"
           @run-all="runAll"
           @cursor="onCursor"
+          @table-hover="onTableHover"
+          @table-leave="onTableLeave"
+          @table-pin="onTablePin"
+          @table-unpin="onTableUnpin"
         />
       </div>
 
@@ -834,6 +1035,21 @@ watch(
       :confirm-disabled="drMatchedRows > 1"
       @confirm="confirmDeleteRow"
       @cancel="cancelDeleteRow"
+    />
+
+    <!-- Ctrl+表名建表语句浮层:hover 预览(无按钮)与 pinned 固定(复制/关闭)。 -->
+    <TableDdlCard
+      v-if="ddlCard.mode !== 'none'"
+      ref="ddlCardEl"
+      :pinned="ddlCard.mode === 'pinned'"
+      :loading="ddlLoading"
+      :error="ddlError"
+      :ddl="ddlText"
+      :table-name="ddlCard.tableName"
+      :x="ddlCard.x"
+      :y="ddlCard.y"
+      @close="closeDdlCard"
+      @copy="copyDdl"
     />
   </div>
 </template>

@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { EditorView } from '@codemirror/view'
 import { createPinia, setActivePinia } from 'pinia'
 import { QUERY_DIR_KEY } from '@/utils/queryDir'
+import { setApi, type Api } from '@/api/client'
 import { useQueryFiles } from '@/composables/queryFiles'
 import { useTabsStore, type Tab } from '@/store/tabs'
 import SqlEditor from '@/components/common/SqlEditor.vue'
@@ -1844,5 +1845,150 @@ describe('MysqlSqlConsole', () => {
       )
       wrapper.unmount()
     })
+  })
+})
+
+// —— Ctrl+表名查看建表语句(tableProbe;悬停轻预览 + Ctrl+点击固定)——
+describe('MysqlSqlConsole Ctrl+表名查看建表语句', () => {
+  // DDL 经 api/client 的 getApi().mysqlTableDDL 可选方法获取(与 wailsjs 绑定
+  // 解耦;MysqlTableDDL 绑定尚未由后端重生成),按现有 setApi 模式注入 fake。
+  function ddlApi() {
+    return {
+      mysqlTableDDL: vi.fn(async (req: { table: string }) => `CREATE TABLE \`${req.table}\` (\n  \`id\` bigint NOT NULL\n)`),
+    }
+  }
+
+  async function mountConsole(): Promise<VueWrapper> {
+    const wrapper = mount(MysqlSqlConsole, {
+      props: { tabId: 'm-ddl', connectionId: 'm1', database: 'shop' },
+    })
+    await flushPromises()
+    return wrapper
+  }
+
+  function editor(wrapper: VueWrapper) {
+    return wrapper.findComponent(SqlEditor)
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    app.MysqlExecute.mockImplementation(async () => [] as MysqlStatementResult[])
+    app.ListMysqlTables.mockImplementation(async () => [])
+    app.ListMysqlDatabases.mockResolvedValue(['shop', 'orders'])
+    app.ListQueryFiles.mockImplementation(async () => [])
+    app.ReadQueryFile.mockImplementation(async () => ({ content: '', connection_id: '' }))
+    app.WriteQueryFile.mockImplementation(async () => {})
+    app.DeleteQueryFile.mockImplementation(async () => {})
+    useQueryFiles({ connectionId: () => 'm1' }).files.value = []
+    localStorage.setItem(QUERY_DIR_KEY, TEST_DIR)
+    localStorage.removeItem(RESULTS_HEIGHT_KEY)
+    document.body.innerHTML = ''
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('table-hover 触发建表语句拉取(300ms 防抖),hover 态卡片无按钮', async () => {
+    const api = ddlApi()
+    setApi(api as unknown as Api)
+    const wrapper = await mountConsole()
+    editor(wrapper).vm.$emit('table-hover', { name: 'users', x: 120, y: 90 })
+    await flushPromises()
+    // 防抖期内不发请求,卡片已进入 hover 预览态(无复制/关闭按钮)。
+    expect(api.mysqlTableDDL).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="ddl-card"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="ddl-copy"]').exists()).toBe(false)
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+    expect(api.mysqlTableDDL).toHaveBeenCalledWith({ connection_id: 'm1', database: 'shop', table: 'users' })
+    expect(wrapper.find('[data-test="ddl-body"]').text()).toContain('CREATE TABLE `users`')
+    wrapper.unmount()
+  })
+
+  it('同表 30s 内二次 hover 命中缓存不再调用,过期后重新拉取', async () => {
+    const api = ddlApi()
+    setApi(api as unknown as Api)
+    const wrapper = await mountConsole()
+    editor(wrapper).vm.$emit('table-hover', { name: 'users', x: 120, y: 90 })
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+    expect(api.mysqlTableDDL).toHaveBeenCalledTimes(1)
+    // leave → 150ms 宽限后才收起。
+    editor(wrapper).vm.$emit('table-leave')
+    await flushPromises()
+    expect(wrapper.find('[data-test="ddl-card"]').exists()).toBe(true)
+    await vi.advanceTimersByTimeAsync(150)
+    expect(wrapper.find('[data-test="ddl-card"]').exists()).toBe(false)
+    // 30s 内再次 hover:命中缓存立即展示,不发请求。
+    editor(wrapper).vm.$emit('table-hover', { name: 'users', x: 130, y: 95 })
+    await flushPromises()
+    expect(api.mysqlTableDDL).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-test="ddl-body"]').text()).toContain('CREATE TABLE `users`')
+    // 超过 TTL 后重新 hover:重新拉取。
+    await vi.advanceTimersByTimeAsync(31_000)
+    editor(wrapper).vm.$emit('table-hover', { name: 'users', x: 130, y: 95 })
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+    expect(api.mysqlTableDDL).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('table-pin 固定:立即拉取并显示复制按钮,Esc 关闭,pinned 忽略后续 hover', async () => {
+    const api = ddlApi()
+    setApi(api as unknown as Api)
+    const wrapper = await mountConsole()
+    editor(wrapper).vm.$emit('table-pin', { name: 'orders', x: 200, y: 150 })
+    await flushPromises()
+    // pin 是明确意图:立即拉取,无 300ms 防抖。
+    expect(api.mysqlTableDDL).toHaveBeenCalledTimes(1)
+    expect(api.mysqlTableDDL).toHaveBeenCalledWith({ connection_id: 'm1', database: 'shop', table: 'orders' })
+    expect(wrapper.find('[data-test="ddl-copy"]').exists()).toBe(true)
+    // pinned 态忽略 hover:卡片不换表、不新增请求。
+    editor(wrapper).vm.$emit('table-hover', { name: 'users', x: 10, y: 10 })
+    await vi.advanceTimersByTimeAsync(500)
+    await flushPromises()
+    expect(wrapper.find('[data-test="ddl-title"]').text()).toBe('orders 建表语句')
+    expect(api.mysqlTableDDL).toHaveBeenCalledTimes(1)
+    // Esc 关闭固定卡。
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(wrapper.find('[data-test="ddl-card"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('table-unpin(Ctrl 点击非表名处)关闭固定卡', async () => {
+    const api = ddlApi()
+    setApi(api as unknown as Api)
+    const wrapper = await mountConsole()
+    editor(wrapper).vm.$emit('table-pin', { name: 'orders', x: 200, y: 150 })
+    await flushPromises()
+    expect(wrapper.find('[data-test="ddl-card"]').exists()).toBe(true)
+    editor(wrapper).vm.$emit('table-unpin')
+    await flushPromises()
+    expect(wrapper.find('[data-test="ddl-card"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('DDL 拉取失败:错误原文展示在卡片内,失败结果不进缓存(重试重新拉取)', async () => {
+    const api = ddlApi()
+    api.mysqlTableDDL.mockRejectedValueOnce(new Error('connection lost'))
+    setApi(api as unknown as Api)
+    const wrapper = await mountConsole()
+    editor(wrapper).vm.$emit('table-hover', { name: 'users', x: 120, y: 90 })
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+    expect(wrapper.find('[data-test="ddl-error"]').text()).toBe('connection lost')
+    // 收起后再次 hover:失败未进缓存 → 重新拉取。
+    editor(wrapper).vm.$emit('table-leave')
+    await vi.advanceTimersByTimeAsync(150)
+    editor(wrapper).vm.$emit('table-hover', { name: 'users', x: 120, y: 90 })
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+    expect(api.mysqlTableDDL).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-test="ddl-body"]').text()).toContain('CREATE TABLE `users`')
+    wrapper.unmount()
   })
 })
