@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 
 // LagTrend draws a mini lag trend line from samples pulled via the injected
 // sampler (keeps the component reusable and testable without API wiring).
@@ -62,6 +62,15 @@ function refresh(): void {
 
 onMounted(refresh)
 onBeforeUnmount(stopTimer)
+
+// KeepAlive 保活(Layout 内容区缓存 tab 视图,LagTrend 位于 GlobalLagView/
+// ConsumerGroupView 等被缓存视图之内):切走 tab 时停掉自动采样定时器,
+// 切回按当前档位恢复——后台 tab 不再持续打采样请求。非 KeepAlive 场景
+// (独立挂载)这两个钩子不触发,行为与原先完全一致。
+onActivated(() => {
+  if (intervalMs.value > 0 && timer === null) timer = window.setInterval(() => void sample(), intervalMs.value)
+})
+onDeactivated(stopTimer)
 
 const polylinePoints = computed(() => {
   const pts = points.value

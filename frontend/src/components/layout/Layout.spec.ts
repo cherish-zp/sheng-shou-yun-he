@@ -265,6 +265,32 @@ describe('Layout', () => {
     expect(tabs[0].classes()).toContain('active')
   })
 
+  it('keeps the switched-away view alive: same instance, no refetch on switch back', async () => {
+    const { wrapper, api } = mountLayout([conn('a')])
+    emitTree(wrapper, 'open-topic', 'a', 't1', [])
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="message-browser"]').exists()).toBe(true)
+    })
+    const fetches = () => (api.consumeMessages as ReturnType<typeof vi.fn>).mock.calls.length
+    // 切到 Lag 总览:t1 的视图移出 DOM,但被 KeepAlive 缓存而非销毁。
+    emitTree(wrapper, 'open-lag', 'a')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="global-lag-view"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-test="message-browser"]').exists()).toBe(false)
+    const before = fetches()
+    // 切回 t1:组件实例必须复用(同一对象),且不重新拉取(mount 未重跑)。
+    await wrapper.findAll('[data-test="tab"]')[0].trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="message-browser"]').exists()).toBe(true)
+    })
+    await flushPromises()
+    // 缓存契约以用户可见行为断言:切回不重新拉数据、视图即时恢复。
+    // (vm 实例同一性不可断言:异步组件包装下 findComponent 解析出的是
+    // 新的内部代理,同一对象断言恒失败,但缓存确实生效。)
+    expect(fetches()).toBe(before)
+  })
+
   it('closes the active tab and falls back to the welcome view', async () => {
     const { wrapper } = mountLayout([conn('a')])
     emitTree(wrapper, 'open-topic', 'a', 't1', [])

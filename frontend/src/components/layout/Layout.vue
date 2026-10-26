@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useTabsStore, type Tab } from '@/store/tabs'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component, type ComponentPublicInstance } from 'vue'
+import { useTabsStore, type Tab, type TabKind } from '@/store/tabs'
 import type { Connection } from '@/api/types'
 import ConnectionTree from '@/components/common/ConnectionTree.vue'
 import CommandPalette from '@/components/common/CommandPalette.vue'
 import BrandLogo from '@/components/common/BrandLogo.vue'
 // tab 级重量视图统一异步分包:首屏只保留连接树/欢迎页等必需内容,以下面板
 // 在对应 tab 首次打开时按需加载(props/事件接线与静态导入完全一致)。
-const MessageBrowser = defineAsyncComponent(() => import('@/components/kafka/MessageBrowser.vue'))
+import MessageBrowser from '@/components/kafka/MessageBrowser.vue'
 const ConsumerGroupView = defineAsyncComponent(() => import('@/components/kafka/ConsumerGroupView.vue'))
 const ProducerPanel = defineAsyncComponent(() => import('@/components/kafka/ProducerPanel.vue'))
-const GlobalLagView = defineAsyncComponent(() => import('@/components/kafka/GlobalLagView.vue'))
+import GlobalLagView from '@/components/kafka/GlobalLagView.vue'
 const RedisKeysView = defineAsyncComponent(() => import('@/components/kafka/RedisKeysView.vue'))
 const ClusterHealthPanel = defineAsyncComponent(() => import('@/components/kafka/ClusterHealthPanel.vue'))
 const CHTableBrowser = defineAsyncComponent(() => import('@/components/kafka/CHTableBrowser.vue'))
@@ -254,25 +254,115 @@ function endFilesResize(): void {
 const active = computed<Tab | null>(() => tabs.openTabs.find((t) => t.id === tabs.activeTabId) ?? null)
 const activeTopic = computed<Tab | null>(() => (active.value?.kind === 'topic' ? active.value : null))
 
-// SQL文件面板面向「激活的 SQL 控制台」操作:按激活 tab 类型取对应控制台的
-// 模板 ref;其余 tab(含无激活 tab)一律没有可操作的控制台。
-const sqlConsoleRef = ref<SqlConsoleApi | null>(null)
-const chSqlConsoleRef = ref<SqlConsoleApi | null>(null)
-const mysqlSqlConsoleRef = ref<SqlConsoleApi | null>(null)
-const pgSqlConsoleRef = ref<SqlConsoleApi | null>(null)
-const esSqlConsoleRef = ref<SqlConsoleApi | null>(null)
-const hiveSqlConsoleRef = ref<SqlConsoleApi | null>(null)
+// --- tab 视图 KeepAlive 映射 --------------------------------------------------
+// 内容区不再走 v-else-if 链(切 tab 即销毁重挂、切回重拉数据),改为
+// kind → 组件映射 + <KeepAlive> 单点动态组件:缓存键 = tab id(同类多 tab
+// 各自缓存实例、状态隔离),切走只 deactivate、切回复用缓存快照;
+// :max 为 LRU 上限,限制缓存条目数兜底内存;全部 tab 关闭时 KeepAlive
+// 随 v-else 分支卸载、缓存整体释放(单个 tab 关闭后其条目由 LRU 兜底)。
+const VIEW_CACHE_MAX = 16
+
+const viewComponents: Record<TabKind, Component> = {
+  topic: MessageBrowser,
+  group: ConsumerGroupView,
+  sql: SqlConsole,
+  lag: GlobalLagView,
+  'redis-keys': RedisKeysView,
+  health: ClusterHealthPanel,
+  'ch-table': CHTableBrowser,
+  'ch-sql': CHSqlConsole,
+  'mysql-table': MysqlTableBrowser,
+  'mysql-sql': MysqlSqlConsole,
+  'hive-table': HiveTableBrowser,
+  'hive-sql': HiveSqlConsole,
+  'postgres-table': PostgresTableBrowser,
+  'postgres-sql': PostgresSqlConsole,
+  'es-index': EsTableBrowser,
+  'es-sql': EsSqlConsole,
+  'es-templates': EsTemplatesPanel,
+  'es-monitor': EsClusterMonitor,
+}
+
+// 每 kind 的 props 接线与原 v-else-if 分支逐字等价;refreshRequest 传给有
+// 统一刷新语义的面板——KeepAlive 下切回时新 vnode 的 props 与缓存实例做
+// 增量 patch,refreshRequest 变化仍会触发面板自身的 watch 重拉。
+const viewPropBuilders: Record<TabKind, (t: Tab) => Record<string, unknown>> = {
+  topic: (t) => ({
+    tabId: t.id,
+    connectionId: t.connectionId,
+    topic: t.topic ?? '',
+    partitions: t.partitions ?? [],
+    refreshRequest: refreshRequest.value,
+  }),
+  group: (t) => ({ tabId: t.id, connectionId: t.connectionId, group: t.group ?? '', refreshRequest: refreshRequest.value }),
+  sql: (t) => ({ tabId: t.id, connectionId: t.connectionId, topic: t.topic ?? '', partitions: t.partitions ?? [] }),
+  lag: (t) => ({ connectionId: t.connectionId, refreshRequest: refreshRequest.value }),
+  'redis-keys': (t) => ({ connectionId: t.connectionId, db: t.db ?? 0 }),
+  health: (t) => ({ connectionId: t.connectionId, refreshRequest: refreshRequest.value }),
+  'ch-table': (t) => ({ connectionId: t.connectionId, database: t.database ?? '', table: t.table ?? '' }),
+  'ch-sql': (t) => ({ tabId: t.id, connectionId: t.connectionId }),
+  'mysql-table': (t) => ({ connectionId: t.connectionId, database: t.database ?? '', table: t.table ?? '' }),
+  'mysql-sql': (t) => ({ tabId: t.id, connectionId: t.connectionId, database: t.database ?? '' }),
+  'hive-table': (t) => ({ connectionId: t.connectionId, database: t.database ?? '', table: t.table ?? '' }),
+  'hive-sql': (t) => ({ tabId: t.id, connectionId: t.connectionId, database: t.database ?? '' }),
+  'postgres-table': (t) => ({
+    connectionId: t.connectionId,
+    database: t.database ?? '',
+    schema: t.schema ?? '',
+    relation: t.table ?? '',
+    relationType: t.relationType ?? 'table',
+  }),
+  'postgres-sql': (t) => ({ tabId: t.id, connectionId: t.connectionId, database: t.database ?? '', schema: t.schema ?? '' }),
+  'es-index': (t) => ({ connectionId: t.connectionId, index: t.index ?? '' }),
+  'es-sql': (t) => ({ tabId: t.id, connectionId: t.connectionId }),
+  'es-templates': (t) => ({ connectionId: t.connectionId, initialTemplate: t.template, newMode: t.newTemplate }),
+  'es-monitor': (t) => ({ connectionId: t.connectionId }),
+}
+
+const currentView = computed<Component | null>(() => {
+  const t = active.value
+  return t ? viewComponents[t.kind] : null
+})
+
+const currentKey = computed(() => active.value?.id ?? '')
+
+const currentProps = computed<Record<string, unknown>>(() => {
+  const t = active.value
+  return t ? viewPropBuilders[t.kind](t) : {}
+})
+
+// 事件接线与原分支逐字一致:仅 topic(打开生产者)与 lag(总览行定位)有 emit。
+const currentEvents = computed<Record<string, unknown>>(() => {
+  switch (active.value?.kind) {
+    case 'topic':
+      return { 'open-producer': openProducerPanel }
+    case 'lag':
+      return { 'open-group-lag': openGroupLagFromOverview }
+    default:
+      return {}
+  }
+})
+
+// SQL文件面板面向「激活的 SQL 控制台」操作;内容区是单点动态组件(见下方
+// KeepAlive 视图映射),激活视图的组件实例统一落在这一个模板 ref 上——SQL
+// 控制台类 tab 激活时它就是对应控制台实例(暴露 loadQueryFile),其余 tab
+// (含无激活 tab)一律没有可操作的控制台。
+const activeViewInstance = ref<ComponentPublicInstance | null>(null)
 
 const activeConsoleApi = computed<SqlConsoleApi | null>(() => {
   const a = active.value
-  if (!a) return null
-  if (a.kind === 'sql') return sqlConsoleRef.value
-  if (a.kind === 'ch-sql') return chSqlConsoleRef.value
-  if (a.kind === 'mysql-sql') return mysqlSqlConsoleRef.value
-  if (a.kind === 'postgres-sql') return pgSqlConsoleRef.value
-  if (a.kind === 'es-sql') return esSqlConsoleRef.value
-  if (a.kind === 'hive-sql') return hiveSqlConsoleRef.value
-  return null
+  if (
+    !a ||
+    (a.kind !== 'sql' &&
+      a.kind !== 'ch-sql' &&
+      a.kind !== 'mysql-sql' &&
+      a.kind !== 'postgres-sql' &&
+      a.kind !== 'es-sql' &&
+      a.kind !== 'hive-sql')
+  ) {
+    return null
+  }
+  return (activeViewInstance.value as unknown as SqlConsoleApi | null) ?? null
 })
 
 // SQL文件面板的待载入文件(挂起补载);同名场景后者覆盖前者(与点击语义一致)。
@@ -511,15 +601,15 @@ function contextCloseAll(): void {
 }
 
 // contextRefresh refreshes the right-clicked tab through the same unified path
-// as the top bar button. An already-active tab bumps refreshRequest directly;
-// switching to another tab fetches on its own (the panel mounts or its
-// connection/topic watch fires), so bumping there too would double-fetch.
+// as the top bar button. The tab content is kept alive (switching to it no
+// longer remounts/refetches on its own), so the counter is bumped
+// unconditionally: the target view is active by the time the bump lands and
+// its refreshRequest watch fires exactly once.
 function contextRefresh(): void {
   const target = contextTab.value
   if (!target) return
-  const wasActive = tabs.activeTabId === target.id
   tabs.setActive(target.id)
-  if (wasActive) refreshRequest.value++
+  refreshRequest.value++
   closeContextMenu()
 }
 
@@ -671,148 +761,13 @@ function onTabDragEnd(): void {
 
         <div class="workspace-body">
           <HomeView v-if="!active" />
-          <template v-else-if="active.kind === 'topic'">
-            <MessageBrowser
-              :tab-id="active.id"
-              :connection-id="active.connectionId"
-              :topic="active.topic ?? ''"
-              :partitions="active.partitions ?? []"
-              :refresh-request="refreshRequest"
-              @open-producer="openProducerPanel"
-            />
-          </template>
-          <template v-else-if="active.kind === 'group'">
-            <ConsumerGroupView
-              :tab-id="active.id"
-              :connection-id="active.connectionId"
-              :group="active.group ?? ''"
-              :refresh-request="refreshRequest"
-            />
-          </template>
-          <template v-else-if="active.kind === 'sql'">
-            <SqlConsole
-              ref="sqlConsoleRef"
-              :tab-id="active.id"
-              :connection-id="active.connectionId"
-              :topic="active.topic ?? ''"
-              :partitions="active.partitions ?? []"
-            />
-          </template>
-          <template v-else-if="active.kind === 'lag'">
-            <GlobalLagView
-              :connection-id="active.connectionId"
-              :refresh-request="refreshRequest"
-              @open-group-lag="openGroupLagFromOverview"
-            />
-          </template>
-          <template v-else-if="active.kind === 'redis-keys'">
-            <RedisKeysView
-              :key="active.id"
-              :connection-id="active.connectionId"
-              :db="active.db ?? 0"
-            />
-          </template>
-          <template v-else-if="active.kind === 'health'">
-            <ClusterHealthPanel :connection-id="active.connectionId" :refresh-request="refreshRequest" />
-          </template>
-          <template v-else-if="active.kind === 'ch-table'">
-            <CHTableBrowser
-              :key="active.id"
-              :connection-id="active.connectionId"
-              :database="active.database ?? ''"
-              :table="active.table ?? ''"
-            />
-          </template>
-          <template v-else-if="active.kind === 'ch-sql'">
-            <CHSqlConsole
-              ref="chSqlConsoleRef"
-              :key="active.id"
-              :tab-id="active.id"
-              :connection-id="active.connectionId"
-            />
-          </template>
-          <template v-else-if="active.kind === 'mysql-table'">
-            <MysqlTableBrowser
-              :key="active.id"
-              :connection-id="active.connectionId"
-              :database="active.database ?? ''"
-              :table="active.table ?? ''"
-            />
-          </template>
-          <template v-else-if="active.kind === 'mysql-sql'">
-            <MysqlSqlConsole
-              ref="mysqlSqlConsoleRef"
-              :key="active.id"
-              :tab-id="active.id"
-              :connection-id="active.connectionId"
-              :database="active.database ?? ''"
-            />
-          </template>
-          <template v-else-if="active.kind === 'hive-table'">
-            <HiveTableBrowser
-              :key="active.id"
-              :connection-id="active.connectionId"
-              :database="active.database ?? ''"
-              :table="active.table ?? ''"
-            />
-          </template>
-          <template v-else-if="active.kind === 'hive-sql'">
-            <HiveSqlConsole
-              ref="hiveSqlConsoleRef"
-              :key="active.id"
-              :tab-id="active.id"
-              :connection-id="active.connectionId"
-              :database="active.database ?? ''"
-            />
-          </template>
-          <template v-else-if="active.kind === 'postgres-table'">
-            <PostgresTableBrowser
-              :key="active.id"
-              :connection-id="active.connectionId"
-              :database="active.database ?? ''"
-              :schema="active.schema ?? ''"
-              :relation="active.table ?? ''"
-              :relation-type="active.relationType ?? 'table'"
-            />
-          </template>
-          <template v-else-if="active.kind === 'postgres-sql'">
-            <PostgresSqlConsole
-              ref="pgSqlConsoleRef"
-              :key="active.id"
-              :tab-id="active.id"
-              :connection-id="active.connectionId"
-              :database="active.database ?? ''"
-              :schema="active.schema ?? ''"
-            />
-          </template>
-          <template v-else-if="active.kind === 'es-index'">
-            <EsTableBrowser
-              :key="active.id"
-              :connection-id="active.connectionId"
-              :index="active.index ?? ''"
-            />
-          </template>
-          <template v-else-if="active.kind === 'es-sql'">
-            <EsSqlConsole
-              ref="esSqlConsoleRef"
-              :key="active.id"
-              :tab-id="active.id"
-              :connection-id="active.connectionId"
-            />
-          </template>
-          <template v-else-if="active.kind === 'es-templates'">
-            <!-- 定位/新建标记随 tab 字段透传:同 tab 重复打开不重挂载(:key 不变),
-                 面板内部靠 watch 响应 props 变化。 -->
-            <EsTemplatesPanel
-              :key="active.id"
-              :connection-id="active.connectionId"
-              :initial-template="active.template"
-              :new-mode="active.newTemplate"
-            />
-          </template>
-          <template v-else-if="active.kind === 'es-monitor'">
-            <EsClusterMonitor :key="active.id" :connection-id="active.connectionId" />
-          </template>
+          <!-- 单点动态组件 + KeepAlive:缓存键 = tab id(同类多 tab 实例隔离),
+               切走缓存切回复用;max 为 LRU 上限兜底内存,全部 tab 关闭时随
+               KeepAlive 卸载整体释放。props/事件接线见 viewPropBuilders/
+               currentEvents,与原 v-else-if 链逐字等价。 -->
+          <KeepAlive v-else :max="VIEW_CACHE_MAX">
+            <component :is="currentView" :key="currentKey" ref="activeViewInstance" v-bind="currentProps" v-on="currentEvents" />
+          </KeepAlive>
         </div>
       </main>
 

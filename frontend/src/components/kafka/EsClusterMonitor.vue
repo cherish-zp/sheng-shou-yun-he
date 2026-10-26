@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { getApi } from '@/api/client'
 import type { EsClusterStats } from '@/api/types'
 import { useTabsStore } from '@/store/tabs'
@@ -71,6 +71,14 @@ onMounted(() => {
 })
 
 onBeforeUnmount(stopPolling)
+
+// KeepAlive 保活(Layout 内容区缓存 tab 视图):切走 tab 时暂停 10s 轮询、
+// 切回恢复,后台 tab 不再持续打 ES 接口;startPolling 幂等,与 mounted 后的
+// 首次 activated 重入安全。非 KeepAlive 场景(独立挂载)钩子不触发,行为不变。
+onActivated(() => {
+  if (auto.value) startPolling()
+})
+onDeactivated(stopPolling)
 
 const statusText = computed(() => {
   switch (stats.value?.status) {
