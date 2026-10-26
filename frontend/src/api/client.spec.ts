@@ -150,7 +150,10 @@ describe('WailsApi postgres delegation', () => {
   it('delegates testPostgresConnection with the config shape', async () => {
     const cfg = { host: 'h', port: 5432, username: 'u', password: 'p', database: 'd', tls_mode: 'disable' as const }
     await api.testPostgresConnection(cfg)
-    expect((mocked as unknown as { TestPostgresConnection: ReturnType<typeof vi.fn> }).TestPostgresConnection).toHaveBeenCalledWith(cfg)
+    // 统一包装为 {connection_id, config}(镜像后端 TestPostgresConnectionRequest);
+    // connectionId 缺省为空串 = 纯新建测试,后端不回填凭据。
+    expect((mocked as unknown as { TestPostgresConnection: ReturnType<typeof vi.fn> }).TestPostgresConnection)
+      .toHaveBeenCalledWith({ connection_id: '', config: cfg })
   })
 
   it('delegates listPostgresDatabases / listPostgresSchemas / listPostgresTables', async () => {

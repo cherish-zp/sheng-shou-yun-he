@@ -288,6 +288,7 @@ describe('NewConnectionModal', () => {
     await vi.waitFor(() => {
       expect(api.testRedisConnection).toHaveBeenCalledWith(
         expect.objectContaining({ addr: '127.0.0.1:6379' }),
+        undefined,
       )
     })
     expect(api.testConnection).not.toHaveBeenCalled()
@@ -559,6 +560,7 @@ describe('NewConnectionModal', () => {
     await vi.waitFor(() => {
       expect(api2.testMysqlConnection).toHaveBeenCalledWith(
         expect.objectContaining({ host: '10.0.0.1', port: 4000, tls_mode: 'disabled' }),
+        undefined,
       )
     })
     expect(api2.testConnection).not.toHaveBeenCalled()
@@ -769,6 +771,7 @@ describe('NewConnectionModal', () => {
     await vi.waitFor(() => {
       expect(api.testCHConnection).toHaveBeenCalledWith(
         expect.objectContaining({ hosts: ['n1:9000'] }),
+        undefined,
       )
     })
     expect(api.testConnection).not.toHaveBeenCalled()
@@ -928,6 +931,7 @@ describe('NewConnectionModal', () => {
     await vi.waitFor(() => {
       expect(api2.testEsConnection).toHaveBeenCalledWith(
         expect.objectContaining({ hosts: ['127.0.0.1:9200'], auth_mode: 'none', tls_mode: 'disabled' }),
+        undefined,
       )
     })
     expect(api2.testConnection).not.toHaveBeenCalled()
@@ -1032,6 +1036,106 @@ describe('NewConnectionModal', () => {
     })
     expect(wrapper.emitted('close')).toBeFalsy()
   })
+
+  // --- 凭据不回传渲染层:编辑态「留空=保持原密码」的纯前端表现 ---
+
+  it('编辑态密码输入框 placeholder 提示「留空则保持原密码」,新建态不提示', async () => {
+    const conn: Connection = {
+      id: 'my1',
+      name: 'my-old',
+      type: 'mysql',
+      // 后端脱敏后回传的 config 密码为空串。
+      config: { host: 'h.internal', port: 3306, username: 'app', password: '', database: 'orders', tls_mode: 'verify-full' },
+      sort_order: 0,
+      created_at: 1,
+      updated_at: 1,
+    }
+    const editWrapper = mount(NewConnectionModal, { props: { show: true, connection: conn } })
+    expect(
+      (editWrapper.find('[data-test="input-mysql-password"]').element as HTMLInputElement).value,
+    ).toBe('')
+    expect(
+      editWrapper.find('[data-test="input-mysql-password"]').attributes('placeholder'),
+    ).toBe('留空则保持原密码')
+
+    // kafka SASL 密码框同样提示(切到 SASL 后出现)。
+    const editKafka = mount(NewConnectionModal, {
+      props: {
+        show: true,
+        connection: {
+          id: 'k1', name: 'kf', type: 'kafka' as const, sort_order: 0, created_at: 1, updated_at: 1,
+          config: {
+            bootstrap_servers: ['h:9092'],
+            security_protocol: 'SASL_PLAINTEXT',
+            sasl: { enabled: true, mechanism: 'PLAIN', username: 'u', password: '' },
+          },
+        },
+      },
+    })
+    expect(editKafka.find('[data-test="input-password"]').attributes('placeholder')).toBe('留空则保持原密码')
+
+    // 新建态无此语义,不渲染 placeholder。
+    const createWrapper = mountModal()
+    await createWrapper.find('[data-test="type-card-mysql"]').trigger('click')
+    expect(createWrapper.find('[data-test="input-mysql-password"]').attributes('placeholder')).toBeUndefined()
+    await createWrapper.find('[data-test="type-card-kafka"]').trigger('click')
+    await createWrapper.find('[data-test="input-security-protocol"]').setValue('SASL_PLAINTEXT')
+    expect(createWrapper.find('[data-test="input-password"]').attributes('placeholder')).toBeUndefined()
+  })
+
+  it('编辑态测试连接携带 connection_id,空密码原样提交(回填由后端完成)', async () => {
+    const api2 = fakeApi({ testMysqlConnection: vi.fn(async () => {}) })
+    setApi(api2)
+    const conn: Connection = {
+      id: 'my1',
+      name: 'my-old',
+      type: 'mysql',
+      // 后端脱敏后回传的 config 密码为空串。
+      config: { host: 'h.internal', port: 3306, username: 'app', password: '', database: 'orders', tls_mode: 'verify-full' },
+      sort_order: 0,
+      created_at: 1,
+      updated_at: 1,
+    }
+    const wrapper = mount(NewConnectionModal, { props: { show: true, connection: conn } })
+    await vi.waitFor(() => {
+      expect((wrapper.find('[data-test="input-mysql-host"]').element as HTMLInputElement).value).toBe('h.internal')
+    })
+    await wrapper.find('[data-test="btn-test"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(api2.testMysqlConnection).toHaveBeenCalledTimes(1)
+      const [cfg, connectionId] = (api2.testMysqlConnection as ReturnType<typeof vi.fn>).mock.calls[0]
+      expect(connectionId).toBe('my1')
+      // 前端不背回填逻辑:密码留空提交,由后端用已存配置回填。
+      expect(cfg).toMatchObject({ host: 'h.internal', username: 'app', password: '' })
+    })
+    expect(wrapper.find('[data-test="test-ok"]').exists()).toBe(true)
+  })
+
+  it('编辑保存空密码原样提交,不试图在前端补回原密码', async () => {
+    const wrapper = mount(NewConnectionModal, {
+      props: {
+        show: true,
+        connection: {
+          id: 'my1', name: 'my-old', type: 'mysql' as const, sort_order: 0, created_at: 1, updated_at: 1,
+          config: { host: 'h.internal', port: 3306, username: 'app', password: '', database: 'orders', tls_mode: 'verify-full' },
+        },
+      },
+    })
+    await vi.waitFor(() => {
+      expect((wrapper.find('[data-test="input-mysql-host"]').element as HTMLInputElement).value).toBe('h.internal')
+    })
+    await wrapper.find('[data-test="input-mysql-host"]').setValue('h2.internal')
+    await wrapper.find('[data-test="btn-save"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(api.updateConnection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'my1',
+          type: 'mysql',
+          config: { host: 'h2.internal', port: 3306, username: 'app', password: '', database: 'orders', tls_mode: 'verify-full' },
+        }),
+      )
+    })
+  })
 })
 
 describe('PostgreSQL 连接卡片', () => {
@@ -1075,7 +1179,7 @@ describe('PostgreSQL 连接卡片', () => {
         database: 'shop',
         tls_mode: 'disable',
         connect_timeout_ms: 5000,
-      })
+      }, undefined)
     })
   })
 
@@ -1308,7 +1412,7 @@ describe('Hive 连接卡片', () => {
         auth_mode: 'ldap',
         username: 'hive',
         password: 'pw',
-      })
+      }, undefined)
     })
     expect(api2.testConnection).not.toHaveBeenCalled()
     expect(wrapper.find('[data-test="test-ok"]').exists()).toBe(true)

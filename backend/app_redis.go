@@ -101,11 +101,20 @@ type RedisFlushRequest struct {
 	DB           int    `json:"db"`
 }
 
+// TestRedisConnectionRequest carries an unsaved Redis config plus the
+// optional id of the connection being edited; 编辑态空密码由后端回填
+// (fillTestSecrets),纯新建按提交配置原样测试。见 TestConnectionRequest。
+type TestRedisConnectionRequest struct {
+	ConnectionID string            `json:"connection_id,omitempty"`
+	Config       model.RedisConfig `json:"config"`
+}
+
 // TestRedisConnection verifies reachability without persisting anything.
-func (a *App) TestRedisConnection(cfg model.RedisConfig) error {
+func (a *App) TestRedisConnection(req TestRedisConnectionRequest) error {
 	ctx, cancel := a.newContext()
 	defer cancel()
-	rc, err := service.NewRedisClient(cfg)
+	a.fillTestSecrets(ctx, req.ConnectionID, &req.Config)
+	rc, err := service.NewRedisClient(req.Config)
 	if err != nil {
 		return err
 	}

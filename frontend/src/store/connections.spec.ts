@@ -216,7 +216,8 @@ describe('connections store', () => {
     const store = useConnectionsStore()
     const cfg = { bootstrap_servers: ['localhost:9092'] }
     await store.testConnection(cfg)
-    expect(api.testConnection).toHaveBeenCalledWith(cfg)
+    // 第二参数为可选的 connectionId(编辑态由后端回填空密码),新建测试传 undefined。
+    expect(api.testConnection).toHaveBeenCalledWith(cfg, undefined)
   })
 
   it('reorderConnections delegates to the api and reorders the local list', async () => {

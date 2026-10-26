@@ -335,13 +335,13 @@ func TestAppESRequestJSONShapes(t *testing.T) {
 
 func TestAppTestESConnectionValidates(t *testing.T) {
 	app := newTestApp(t)
-	if err := app.TestESConnection(model.EsConfig{}); err == nil {
+	if err := app.TestESConnection(TestESConnectionRequest{Config: model.EsConfig{}}); err == nil {
 		t.Fatal("empty hosts must fail before dialing")
 	}
-	if err := app.TestESConnection(model.EsConfig{Hosts: []string{"h:9200"}, AuthMode: "basic"}); err == nil {
+	if err := app.TestESConnection(TestESConnectionRequest{Config: model.EsConfig{Hosts: []string{"h:9200"}, AuthMode: "basic"}}); err == nil {
 		t.Fatal("basic auth without username must fail before dialing")
 	}
-	if err := app.TestESConnection(model.EsConfig{Hosts: []string{"h:9200"}, TLSMode: "bogus"}); err == nil {
+	if err := app.TestESConnection(TestESConnectionRequest{Config: model.EsConfig{Hosts: []string{"h:9200"}, TLSMode: "bogus"}}); err == nil {
 		t.Fatal("unknown tls mode must fail before dialing")
 	}
 }

@@ -101,6 +101,10 @@ const deleteError = ref<string | null>(null)
 
 const editing = computed(() => !!props.connection)
 
+// 编辑态凭据占位提示:后端不再回传明文密码(列表/详情出口脱敏),留空保存/
+// 测试均表示沿用原密码(后端按「留空=不变」回填);新建态无此语义,不提示。
+const secretPlaceholder = computed(() => (editing.value ? '留空则保持原密码' : undefined))
+
 const isSasl = computed(() => form.securityProtocol.startsWith('SASL_'))
 const isTLS = computed(() => form.securityProtocol.endsWith('_SSL'))
 const isGssapi = computed(() => isSasl.value && form.mechanism === 'GSSAPI')
@@ -391,24 +395,27 @@ async function runTest(): Promise<void> {
   testing.value = true
   tested.value = false
   testError.value = null
+  // 编辑既有连接时携带 connection_id:后端把留空的密码字段回填为已存值
+  // (「留空=不变」,凭据不回传渲染层);新建模式不携带,按表单原样测试。
+  const testConnId = editing.value ? props.connection?.id : undefined
   try {
     // 按类型分派:redis 走 TestRedisConnection,clickhouse 走 TestCHConnection,
     // mysql/tidb 共用 TestMysqlConnection(config 形状相同),es 走 TestESConnection,
     // hive 走 TestHiveConnection,kafka 走原 TestConnection。
     if (form.connType === 'redis') {
-      await getApi().testRedisConnection(config.value as RedisConfigShape)
+      await getApi().testRedisConnection(config.value as RedisConfigShape, testConnId)
     } else if (form.connType === 'clickhouse') {
-      await getApi().testCHConnection(config.value as CHConfigShape)
+      await getApi().testCHConnection(config.value as CHConfigShape, testConnId)
     } else if (form.connType === 'mysql' || form.connType === 'tidb') {
-      await getApi().testMysqlConnection?.(config.value as MysqlConfigShape)
+      await getApi().testMysqlConnection?.(config.value as MysqlConfigShape, testConnId)
     } else if (form.connType === 'postgres') {
-      await getApi().testPostgresConnection?.(config.value as PostgresConfigShape)
+      await getApi().testPostgresConnection?.(config.value as PostgresConfigShape, testConnId)
     } else if (form.connType === 'hive') {
-      await getApi().testHiveConnection?.(config.value as HiveConfigShape)
+      await getApi().testHiveConnection?.(config.value as HiveConfigShape, testConnId)
     } else if (form.connType === 'es') {
-      await getApi().testEsConnection?.(config.value as EsConfigShape)
+      await getApi().testEsConnection?.(config.value as EsConfigShape, testConnId)
     } else {
-      await store.testConnection(config.value as KafkaConfig)
+      await store.testConnection(config.value as KafkaConfig, testConnId)
     }
     tested.value = true
   } catch (e) {
@@ -507,7 +514,7 @@ function close(): void {
           </div>
           <div class="field">
             <label class="label">密码(可选)</label>
-            <PasswordInput v-model="form.redisPassword" data-test="input-redis-password" toggle-testid="toggle-password-redis" />
+            <PasswordInput v-model="form.redisPassword" data-test="input-redis-password" toggle-testid="toggle-password-redis" :placeholder="secretPlaceholder" />
           </div>
           <div class="field">
             <label class="label">DB(集群模式固定 0)</label>
@@ -534,7 +541,7 @@ function close(): void {
           </div>
           <div class="field">
             <label class="label">密码</label>
-            <PasswordInput v-model="form.chPassword" data-test="input-ch-password" toggle-testid="toggle-password-ch" />
+            <PasswordInput v-model="form.chPassword" data-test="input-ch-password" toggle-testid="toggle-password-ch" :placeholder="secretPlaceholder" />
           </div>
           <div class="field">
             <label class="label">数据库</label>
@@ -565,7 +572,7 @@ function close(): void {
           </div>
           <div class="field">
             <label class="label">密码</label>
-            <PasswordInput v-model="form.mysqlPassword" data-test="input-mysql-password" toggle-testid="toggle-password-mysql" />
+            <PasswordInput v-model="form.mysqlPassword" data-test="input-mysql-password" toggle-testid="toggle-password-mysql" :placeholder="secretPlaceholder" />
           </div>
           <div class="field">
             <label class="label">数据库</label>
@@ -599,7 +606,7 @@ function close(): void {
           </div>
           <div class="field">
             <label class="label">密码</label>
-            <PasswordInput v-model="form.pgPassword" data-test="input-postgres-password" toggle-testid="toggle-password-postgres" />
+            <PasswordInput v-model="form.pgPassword" data-test="input-postgres-password" toggle-testid="toggle-password-postgres" :placeholder="secretPlaceholder" />
           </div>
           <div class="field">
             <label class="label">数据库 <span class="req">*</span></label>
@@ -654,7 +661,7 @@ function close(): void {
             </div>
             <div class="field">
               <label class="label">密码</label>
-              <PasswordInput v-model="form.hivePassword" data-test="hive-password" toggle-testid="toggle-password-hive" />
+              <PasswordInput v-model="form.hivePassword" data-test="hive-password" toggle-testid="toggle-password-hive" :placeholder="secretPlaceholder" />
             </div>
           </template>
           <template v-else-if="form.hiveAuthMode === 'kerberos'">
@@ -700,13 +707,13 @@ function close(): void {
             </div>
             <div class="field">
               <label class="label">密码</label>
-              <PasswordInput v-model="form.esPassword" data-test="input-es-password" toggle-testid="toggle-password-es" />
+              <PasswordInput v-model="form.esPassword" data-test="input-es-password" toggle-testid="toggle-password-es" :placeholder="secretPlaceholder" />
             </div>
           </template>
           <template v-else-if="form.esAuthMode === 'apikey'">
             <div class="field">
               <label class="label">API Key(Base64「id:api_key」或编码凭据)</label>
-              <input v-model="form.esApiKey" data-test="input-es-api-key" class="input" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              <input v-model="form.esApiKey" data-test="input-es-api-key" class="input" :placeholder="secretPlaceholder" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
             </div>
           </template>
           <div class="field">
@@ -748,7 +755,7 @@ function close(): void {
             </div>
             <div class="field">
               <label class="label">密码</label>
-              <PasswordInput v-model="form.password" data-test="input-password" toggle-testid="toggle-password-kafka" />
+              <PasswordInput v-model="form.password" data-test="input-password" toggle-testid="toggle-password-kafka" :placeholder="secretPlaceholder" />
             </div>
           </template>
           <template v-else>

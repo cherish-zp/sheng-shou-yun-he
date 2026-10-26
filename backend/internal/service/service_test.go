@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"sheng-shou-yun-he/backend/internal/model"
 	"sheng-shou-yun-he/backend/internal/store"
@@ -668,5 +670,279 @@ func TestServiceListAuditDefaultLimit(t *testing.T) {
 	}
 	if len(list) != 5 || list[0].Target != "t4" {
 		t.Fatalf("expected all 5 entries newest-first via default limit, got %+v", list)
+	}
+}
+
+// TestKafkaColdOpenConcurrentSingleFlight 复现「首开必现 context canceled」:
+// 树展开并发发 listTopics + listConsumerGroups,冷池下两个请求各自冷建
+// 客户端,Pool.Put 覆盖旧实例时把带在途请求的前一个客户端 Close,在途
+// 请求随即报 context canceled。修复后同一连接的冷建必须单飞:并发只建
+// 一次客户端,两次调用都成功。
+func TestKafkaColdOpenConcurrentSingleFlight(t *testing.T) {
+	svc, factory := newTestService(t)
+	ctx := context.Background()
+	c, err := svc.CreateConnection(ctx, sampleConn())
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// 慢化工厂:放大并发冷建窗口(并发两个调用都落在建窗内)。
+	base := svc.factory
+	svc.factory = ClientFactoryFunc(func(ctx context.Context, cfg model.KafkaConfig) (KafkaDataSource, error) {
+		time.Sleep(100 * time.Millisecond)
+		return base.NewKafkaClient(ctx, cfg)
+	})
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func(slot int) {
+			defer wg.Done()
+			_, errs[slot] = svc.ListTopics(ctx, c.ID)
+		}(i)
+	}
+	wg.Wait()
+	for slot, err := range errs {
+		if err != nil {
+			t.Fatalf("call %d: %v", slot, err)
+		}
+	}
+	if got := factory.count(); got != 1 {
+		t.Fatalf("并发冷开必须单飞只建一次客户端,实际创建 %d 次", got)
+	}
+}
+
+// --- 凭据「留空=不变」:RestoreSecrets 纯函数与 UpdateConnection 回填 ---
+
+// decodeJSONAsMap 把 config JSON 解码成 map,便于断言字段存在性。
+func decodeJSONAsMap(t *testing.T, raw json.RawMessage) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+	return m
+}
+
+func TestRestoreSecretsMysql(t *testing.T) {
+	prev := model.MustConfigJSON(model.MysqlConfig{Host: "h", Port: 3306, Username: "u", Password: "old-pw", Database: "d"})
+
+	// 空串密码回填为已存值,其余字段保持 next 的新值。
+	next := model.MustConfigJSON(model.MysqlConfig{Host: "h2", Port: 3307, Username: "u2", Password: "", Database: "d2"})
+	restored := RestoreSecrets(model.ConnectionTypeMySQL, prev, next)
+	m := decodeJSONAsMap(t, restored)
+	if m["password"] != "old-pw" || m["host"] != "h2" || m["port"] != float64(3307) {
+		t.Fatalf("空密码应回填已存值且保留新字段: %v", m)
+	}
+
+	// 非空密码保留 next 值(不回填)。
+	next = model.MustConfigJSON(model.MysqlConfig{Host: "h2", Username: "u2", Password: "new-pw"})
+	m = decodeJSONAsMap(t, RestoreSecrets(model.ConnectionTypeMySQL, prev, next))
+	if m["password"] != "new-pw" {
+		t.Fatalf("非空密码必须保留 next 值: %v", m)
+	}
+
+	// prev 本身无密码(next 空密码)→ 保持空。
+	empty := model.MustConfigJSON(model.MysqlConfig{Host: "h", Password: ""})
+	m = decodeJSONAsMap(t, RestoreSecrets(model.ConnectionTypeMySQL, empty, next))
+	if m["password"] != "new-pw" {
+		t.Fatalf("prev 无密码时 next 非空值不受影响: %v", m)
+	}
+	m = decodeJSONAsMap(t, RestoreSecrets(model.ConnectionTypeMySQL, empty, model.MustConfigJSON(model.MysqlConfig{Host: "h", Password: ""})))
+	// MysqlConfig.Password 带 omitempty,空密码时键省略——语义上仍为「无密码」。
+	if v, ok := m["password"]; ok && v != "" {
+		t.Fatalf("prev/next 均无密码时必须保持为空: %v", m)
+	}
+}
+
+func TestRestoreSecretsRedisMissingKey(t *testing.T) {
+	// 前端 redis 空密码会省略 password 键(PasswordInput 留空 → undefined),
+	// 回填必须覆盖「键缺失」而不只是空串。
+	prev := model.MustConfigJSON(model.RedisConfig{Addr: "a:6379", Password: "old-pw", DB: 2})
+	next := json.RawMessage(`{"addr":"a:6379","db":3,"tls":true}`)
+	m := decodeJSONAsMap(t, RestoreSecrets(model.ConnectionTypeRedis, prev, next))
+	if m["password"] != "old-pw" || m["db"] != float64(3) {
+		t.Fatalf("缺失的 password 键应回填已存值: %v", m)
+	}
+	// 显式空串同样回填。
+	next = model.MustConfigJSON(model.RedisConfig{Addr: "a:6379", DB: 3})
+	m = decodeJSONAsMap(t, RestoreSecrets(model.ConnectionTypeRedis, prev, next))
+	if m["password"] != "old-pw" {
+		t.Fatalf("空串 password 应回填已存值: %v", m)
+	}
+}
+
+func TestRestoreSecretsKafkaSasl(t *testing.T) {
+	prev := model.MustConfigJSON(model.KafkaConfig{
+		BootstrapServers: []string{"h:9092"},
+		SASL:             &model.SASLConfig{Enabled: true, Mechanism: "PLAIN", Username: "u", Password: "old-pw"},
+	})
+
+	// next SASL 密码留空 → 回填;mechanism/username 等 next 值保留。
+	next := model.MustConfigJSON(model.KafkaConfig{
+		BootstrapServers: []string{"h2:9092"},
+		SASL:             &model.SASLConfig{Enabled: true, Mechanism: "SCRAM-SHA-256", Username: "u2", Password: ""},
+	})
+	var cfg model.KafkaConfig
+	if err := json.Unmarshal(RestoreSecrets(model.ConnectionTypeKafka, prev, next), &cfg); err != nil {
+		t.Fatalf("decode restored: %v", err)
+	}
+	if cfg.SASL == nil || cfg.SASL.Password != "old-pw" || cfg.SASL.Mechanism != "SCRAM-SHA-256" || cfg.SASL.Username != "u2" {
+		t.Fatalf("SASL 空密码应回填且保留其余新值: %+v", cfg.SASL)
+	}
+
+	// next 未启用 SASL(无 sasl 键,如切回 PLAINTEXT)→ 不回填、原样返回。
+	plain := model.MustConfigJSON(model.KafkaConfig{BootstrapServers: []string{"h:9092"}})
+	if got := RestoreSecrets(model.ConnectionTypeKafka, prev, plain); string(got) != string(plain) {
+		t.Fatalf("next 无 sasl 时必须原样返回: %s", got)
+	}
+
+	// 非空密码保留 next 值。
+	keep := model.MustConfigJSON(model.KafkaConfig{
+		BootstrapServers: []string{"h:9092"},
+		SASL:             &model.SASLConfig{Enabled: true, Mechanism: "PLAIN", Username: "u", Password: "new-pw"},
+	})
+	if err := json.Unmarshal(RestoreSecrets(model.ConnectionTypeKafka, prev, keep), &cfg); err != nil {
+		t.Fatalf("decode kept: %v", err)
+	}
+	if cfg.SASL.Password != "new-pw" {
+		t.Fatalf("非空 SASL 密码必须保留 next 值: %+v", cfg.SASL)
+	}
+}
+
+func TestRestoreSecretsEsApiKey(t *testing.T) {
+	prev := json.RawMessage(`{"hosts":["h:9200"],"username":"elastic","password":"old-pw","api_key":"old-key","auth_mode":"basic","tls_mode":"disabled"}`)
+	next := json.RawMessage(`{"hosts":["h:9200"],"username":"","password":"","api_key":"","auth_mode":"apikey","tls_mode":"disabled"}`)
+	m := decodeJSONAsMap(t, RestoreSecrets(model.ConnectionTypeES, prev, next))
+	if m["password"] != "old-pw" || m["api_key"] != "old-key" {
+		t.Fatalf("es 的 password 与 api_key 都应回填: %v", m)
+	}
+}
+
+func TestRestoreSecretsInvalidJSON(t *testing.T) {
+	// 任一 config 非 JSON 对象时原样返回 next,不 panic。
+	next := json.RawMessage(`{"host":"h"}`)
+	if got := RestoreSecrets(model.ConnectionTypeMySQL, json.RawMessage(`not-json`), next); string(got) != string(next) {
+		t.Fatalf("prev 非法时应原样返回 next: %s", got)
+	}
+	if got := RestoreSecrets(model.ConnectionTypeMySQL, nil, next); string(got) != string(next) {
+		t.Fatalf("prev 为空时应原样返回 next: %s", got)
+	}
+}
+
+// TestUpdateConnectionRestoresBlankSecrets 验证编辑「留空=不变」:密码留空
+// 保存时后端用已存配置回填,落库的仍是原密码;前端不再需要(也无法)拿到
+// 明文密码。覆盖 mysql/redis/kafka SASL 三类形状。
+func TestUpdateConnectionRestoresBlankSecrets(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	// mysql:编辑留空密码 → 落库保持原密码。
+	created, err := svc.CreateConnection(ctx, &model.Connection{
+		Name: "my", Type: model.ConnectionTypeMySQL,
+		Config: model.MustConfigJSON(model.MysqlConfig{Host: "h", Port: 3306, Username: "u", Password: "secret", Database: "d"}),
+	})
+	if err != nil {
+		t.Fatalf("create mysql: %v", err)
+	}
+	if err := svc.UpdateConnection(ctx, &model.Connection{
+		ID: created.ID, Name: "my2", Type: model.ConnectionTypeMySQL,
+		Config: model.MustConfigJSON(model.MysqlConfig{Host: "h", Port: 3306, Username: "u", Password: "", Database: "d"}),
+	}); err != nil {
+		t.Fatalf("update mysql: %v", err)
+	}
+	got, err := svc.GetConnection(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get mysql: %v", err)
+	}
+	myCfg, err := got.MysqlConfig()
+	if err != nil {
+		t.Fatalf("decode mysql: %v", err)
+	}
+	if myCfg.Password != "secret" {
+		t.Fatalf("mysql 留空密码必须回填为原密码,got %q", myCfg.Password)
+	}
+
+	// redis:空密码省略键 → 落库保持原密码。
+	created, err = svc.CreateConnection(ctx, &model.Connection{
+		Name: "rd", Type: model.ConnectionTypeRedis,
+		Config: model.MustConfigJSON(model.RedisConfig{Addr: "a:6379", Password: "secret", DB: 1}),
+	})
+	if err != nil {
+		t.Fatalf("create redis: %v", err)
+	}
+	if err := svc.UpdateConnection(ctx, &model.Connection{
+		ID: created.ID, Name: "rd2", Type: model.ConnectionTypeRedis,
+		Config: json.RawMessage(`{"addr":"a:6379","db":2}`),
+	}); err != nil {
+		t.Fatalf("update redis: %v", err)
+	}
+	got, err = svc.GetConnection(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get redis: %v", err)
+	}
+	rdCfg, err := got.RedisConfig()
+	if err != nil {
+		t.Fatalf("decode redis: %v", err)
+	}
+	if rdCfg.Password != "secret" {
+		t.Fatalf("redis 省略的密码必须回填为原密码,got %q", rdCfg.Password)
+	}
+
+	// kafka SASL:留空密码 → 落库保持原密码。
+	created, err = svc.CreateConnection(ctx, &model.Connection{
+		Name: "kf", Type: model.ConnectionTypeKafka,
+		Config: model.MustConfigJSON(model.KafkaConfig{
+			BootstrapServers: []string{"h:9092"}, SecurityProtocol: "SASL_PLAINTEXT",
+			SASL: &model.SASLConfig{Enabled: true, Mechanism: "PLAIN", Username: "u", Password: "secret"},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("create kafka: %v", err)
+	}
+	if err := svc.UpdateConnection(ctx, &model.Connection{
+		ID: created.ID, Name: "kf2", Type: model.ConnectionTypeKafka,
+		Config: model.MustConfigJSON(model.KafkaConfig{
+			BootstrapServers: []string{"h:9092"}, SecurityProtocol: "SASL_PLAINTEXT",
+			SASL: &model.SASLConfig{Enabled: true, Mechanism: "PLAIN", Username: "u", Password: ""},
+		}),
+	}); err != nil {
+		t.Fatalf("update kafka: %v", err)
+	}
+	got, err = svc.GetConnection(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get kafka: %v", err)
+	}
+	kfCfg, err := got.KafkaConfig()
+	if err != nil {
+		t.Fatalf("decode kafka: %v", err)
+	}
+	if kfCfg.SASL == nil || kfCfg.SASL.Password != "secret" {
+		t.Fatalf("kafka SASL 留空密码必须回填为原密码,got %+v", kfCfg.SASL)
+	}
+}
+
+// TestCreateConnectionDoesNotRestoreSecrets 红线:新建空密码就是空密码,
+// CreateConnection 不做任何回填。
+func TestCreateConnectionDoesNotRestoreSecrets(t *testing.T) {
+	svc, _ := newTestService(t)
+	created, err := svc.CreateConnection(context.Background(), &model.Connection{
+		Name: "my", Type: model.ConnectionTypeMySQL,
+		Config: model.MustConfigJSON(model.MysqlConfig{Host: "h", Port: 3306, Username: "u", Password: "", Database: "d"}),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := svc.GetConnection(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	cfg, err := got.MysqlConfig()
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if cfg.Password != "" {
+		t.Fatalf("新建空密码必须保持为空,got %q", cfg.Password)
 	}
 }

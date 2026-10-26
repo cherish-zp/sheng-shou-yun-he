@@ -100,9 +100,11 @@ export const useConnectionsStore = defineStore('connections', () => {
     connections.value = [...ordered, ...connections.value.filter((c) => byId.has(c.id))]
   }
 
-  async function testConnection(cfg: KafkaConfig): Promise<void> {
+  // testConnection 探活未保存的 Kafka 配置;编辑既有连接时传 connectionId,
+  // 后端把留空的 SASL 密码回填为已存值(「留空=不变」,凭据不再回传前端)。
+  async function testConnection(cfg: KafkaConfig, connectionId?: string): Promise<void> {
     error.value = null
-    await getApi().testConnection(cfg)
+    await getApi().testConnection(cfg, connectionId)
   }
 
   async function connect(id: string): Promise<void> {

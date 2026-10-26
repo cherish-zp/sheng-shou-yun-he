@@ -37,11 +37,20 @@ type MysqlTableDDLRequest struct {
 // app_requests.go 的 DatabaseExecuteRequest。
 type MysqlExecuteRequest = DatabaseExecuteRequest
 
+// TestMysqlConnectionRequest carries an unsaved MySQL/TiDB config plus the
+// optional id of the connection being edited; 编辑态空密码由后端回填
+// (fillTestSecrets),纯新建按提交配置原样测试。见 TestConnectionRequest。
+type TestMysqlConnectionRequest struct {
+	ConnectionID string            `json:"connection_id,omitempty"`
+	Config       model.MysqlConfig `json:"config"`
+}
+
 // TestMysqlConnection verifies reachability without persisting anything.
-func (a *App) TestMysqlConnection(cfg model.MysqlConfig) error {
+func (a *App) TestMysqlConnection(req TestMysqlConnectionRequest) error {
 	ctx, cancel := a.newContext()
 	defer cancel()
-	return a.svc.MysqlTestConnection(ctx, cfg)
+	a.fillTestSecrets(ctx, req.ConnectionID, &req.Config)
+	return a.svc.MysqlTestConnection(ctx, req.Config)
 }
 
 // ListMysqlDatabases lists the user databases (the four built-in system

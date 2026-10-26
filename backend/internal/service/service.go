@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/google/uuid"
 
@@ -17,6 +19,9 @@ type Service struct {
 	store   *store.Store
 	pool    *Pool
 	factory ClientFactory
+	// buildMu/builds 冷建单飞:同一连接的冷建并发只执行一次(见 connectOnce)。
+	buildMu sync.Mutex
+	builds  map[string]*connectFlight
 	// mysqlExportClientBuilder 为表导出构建独立专用 MySQL/TiDB 客户端,
 	// 使导出不与池内客户端共享生命周期(导出期间断开/编辑/删除连接互不影响)。
 	// nil 时退回 buildMysqlClient;测试经 SetMysqlExportClientBuilderForTest 注入。
@@ -46,9 +51,16 @@ func (s *Service) CreateConnection(ctx context.Context, c *model.Connection) (*m
 // keeping its id and created_at while the store refreshes updated_at. The
 // pooled client still holds the old config, so it is evicted and closed: the
 // next operation reconnects with the edited settings.
+//
+// 编辑「留空=不变」:App 层回传前端的凭据已脱敏(maskConnectionSecrets),
+// 前端把密码留空表示沿用原值——落库前用已存配置回填空敏感字段。连接不
+// 存在时 GetConnection 报错,跳过回填(落库时同样报 not found)。
 func (s *Service) UpdateConnection(ctx context.Context, c *model.Connection) error {
 	if err := c.Validate(); err != nil {
 		return err
+	}
+	if old, err := s.store.GetConnection(c.ID); err == nil {
+		c.Config = RestoreSecrets(old.Type, old.Config, c.Config)
 	}
 	if err := s.store.UpdateConnection(c); err != nil {
 		return fmt.Errorf("update connection: %w", err)
@@ -57,6 +69,81 @@ func (s *Service) UpdateConnection(ctx context.Context, c *model.Connection) err
 		_ = ds.Close()
 	}
 	return nil
+}
+
+// RestoreSecrets 用 prev 回填 next 中留空的敏感凭据字段,返回回填后的
+// config JSON(纯函数:入参不修改,next 优先)。回填规则:
+//   - 字段在 next 中缺失(如 redis/clickhouse 空密码省略键)或为空串,且
+//     prev 中有非空值 → 回填 prev 值;
+//   - next 中已有非空值 → 保留;
+//   - prev 缺失或对应值为空 → 保持 next 原样。
+//
+// 敏感字段清单与 store 落盘加密、App 层 maskConnectionSecrets 的脱敏一致:
+// kafka 为 sasl.password;redis/clickhouse/mysql/tidb/postgres/hive 为
+// password;es 为 password + api_key。任一 config 不是 JSON 对象时原样
+// 返回 next。CreateConnection 不调用本函数(新建空密码就是空密码)。
+func RestoreSecrets(connType model.ConnectionType, prev, next json.RawMessage) json.RawMessage {
+	if len(prev) == 0 || len(next) == 0 {
+		return next
+	}
+	var prevRoot, nextRoot map[string]json.RawMessage
+	if err := json.Unmarshal(prev, &prevRoot); err != nil {
+		return next
+	}
+	if err := json.Unmarshal(next, &nextRoot); err != nil {
+		return next
+	}
+	changed := false
+	restore := func(dst, src map[string]json.RawMessage, key string) {
+		srcRaw, ok := src[key]
+		if !ok {
+			return
+		}
+		var srcVal string
+		if err := json.Unmarshal(srcRaw, &srcVal); err != nil || srcVal == "" {
+			return
+		}
+		if cur, ok := dst[key]; ok {
+			var curVal string
+			if err := json.Unmarshal(cur, &curVal); err == nil && curVal != "" {
+				return
+			}
+		}
+		dst[key] = srcRaw
+		changed = true
+	}
+	switch connType {
+	case model.ConnectionTypeKafka:
+		// kafka 的凭据嵌在 sasl 子对象里;next 未启用 SASL(无 sasl 键)或
+		// prev 无 sasl 时不回填。
+		saslRaw, ok := nextRoot["sasl"]
+		if !ok {
+			break
+		}
+		var nextSasl map[string]json.RawMessage
+		if json.Unmarshal(saslRaw, &nextSasl) != nil {
+			break
+		}
+		prevSaslRaw, ok := prevRoot["sasl"]
+		if !ok {
+			break
+		}
+		var prevSasl map[string]json.RawMessage
+		if json.Unmarshal(prevSaslRaw, &prevSasl) != nil {
+			break
+		}
+		restore(nextSasl, prevSasl, "password")
+		nextRoot["sasl"] = model.MustConfigJSON(nextSasl)
+	default:
+		restore(nextRoot, prevRoot, "password")
+		if connType == model.ConnectionTypeES {
+			restore(nextRoot, prevRoot, "api_key")
+		}
+	}
+	if !changed {
+		return next
+	}
+	return model.MustConfigJSON(nextRoot)
 }
 
 // ListConnections returns every stored connection definition.
@@ -102,34 +189,79 @@ func (s *Service) TestConnection(ctx context.Context, cfg model.KafkaConfig) err
 	return nil
 }
 
+// connectFlight 冷建单飞的共享结果:done 关闭后 ds/err 可读。
+type connectFlight struct {
+	done chan struct{}
+	ds   DataSource
+	err  error
+}
+
+// connectOnce 保证同一连接的冷建(建客户端+探活+入池)全局只执行一次,
+// 并发调用者等待并复用结果。修复「首开必现 context canceled」:树展开会
+// 并发发多个首查请求,冷池下各自冷建客户端,Pool.Put 覆盖旧实例时把带
+// 在途请求的前一个 Close,在途请求随即被取消;六数据源同病,统一在此收敛。
+// 等待者尊重自身 ctx(等待期间调用方放弃则返回 ctx.Err,不阻塞其退出)。
+func (s *Service) connectOnce(ctx context.Context, id string, build func(ctx context.Context) (DataSource, error)) (DataSource, error) {
+	s.buildMu.Lock()
+	if fl, ok := s.builds[id]; ok {
+		s.buildMu.Unlock()
+		select {
+		case <-fl.done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return fl.ds, fl.err
+	}
+	fl := &connectFlight{done: make(chan struct{})}
+	if s.builds == nil {
+		s.builds = make(map[string]*connectFlight)
+	}
+	s.builds[id] = fl
+	s.buildMu.Unlock()
+
+	ds, err := build(ctx)
+	fl.ds, fl.err = ds, err
+	close(fl.done)
+
+	s.buildMu.Lock()
+	delete(s.builds, id)
+	s.buildMu.Unlock()
+	return ds, err
+}
+
 // ConnectConnection establishes a connection and registers it in the pool.
 func (s *Service) ConnectConnection(ctx context.Context, id string) error {
-	c, err := s.store.GetConnection(id)
-	if err != nil {
-		return err
-	}
-	var ds DataSource
-	switch c.Type {
-	case model.ConnectionTypeRedis:
-		ds, err = s.buildRedisClient(c)
-	case model.ConnectionTypeClickHouse:
-		ds, err = s.buildCHClient(c)
-	case model.ConnectionTypeES:
-		ds, err = s.buildEsClient(c)
-	case model.ConnectionTypeMySQL, model.ConnectionTypeTiDB:
-		ds, err = s.buildMysqlClient(c)
-	case model.ConnectionTypePostgres:
-		ds, err = s.buildPostgresClient(c)
-	case model.ConnectionTypeHive:
-		ds, err = s.buildHiveClient(c)
-	default:
-		ds, err = s.buildClient(ctx, c)
-	}
-	if err != nil {
-		return err
-	}
-	if err := s.pool.Put(id, ds); err != nil {
-		ds.Close()
+	if _, err := s.connectOnce(ctx, id, func(ctx context.Context) (DataSource, error) {
+		c, err := s.store.GetConnection(id)
+		if err != nil {
+			return nil, err
+		}
+		var ds DataSource
+		switch c.Type {
+		case model.ConnectionTypeRedis:
+			ds, err = s.buildRedisClient(c)
+		case model.ConnectionTypeClickHouse:
+			ds, err = s.buildCHClient(c)
+		case model.ConnectionTypeES:
+			ds, err = s.buildEsClient(c)
+		case model.ConnectionTypeMySQL, model.ConnectionTypeTiDB:
+			ds, err = s.buildMysqlClient(c)
+		case model.ConnectionTypePostgres:
+			ds, err = s.buildPostgresClient(c)
+		case model.ConnectionTypeHive:
+			ds, err = s.buildHiveClient(c)
+		default:
+			ds, err = s.buildClient(ctx, c)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if err := s.pool.Put(id, ds); err != nil {
+			ds.Close()
+			return nil, err
+		}
+		return ds, nil
+	}); err != nil {
 		return err
 	}
 	return nil
@@ -1055,17 +1187,27 @@ func (s *Service) kafka(ctx context.Context, id string) (KafkaDataSource, error)
 		}
 		return kds, nil
 	}
-	c, err := s.store.GetConnection(id)
+	ds, err := s.connectOnce(ctx, id, func(ctx context.Context) (DataSource, error) {
+		c, err := s.store.GetConnection(id)
+		if err != nil {
+			return nil, err
+		}
+		kds, err := s.buildClient(ctx, c)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.pool.Put(id, kds); err != nil {
+			kds.Close()
+			return nil, err
+		}
+		return kds, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	kds, err := s.buildClient(ctx, c)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.pool.Put(id, kds); err != nil {
-		kds.Close()
-		return nil, err
+	kds, ok := ds.(KafkaDataSource)
+	if !ok {
+		return nil, errors.New("connection is not a Kafka data source")
 	}
 	return kds, nil
 }

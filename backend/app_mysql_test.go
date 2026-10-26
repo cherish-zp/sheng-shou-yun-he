@@ -257,13 +257,13 @@ func TestAppMysqlExecuteFailureAudited(t *testing.T) {
 
 func TestAppTestMysqlConnectionValidates(t *testing.T) {
 	app := newTestApp(t)
-	if err := app.TestMysqlConnection(model.MysqlConfig{Port: 3306}); err == nil {
+	if err := app.TestMysqlConnection(TestMysqlConnectionRequest{Config: model.MysqlConfig{Port: 3306}}); err == nil {
 		t.Fatal("empty host must fail before dialing")
 	}
-	if err := app.TestMysqlConnection(model.MysqlConfig{Host: "h", Port: 70000}); err == nil {
+	if err := app.TestMysqlConnection(TestMysqlConnectionRequest{Config: model.MysqlConfig{Host: "h", Port: 70000}}); err == nil {
 		t.Fatal("out-of-range port must fail before dialing")
 	}
-	if err := app.TestMysqlConnection(model.MysqlConfig{Host: "h", TLSMode: "bogus"}); err == nil {
+	if err := app.TestMysqlConnection(TestMysqlConnectionRequest{Config: model.MysqlConfig{Host: "h", TLSMode: "bogus"}}); err == nil {
 		t.Fatal("unknown tls_mode must fail before dialing")
 	}
 }

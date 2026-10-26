@@ -163,7 +163,9 @@ export interface Api {
   // id 顺序。绑定尚未由 wails generate 生成,声明为可选成员(既有 fake 零
   // 改动);调用方用可选链(?.)访问。
   reorderConnections?(ids: string[]): Promise<void>
-  testConnection(cfg: KafkaConfig): Promise<void>
+  // 连接测试:connectionId 可选——编辑既有连接时携带,后端把留空的密码字段
+  // 用已存配置回填(「留空=不变」);纯新建测试不传,按提交配置原样测试。
+  testConnection(cfg: KafkaConfig, connectionId?: string): Promise<void>
   connect(id: string): Promise<void>
   disconnect(id: string): Promise<void>
   listTopics(id: string): Promise<Topic[]>
@@ -194,7 +196,7 @@ export interface Api {
   applyUpdate(req: ApplyUpdateRequest): Promise<void>
   updateProgress(): Promise<UpdateProgressInfo>
   openURL(url: string): Promise<void>
-  testRedisConnection(cfg: RedisConfigShape): Promise<void>
+  testRedisConnection(cfg: RedisConfigShape, connectionId?: string): Promise<void>
   listRedisDBs(id: string): Promise<RedisDBInfo[]>
   redisScan(req: RedisScanRequest): Promise<RedisScanResult>
   redisGetKey(req: RedisKeyRequest): Promise<RedisValue>
@@ -218,7 +220,7 @@ export interface Api {
   saveSavedQuery(req: SaveSavedQueryRequest): Promise<SavedQuery>
   updateSavedQuery(req: UpdateSavedQueryRequest): Promise<SavedQuery>
   deleteSavedQuery(req: DeleteSavedQueryRequest): Promise<void>
-  testCHConnection(cfg: CHConfigShape): Promise<void>
+  testCHConnection(cfg: CHConfigShape, connectionId?: string): Promise<void>
   listCHDatabases(id: string): Promise<string[]>
   listCHTables(req: CHListTablesRequest): Promise<CHTableInfo[]>
   chPageRows(req: CHPageRowsRequest): Promise<CHPageRowsResult>
@@ -230,7 +232,7 @@ export interface Api {
   listDrivers(): Promise<DriverInfo[]>
   // MySQL/TiDB 系列:后端绑定尚未由 wails generate 生成,先声明为可选成员,
   // 避免全仓既有 fakeApi 被迫补齐;调用方用可选链(?.)访问。
-  testMysqlConnection?(cfg: MysqlConfigShape): Promise<void>
+  testMysqlConnection?(cfg: MysqlConfigShape, connectionId?: string): Promise<void>
   listMysqlDatabases?(id: string): Promise<string[]>
   listMysqlTables?(req: MysqlListTablesRequest): Promise<MysqlTableInfo[]>
   mysqlPageRows?(req: MysqlPageRowsRequest): Promise<MysqlPageRowsResult>
@@ -251,7 +253,7 @@ export interface Api {
   // 建表语句(SQL 控制台 Ctrl+表名查看):MysqlTableDDL 绑定由后端添加中
   // (wailsjs 尚未重生成),声明为可选成员(既有 fake 零改动);调用方用可选链(?.)访问。
   mysqlTableDDL?(req: MysqlTableDDLRequest): Promise<string>
-  testPostgresConnection?(cfg: PostgresConfigShape): Promise<void>
+  testPostgresConnection?(cfg: PostgresConfigShape, connectionId?: string): Promise<void>
   listPostgresDatabases?(id: string): Promise<string[]>
   listPostgresSchemas?(req: PostgresListSchemasRequest): Promise<string[]>
   listPostgresTables?(req: PostgresListTablesRequest): Promise<PostgresRelationInfo[]>
@@ -264,7 +266,7 @@ export interface Api {
   postgresUpdateCell?(req: PostgresCellUpdateRequest): Promise<void>
   // Elasticsearch 系列:后端绑定尚未由 wails generate 生成,同样声明为可选
   // 成员(全仓既有 fakeApi 零改动);调用方用可选链(?.)访问。
-  testEsConnection?(cfg: EsConfigShape): Promise<void>
+  testEsConnection?(cfg: EsConfigShape, connectionId?: string): Promise<void>
   listEsIndices?(id: string): Promise<EsIndexInfo[]>
   esMapping?(req: EsMappingRequest): Promise<EsColumn[]>
   esPageRows?(req: EsPageRowsRequest): Promise<EsPageRowsResult>
@@ -295,7 +297,7 @@ export interface Api {
   esClusterStats?(req: EsClusterStatsRequest): Promise<EsClusterStats>
   // Hive 系列:后端绑定尚未由 wails generate 生成,可选成员(既有 fake 零
   // 改动);调用方用可选链(?.)访问。
-  testHiveConnection?(cfg: HiveConfigShape): Promise<void>
+  testHiveConnection?(cfg: HiveConfigShape, connectionId?: string): Promise<void>
   listHiveDatabases?(id: string): Promise<string[]>
   listHiveTables?(req: HiveListTablesRequest): Promise<HiveTableInfo[]>
   hivePageRows?(req: HivePageRowsRequest): Promise<HivePageRowsResult>
@@ -327,6 +329,14 @@ function call<T>(name: string, ...args: unknown[]): Promise<T> {
   return fn(...args)
 }
 
+// 连接测试请求统一包装(镜像后端 TestXxxConnectionRequest):编辑既有连接时
+// 携带 connection_id,后端把留空的密码字段用已存配置回填(「留空=不变」,
+// 列表/详情回传的密码已脱敏,前端不再持有明文);纯新建测试 id 传空串,
+// 后端按提交配置原样测试。
+function testRequest<C>(cfg: C, connectionId?: string): { connection_id: string; config: C } {
+  return { connection_id: connectionId ?? '', config: cfg }
+}
+
 // The Wails binding generator models Go `[]byte` fields as `number[]`, but
 // over JSON the transport delivers them as base64 strings. The backend model
 // therefore exposes Message.Key/Value and Header.Value as `string` so the
@@ -339,7 +349,7 @@ export class WailsApi implements Api {
   getConnection = (id: string): Promise<Connection> => call('GetConnection', id)
   deleteConnection = (id: string): Promise<void> => call('DeleteConnection', id)
   reorderConnections = (ids: string[]): Promise<void> => call('ReorderConnections', ids)
-  testConnection = (cfg: KafkaConfig): Promise<void> => call('TestConnection', cfg)
+  testConnection = (cfg: KafkaConfig, connectionId?: string): Promise<void> => call('TestConnection', testRequest(cfg, connectionId))
   connect = (id: string): Promise<void> => call('Connect', id)
   disconnect = (id: string): Promise<void> => call('Disconnect', id)
   listTopics = (id: string): Promise<Topic[]> => call('ListTopics', id)
@@ -370,7 +380,7 @@ export class WailsApi implements Api {
   applyUpdate = (req: ApplyUpdateRequest): Promise<void> => call('ApplyUpdate', req)
   updateProgress = (): Promise<UpdateProgressInfo> => call('UpdateProgress')
   openURL = (url: string): Promise<void> => call('OpenURL', url)
-  testRedisConnection = (cfg: RedisConfigShape): Promise<void> => call('TestRedisConnection', cfg)
+  testRedisConnection = (cfg: RedisConfigShape, connectionId?: string): Promise<void> => call('TestRedisConnection', testRequest(cfg, connectionId))
   listRedisDBs = (id: string): Promise<RedisDBInfo[]> => call('ListRedisDBs', id)
   redisScan = (req: RedisScanRequest): Promise<RedisScanResult> => call('RedisScan', req)
   redisGetKey = (req: RedisKeyRequest): Promise<RedisValue> => call('RedisGetKey', req)
@@ -394,7 +404,7 @@ export class WailsApi implements Api {
   saveSavedQuery = (req: SaveSavedQueryRequest): Promise<SavedQuery> => call('SaveSavedQuery', req)
   updateSavedQuery = (req: UpdateSavedQueryRequest): Promise<SavedQuery> => call('UpdateSavedQuery', req)
   deleteSavedQuery = (req: DeleteSavedQueryRequest): Promise<void> => call('DeleteSavedQuery', req)
-  testCHConnection = (cfg: CHConfigShape): Promise<void> => call('TestCHConnection', cfg)
+  testCHConnection = (cfg: CHConfigShape, connectionId?: string): Promise<void> => call('TestCHConnection', testRequest(cfg, connectionId))
   listCHDatabases = (id: string): Promise<string[]> => call('ListCHDatabases', id)
   listCHTables = (req: CHListTablesRequest): Promise<CHTableInfo[]> => call('ListCHTables', req)
   chPageRows = (req: CHPageRowsRequest): Promise<CHPageRowsResult> => call('CHPageRows', req)
@@ -403,7 +413,7 @@ export class WailsApi implements Api {
   chDeleteRow = (req: CHDeleteRowRequest): Promise<void> => call('CHDeleteRow', req)
   chExecute = (req: CHExecuteRequest): Promise<CHStatementResult[]> => call('CHExecute', req)
   listDrivers = (): Promise<DriverInfo[]> => call('ListDrivers')
-  testMysqlConnection = (cfg: MysqlConfigShape): Promise<void> => call('TestMysqlConnection', cfg)
+  testMysqlConnection = (cfg: MysqlConfigShape, connectionId?: string): Promise<void> => call('TestMysqlConnection', testRequest(cfg, connectionId))
   listMysqlDatabases = (id: string): Promise<string[]> => call('ListMysqlDatabases', id)
   listMysqlTables = (req: MysqlListTablesRequest): Promise<MysqlTableInfo[]> => call('ListMysqlTables', req)
   mysqlPageRows = (req: MysqlPageRowsRequest): Promise<MysqlPageRowsResult> => call('MysqlPageRows', req)
@@ -418,7 +428,7 @@ export class WailsApi implements Api {
   mysqlAlterTable = (req: MysqlAlterTableRequest): Promise<void> => call('MysqlAlterTable', req)
   mysqlExportTable = (req: MysqlExportTableRequest): Promise<MysqlExportTableResult> => call('MysqlExportTable', req)
   mysqlTableDDL = (req: MysqlTableDDLRequest): Promise<string> => call('MysqlTableDDL', req)
-  testPostgresConnection = (cfg: PostgresConfigShape): Promise<void> => call('TestPostgresConnection', cfg)
+  testPostgresConnection = (cfg: PostgresConfigShape, connectionId?: string): Promise<void> => call('TestPostgresConnection', testRequest(cfg, connectionId))
   listPostgresDatabases = (id: string): Promise<string[]> => call('ListPostgresDatabases', id)
   listPostgresSchemas = (req: PostgresListSchemasRequest): Promise<string[]> => call('ListPostgresSchemas', req)
   listPostgresTables = (req: PostgresListTablesRequest): Promise<PostgresRelationInfo[]> => call('ListPostgresTables', req)
@@ -429,7 +439,7 @@ export class WailsApi implements Api {
   postgresDeleteRow = (req: PostgresDeleteRowRequest): Promise<void> => call('PostgresDeleteRow', req)
   postgresPreviewCellUpdate = (req: PostgresCellUpdateRequest): Promise<PostgresCellUpdatePreview> => call('PostgresPreviewCellUpdate', req)
   postgresUpdateCell = (req: PostgresCellUpdateRequest): Promise<void> => call('PostgresUpdateCell', req)
-  testEsConnection = (cfg: EsConfigShape): Promise<void> => call('TestESConnection', cfg)
+  testEsConnection = (cfg: EsConfigShape, connectionId?: string): Promise<void> => call('TestESConnection', testRequest(cfg, connectionId))
   listEsIndices = (id: string): Promise<EsIndexInfo[]> => call('ListESIndices', id)
   esMapping = (req: EsMappingRequest): Promise<EsColumn[]> => call('ESMapping', req)
   esPageRows = (req: EsPageRowsRequest): Promise<EsPageRowsResult> => call('ESPageRows', req)
@@ -449,7 +459,7 @@ export class WailsApi implements Api {
   getEsTemplate = (req: EsGetTemplateRequest): Promise<EsTemplateContent> => call('GetEsTemplate', req)
   putEsTemplate = (req: EsPutTemplateRequest): Promise<void> => call('PutEsTemplate', req)
   esClusterStats = (req: EsClusterStatsRequest): Promise<EsClusterStats> => call('EsClusterStats', req)
-  testHiveConnection = (cfg: HiveConfigShape): Promise<void> => call('TestHiveConnection', cfg)
+  testHiveConnection = (cfg: HiveConfigShape, connectionId?: string): Promise<void> => call('TestHiveConnection', testRequest(cfg, connectionId))
   listHiveDatabases = (id: string): Promise<string[]> => call('ListHiveDatabases', id)
   listHiveTables = (req: HiveListTablesRequest): Promise<HiveTableInfo[]> => call('ListHiveTables', req)
   hivePageRows = (req: HivePageRowsRequest): Promise<HivePageRowsResult> => call('HivePageRows', req)

@@ -920,3 +920,238 @@ func TestBatchProduceRequestJSONShape(t *testing.T) {
 		t.Fatalf("batch message must expose value, got %s", b)
 	}
 }
+
+// --- 凭据不回传渲染层:出口脱敏 + 编辑/测试「留空=不变」 ---
+
+func TestMaskConnectionSecrets(t *testing.T) {
+	// kafka:嵌套 sasl.password 被清空,其余字段原样保留。
+	kafka := &model.Connection{
+		ID: "k1", Name: "kf", Type: model.ConnectionTypeKafka,
+		Config: model.MustConfigJSON(model.KafkaConfig{
+			BootstrapServers: []string{"h:9092"}, SecurityProtocol: "SASL_PLAINTEXT",
+			SASL: &model.SASLConfig{Enabled: true, Mechanism: "PLAIN", Username: "u", Password: "top-secret"},
+			TLS:  &model.TLSConfig{Enabled: true, CACert: "PEM"},
+		}),
+	}
+	masked := maskConnectionSecrets(kafka)
+	cfg, err := masked.KafkaConfig()
+	if err != nil {
+		t.Fatalf("decode masked kafka: %v", err)
+	}
+	if cfg.SASL == nil || cfg.SASL.Password != "" {
+		t.Fatalf("sasl password must be blanked: %+v", cfg.SASL)
+	}
+	if cfg.SASL.Username != "u" || cfg.SASL.Mechanism != "PLAIN" || cfg.TLS.CACert != "PEM" {
+		t.Fatalf("non-secret fields must survive: %+v", cfg)
+	}
+	// 纯函数语义:入参不被修改。
+	orig, err := kafka.KafkaConfig()
+	if err != nil {
+		t.Fatalf("decode original: %v", err)
+	}
+	if orig.SASL == nil || orig.SASL.Password != "top-secret" {
+		t.Fatalf("source connection must stay untouched: %+v", orig.SASL)
+	}
+
+	// mysql:根层 password 清空。
+	mysql := maskConnectionSecrets(&model.Connection{
+		Type:   model.ConnectionTypeMySQL,
+		Config: model.MustConfigJSON(model.MysqlConfig{Host: "h", Port: 3306, Username: "u", Password: "pw", Database: "d"}),
+	})
+	m, err := mysql.MysqlConfig()
+	if err != nil {
+		t.Fatalf("decode masked mysql: %v", err)
+	}
+	if m.Password != "" || m.Host != "h" || m.Username != "u" {
+		t.Fatalf("mysql password must be blanked only: %+v", m)
+	}
+
+	// es:password 与 api_key 都清空。
+	es := maskConnectionSecrets(&model.Connection{
+		Type:   model.ConnectionTypeES,
+		Config: json.RawMessage(`{"hosts":["h:9200"],"username":"elastic","password":"pw","api_key":"key","auth_mode":"basic"}`),
+	})
+	var esRoot map[string]any
+	if err := json.Unmarshal(es.Config, &esRoot); err != nil {
+		t.Fatalf("decode masked es: %v", err)
+	}
+	if esRoot["password"] != "" || esRoot["api_key"] != "" || esRoot["username"] != "elastic" {
+		t.Fatalf("es password/api_key must be blanked: %v", esRoot)
+	}
+
+	// 本就无密码的连接:config 原样返回(键序与未知字段不被重写)。
+	plain := json.RawMessage(`{"zzz":"keep","addr":"a:6379"}`)
+	redisPlain := maskConnectionSecrets(&model.Connection{Type: model.ConnectionTypeRedis, Config: plain})
+	var a, b map[string]any
+	_ = json.Unmarshal(plain, &a)
+	_ = json.Unmarshal(redisPlain.Config, &b)
+	if a["zzz"] != b["zzz"] || a["addr"] != b["addr"] {
+		t.Fatalf("passwordless config must round-trip untouched: %s", redisPlain.Config)
+	}
+
+	// nil 与非对象 config 不 panic。
+	if got := maskConnectionSecrets(nil); got != nil {
+		t.Fatalf("nil must pass through, got %+v", got)
+	}
+	if got := maskConnectionSecrets(&model.Connection{Type: model.ConnectionTypeKafka, Config: json.RawMessage(`null`)}); got == nil {
+		t.Fatal("non-object config must not panic")
+	}
+}
+
+// TestAppListAndGetConnectionsMaskSecrets 列表与详情出口统一脱敏:前端拿不
+// 到明文密码,而 service/store 内部(连接池冷建)仍用真实值。
+func TestAppListAndGetConnectionsMaskSecrets(t *testing.T) {
+	app := newTestApp(t)
+	created, err := app.CreateConnection(&model.Connection{
+		Name: "secure", Type: model.ConnectionTypeKafka,
+		Config: model.MustConfigJSON(model.KafkaConfig{
+			BootstrapServers: []string{"h:9092"}, SecurityProtocol: "SASL_PLAINTEXT",
+			SASL: &model.SASLConfig{Enabled: true, Mechanism: "PLAIN", Username: "u", Password: "top-secret"},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Create 返回值已脱敏。
+	createdCfg, err := created.KafkaConfig()
+	if err != nil {
+		t.Fatalf("decode created: %v", err)
+	}
+	if createdCfg.SASL == nil || createdCfg.SASL.Password != "" {
+		t.Fatalf("create response must mask sasl password: %+v", createdCfg.SASL)
+	}
+
+	list, err := app.ListConnections()
+	if err != nil {
+		t.Fatalf("ListConnections: %v", err)
+	}
+	listCfg, err := list[0].KafkaConfig()
+	if err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if listCfg.SASL == nil || listCfg.SASL.Password != "" || listCfg.SASL.Username != "u" {
+		t.Fatalf("list must mask sasl password: %+v", listCfg.SASL)
+	}
+
+	got, err := app.GetConnection(created.ID)
+	if err != nil {
+		t.Fatalf("GetConnection: %v", err)
+	}
+	gotCfg, err := got.KafkaConfig()
+	if err != nil {
+		t.Fatalf("decode got: %v", err)
+	}
+	if gotCfg.SASL == nil || gotCfg.SASL.Password != "" {
+		t.Fatalf("get must mask sasl password: %+v", gotCfg.SASL)
+	}
+
+	// 内部读取仍拿到真实值(连接池建连依赖)。
+	raw, err := app.svc.GetConnection(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("svc.GetConnection: %v", err)
+	}
+	rawCfg, err := raw.KafkaConfig()
+	if err != nil {
+		t.Fatalf("decode raw: %v", err)
+	}
+	if rawCfg.SASL == nil || rawCfg.SASL.Password != "top-secret" {
+		t.Fatalf("internal read must keep the real password: %+v", rawCfg.SASL)
+	}
+}
+
+// TestAppUpdateConnectionKeepsBlankPassword 编辑「留空=不变」:前端提交空
+// 密码,后端回填原密码落库;返回给前端的记录仍是脱敏后的。
+func TestAppUpdateConnectionKeepsBlankPassword(t *testing.T) {
+	app := newTestApp(t)
+	created, err := app.CreateConnection(&model.Connection{
+		Name: "my", Type: model.ConnectionTypeMySQL,
+		Config: model.MustConfigJSON(model.MysqlConfig{Host: "h", Port: 3306, Username: "u", Password: "secret", Database: "d"}),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	updated, err := app.UpdateConnection(UpdateConnectionRequest{
+		ID:   created.ID,
+		Name: "my2",
+		Type: model.ConnectionTypeMySQL,
+		Config: model.MustConfigJSON(model.MysqlConfig{
+			Host: "h2", Port: 3306, Username: "u", Password: "", Database: "d",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	// 返回值脱敏(空密码)且携带新主机名。
+	updCfg, err := updated.MysqlConfig()
+	if err != nil {
+		t.Fatalf("decode updated: %v", err)
+	}
+	if updCfg.Password != "" || updCfg.Host != "h2" {
+		t.Fatalf("update response must mask password and keep edits: %+v", updCfg)
+	}
+
+	// 落库为原密码(连接池重连用真实值)。
+	stored, err := app.svc.GetConnection(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("svc get: %v", err)
+	}
+	storedCfg, err := stored.MysqlConfig()
+	if err != nil {
+		t.Fatalf("decode stored: %v", err)
+	}
+	if storedCfg.Password != "secret" {
+		t.Fatalf("blank password must be restored on persist, got %q", storedCfg.Password)
+	}
+}
+
+// TestAppTestConnectionRestoresSecrets 连接测试的「留空=不变」:编辑既有
+// 连接时请求携带 connection_id,空 SASL 密码由后端回填为已存值再探活;
+// 纯新建(无 id)不回填。
+func TestAppTestConnectionRestoresSecrets(t *testing.T) {
+	var gotCfgs []model.KafkaConfig
+	fake := &fakeBatchKafka{}
+	app := newTestAppWithFactory(t, service.ClientFactoryFunc(
+		func(_ context.Context, cfg model.KafkaConfig) (service.KafkaDataSource, error) {
+			gotCfgs = append(gotCfgs, cfg)
+			return fake, nil
+		}))
+	created, err := app.CreateConnection(&model.Connection{
+		Name: "kf", Type: model.ConnectionTypeKafka,
+		Config: model.MustConfigJSON(model.KafkaConfig{
+			BootstrapServers: []string{"h:9092"}, SecurityProtocol: "SASL_PLAINTEXT",
+			SASL: &model.SASLConfig{Enabled: true, Mechanism: "PLAIN", Username: "u", Password: "top-secret"},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// 编辑态测试:密码留空(前端拿不到明文)→ 工厂收到回填后的真实密码。
+	if err := app.TestConnection(TestConnectionRequest{
+		ConnectionID: created.ID,
+		Config: model.KafkaConfig{
+			BootstrapServers: []string{"h:9092"}, SecurityProtocol: "SASL_PLAINTEXT",
+			SASL: &model.SASLConfig{Enabled: true, Mechanism: "PLAIN", Username: "u", Password: ""},
+		},
+	}); err != nil {
+		t.Fatalf("TestConnection: %v", err)
+	}
+	if len(gotCfgs) != 1 || gotCfgs[0].SASL == nil || gotCfgs[0].SASL.Password != "top-secret" {
+		t.Fatalf("edit-mode test must probe with the stored password: %+v", gotCfgs)
+	}
+
+	// 纯新建测试:无 id → 不回填,空密码就是空密码。
+	if err := app.TestConnection(TestConnectionRequest{
+		Config: model.KafkaConfig{
+			BootstrapServers: []string{"h:9092"}, SecurityProtocol: "SASL_PLAINTEXT",
+			SASL: &model.SASLConfig{Enabled: true, Mechanism: "PLAIN", Username: "u", Password: ""},
+		},
+	}); err != nil {
+		t.Fatalf("TestConnection (no id): %v", err)
+	}
+	if len(gotCfgs) != 2 || gotCfgs[1].SASL == nil || gotCfgs[1].SASL.Password != "" {
+		t.Fatalf("create-mode test must not restore secrets: %+v", gotCfgs)
+	}
+}

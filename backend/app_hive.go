@@ -52,11 +52,20 @@ type HiveAlterTableRequest struct {
 	DropColumns   []string                `json:"drop_columns"`
 }
 
+// TestHiveConnectionRequest carries an unsaved Hive config plus the optional
+// id of the connection being edited; 编辑态空密码由后端回填
+// (fillTestSecrets),纯新建按提交配置原样测试。见 TestConnectionRequest。
+type TestHiveConnectionRequest struct {
+	ConnectionID string           `json:"connection_id,omitempty"`
+	Config       model.HiveConfig `json:"config"`
+}
+
 // TestHiveConnection verifies reachability without persisting anything.
-func (a *App) TestHiveConnection(cfg model.HiveConfig) error {
+func (a *App) TestHiveConnection(req TestHiveConnectionRequest) error {
 	ctx, cancel := a.newContext()
 	defer cancel()
-	return a.svc.HiveTestConnection(ctx, cfg)
+	a.fillTestSecrets(ctx, req.ConnectionID, &req.Config)
+	return a.svc.HiveTestConnection(ctx, req.Config)
 }
 
 // ListHiveDatabases lists the databases of the connection's HiveServer2.

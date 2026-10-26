@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -22,10 +23,20 @@ import (
 
 	"sheng-shou-yun-he/backend/internal/model"
 	"sheng-shou-yun-he/backend/internal/service"
+	"sheng-shou-yun-he/backend/internal/store"
 )
 
 // methodTimeout bounds each individual frontend call.
 const methodTimeout = 60 * time.Second
+
+// ResolveMasterKey 按优先级解析落盘加密主密钥,供两个入口程序(main.go 与
+// cmd/dbclient)复用——backend/internal 对模块根不可见,故由此转发:
+// DB_CLIENT_MASTER > ~/.db-client/master.key 文件 > 首次生成 32 字节随机
+// hex(0600 落盘);全部不可用回退内置默认并向 warn 告警。绝不输出密钥
+// 内容。实现与测试见 store 包。
+func ResolveMasterKey(envValue, keyPath string, warn io.Writer) (string, store.MasterKeySource) {
+	return store.ResolveMasterPassword(envValue, keyPath, warn)
+}
 
 // App is the Wails application root. Methods on it are exposed to the frontend.
 type App struct {
@@ -38,13 +49,16 @@ type App struct {
 	// --- 更新引擎依赖(测试可注入,见 update.go) ---
 	// baseURL 是 Gitee API 地址;fallbackURL 是回退的 GitHub API 地址;
 	// httpClient 用于探测/下载;applyCmd 拦截安装脚本的启动;stagingDir
-	// 记录下载解包后的暂存位置。
+	// 记录下载解包后的暂存位置;downloadURLCheck 校验下载入口 URL(https +
+	// 域名白名单),nil 时用生产实现,测试注入旁路。
 	baseURL     atomic.Value
 	fallbackURL atomic.Value
 	httpClient  *http.Client
 	applyCmd    func(cmd *exec.Cmd) error
 	dl          *downloadState
 	stagingDir  atomic.Value
+	// downloadURLCheck 是更新下载入口 URL 的校验函数(测试注入点)。
+	downloadURLCheck func(url string) error
 }
 
 // NewApp builds the application root around the service layer.
@@ -271,6 +285,58 @@ func (a *App) DeleteConsumerGroup(req DeleteConsumerGroupRequest) error {
 	return err
 }
 
+// maskConnectionSecrets 返回 c 的浅拷贝,并把 config JSON 中的敏感凭据字段
+// 替换为空串(纯函数:入参不修改)。敏感字段清单与 store 落盘加密、service
+// 层 RestoreSecrets 的回填一致:kafka 为 sasl.password;redis/clickhouse/
+// mysql/tidb/postgres/hive 为 password;es 为 password + api_key。App 层
+// 回传 WebView 的出口(List/Get/Create/Update)统一调用:明文密码只留在
+// 后端进程内,连接池与内部逻辑仍用真实值。
+func maskConnectionSecrets(c *model.Connection) *model.Connection {
+	if c == nil {
+		return nil
+	}
+	masked := *c
+	if len(c.Config) == 0 {
+		return &masked
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(c.Config, &root); err != nil {
+		// config 不是 JSON 对象时没有结构化凭据可剥,原样返回。
+		return &masked
+	}
+	changed := false
+	blank := func(m map[string]json.RawMessage, key string) {
+		raw, ok := m[key]
+		if !ok {
+			return
+		}
+		var v string
+		if err := json.Unmarshal(raw, &v); err == nil && v != "" {
+			m[key] = json.RawMessage(`""`)
+			changed = true
+		}
+	}
+	switch c.Type {
+	case model.ConnectionTypeKafka:
+		if saslRaw, ok := root["sasl"]; ok {
+			var sasl map[string]json.RawMessage
+			if json.Unmarshal(saslRaw, &sasl) == nil {
+				blank(sasl, "password")
+				root["sasl"] = model.MustConfigJSON(sasl)
+			}
+		}
+	case model.ConnectionTypeES:
+		blank(root, "password")
+		blank(root, "api_key")
+	default:
+		blank(root, "password")
+	}
+	if changed {
+		masked.Config = model.MustConfigJSON(root)
+	}
+	return &masked
+}
+
 // CreateConnection validates and saves a new connection.
 func (a *App) CreateConnection(c *model.Connection) (*model.Connection, error) {
 	ctx, cancel := a.newContext()
@@ -281,7 +347,7 @@ func (a *App) CreateConnection(c *model.Connection) (*model.Connection, error) {
 		return nil, err
 	}
 	a.audit(created.ID, "create_connection", created.Name, "ok", "")
-	return created, nil
+	return maskConnectionSecrets(created), nil
 }
 
 // UpdateConnectionRequest carries the edited fields of an existing connection.
@@ -322,15 +388,28 @@ func (a *App) UpdateConnection(req UpdateConnectionRequest) (*model.Connection, 
 	}
 	a.audit(c.ID, "update_connection", c.Name, "ok", "")
 	// Read the persisted row back so the caller receives the complete record
-	// (id/created_at preserved, updated_at refreshed).
-	return a.svc.GetConnection(ctx, c.ID)
+	// (id/created_at preserved, updated_at refreshed). 回传前剥离敏感字段。
+	updated, err := a.svc.GetConnection(ctx, c.ID)
+	if err != nil {
+		return nil, err
+	}
+	return maskConnectionSecrets(updated), nil
 }
 
-// ListConnections returns all saved connections.
+// ListConnections returns all saved connections. 敏感凭据字段在回传前统一
+// 脱敏为空串(maskConnectionSecrets),前端展示不受影响。
 func (a *App) ListConnections() ([]*model.Connection, error) {
 	ctx, cancel := a.newContext()
 	defer cancel()
-	return a.svc.ListConnections(ctx)
+	list, err := a.svc.ListConnections(ctx)
+	if err != nil {
+		return nil, err
+	}
+	masked := make([]*model.Connection, len(list))
+	for i, c := range list {
+		masked[i] = maskConnectionSecrets(c)
+	}
+	return masked, nil
 }
 
 // ReorderConnections 按前端提交的完整有序 id 列表持久化连接顺序;列表
@@ -341,11 +420,16 @@ func (a *App) ReorderConnections(ids []string) error {
 	return a.svc.ReorderConnections(ctx, ids)
 }
 
-// GetConnection returns a single saved connection.
+// GetConnection returns a single saved connection. 敏感凭据字段在回传前
+// 统一脱敏为空串(maskConnectionSecrets)。
 func (a *App) GetConnection(id string) (*model.Connection, error) {
 	ctx, cancel := a.newContext()
 	defer cancel()
-	return a.svc.GetConnection(ctx, id)
+	c, err := a.svc.GetConnection(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return maskConnectionSecrets(c), nil
 }
 
 // DeleteConnection removes a connection and closes any pooled client.
@@ -362,11 +446,42 @@ func (a *App) DeleteConnection(id string) error {
 	return err
 }
 
+// TestConnectionRequest carries an unsaved Kafka config plus the optional id
+// of the connection being edited. 编辑既有连接时列表/详情回传的密码已脱敏,
+// 前端不重输密码 → 后端用已存配置回填空敏感字段(fillTestSecrets)再探活;
+// 纯新建(connection_id 为空)按提交的配置原样测试。
+type TestConnectionRequest struct {
+	ConnectionID string            `json:"connection_id,omitempty"`
+	Config       model.KafkaConfig `json:"config"`
+}
+
+// fillTestSecrets 把连接测试配置中留空的敏感字段用 connectionID 已存配置
+// 回填(与 UpdateConnection 的「留空=不变」同规则,见 service.RestoreSecrets)。
+// connectionID 为空(纯新建测试)、连接不存在或配置解析失败时保持原配置。
+// cfg 须为指向具体 Config 结构的指针,回填就地生效。
+func (a *App) fillTestSecrets(ctx context.Context, connectionID string, cfg any) {
+	if connectionID == "" {
+		return
+	}
+	old, err := a.svc.GetConnection(ctx, connectionID)
+	if err != nil || old == nil {
+		return
+	}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return
+	}
+	// RestoreSecrets 的产物要么是 raw 本身、要么是同形的合法 JSON,对同类型
+	// 结构反序列化不会失败。
+	_ = json.Unmarshal(service.RestoreSecrets(old.Type, old.Config, raw), cfg)
+}
+
 // TestConnection verifies connectivity to a config without saving it.
-func (a *App) TestConnection(cfg model.KafkaConfig) error {
+func (a *App) TestConnection(req TestConnectionRequest) error {
 	ctx, cancel := a.newContext()
 	defer cancel()
-	return a.svc.TestConnection(ctx, cfg)
+	a.fillTestSecrets(ctx, req.ConnectionID, &req.Config)
+	return a.svc.TestConnection(ctx, req.Config)
 }
 
 // Connect establishes a pooled connection by id.

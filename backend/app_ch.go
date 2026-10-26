@@ -105,11 +105,20 @@ type CHTruncateTableRequest struct {
 // 同形,共享 app_requests.go 的 ExecuteRequest。
 type CHExecuteRequest = ExecuteRequest
 
+// TestCHConnectionRequest carries an unsaved ClickHouse config plus the
+// optional id of the connection being edited; 编辑态空密码由后端回填
+// (fillTestSecrets),纯新建按提交配置原样测试。见 TestConnectionRequest。
+type TestCHConnectionRequest struct {
+	ConnectionID string                 `json:"connection_id,omitempty"`
+	Config       model.ClickHouseConfig `json:"config"`
+}
+
 // TestCHConnection verifies reachability without persisting anything.
-func (a *App) TestCHConnection(cfg model.ClickHouseConfig) error {
+func (a *App) TestCHConnection(req TestCHConnectionRequest) error {
 	ctx, cancel := a.newContext()
 	defer cancel()
-	return a.svc.CHTestConnection(ctx, cfg)
+	a.fillTestSecrets(ctx, req.ConnectionID, &req.Config)
+	return a.svc.CHTestConnection(ctx, req.Config)
 }
 
 // ListCHDatabases lists the user databases (system catalogs filtered

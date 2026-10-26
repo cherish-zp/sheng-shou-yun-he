@@ -225,10 +225,10 @@ func TestAppCHExecuteFailureAudited(t *testing.T) {
 
 func TestAppTestCHConnectionValidates(t *testing.T) {
 	app := newTestApp(t)
-	if err := app.TestCHConnection(model.ClickHouseConfig{Hosts: []string{"no-port"}}); err == nil {
+	if err := app.TestCHConnection(TestCHConnectionRequest{Config: model.ClickHouseConfig{Hosts: []string{"no-port"}}}); err == nil {
 		t.Fatal("invalid config must fail before dialing")
 	}
-	if err := app.TestCHConnection(model.ClickHouseConfig{}); err == nil {
+	if err := app.TestCHConnection(TestCHConnectionRequest{Config: model.ClickHouseConfig{}}); err == nil {
 		t.Fatal("empty hosts must fail before dialing")
 	}
 }
