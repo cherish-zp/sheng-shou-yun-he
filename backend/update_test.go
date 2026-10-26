@@ -79,13 +79,112 @@ func fakeGiteeServer(t *testing.T, body string) *httptest.Server {
 	return srv
 }
 
+// newDeadServer 返回一个恒 503 的服务器:测试里作为回退源,保证空 sha
+// 重查/双源回退绝不出网打到真实 GitHub。
+func newDeadServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 func newUpdateApp(t *testing.T, srv *httptest.Server) *App {
 	t.Helper()
 	a := &App{}
 	a.baseURL.Store(srv.URL)
+	a.fallbackURL.Store(newDeadServer(t).URL)
 	a.httpClient = srv.Client()
 	a.applyCmd = func(*exec.Cmd) error { return nil }
+	// 测试源是 httptest 域名,不在生产白名单内,注入旁路。
+	a.downloadURLCheck = func(string) error { return nil }
 	return a
+}
+
+// --- 0. 下载入口白名单与 OpenURL scheme 白名单 ---
+
+// TestValidateUpdateDownloadURL 覆盖入口 URL 校验:仅 https + 白名单域名
+// 放行。注意:跟随重定向后的最终 URL 不校验(平台附件域已列入白名单),
+// 这里只测入口判定。
+func TestValidateUpdateDownloadURL(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		ok   bool
+	}{
+		{"gitee https 放行", "https://gitee.com/princess-zp/sheng-shou-yun-he/releases/download/v1.7.1/a.zip", true},
+		{"github https 放行", "https://github.com/cherish-zp/sheng-shou-yun-he/releases/download/v1.7.1/a.zip", true},
+		{"objects 附件域放行", "https://objects.githubusercontent.com/gh-attachments/xxx/a.zip", true},
+		{"foruda 附件域放行", "https://foruda.gitee.com/xxx/a.zip", true},
+		{"域名大小写不敏感", "https://GITEE.COM/x/a.zip", true},
+		{"gitee 但 http 拒绝", "http://gitee.com/x/a.zip", false},
+		{"附件域但 http 拒绝", "http://objects.githubusercontent.com/x/a.zip", false},
+		{"非白名单域拒绝", "https://evil.example.com/a.zip", false},
+		{"后缀伪造域拒绝", "https://gitee.com.evil.example.com/a.zip", false},
+		{"file scheme 拒绝", "file:///etc/passwd", false},
+		{"空 URL 拒绝", "", false},
+		{"裸字符串拒绝", "not a url", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateUpdateDownloadURL(c.url)
+			if c.ok {
+				if err != nil {
+					t.Fatalf("validateUpdateDownloadURL(%q) = %v, want nil", c.url, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "更新下载地址不在允许的域名内") {
+				t.Fatalf("validateUpdateDownloadURL(%q) = %v, want domain-whitelist error", c.url, err)
+			}
+		})
+	}
+}
+
+// TestDownloadUpdateRejectsNonWhitelistedURL 验证 DownloadUpdate 在发起任何
+// 网络请求前就拒绝白名单外的入口 URL,并把进度置 error。
+func TestDownloadUpdateRejectsNonWhitelistedURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("URL 校验必须在发起 HTTP 请求之前")
+	}))
+	defer srv.Close()
+	app := &App{httpClient: srv.Client()} // 不注入旁路,走生产校验
+	err := app.DownloadUpdate(DownloadUpdateRequest{URL: "http://evil.example.com/u.zip"})
+	if err == nil || !strings.Contains(err.Error(), "更新下载地址不在允许的域名内") {
+		t.Fatalf("expected whitelist rejection, got %v", err)
+	}
+	if prog := app.UpdateProgress(); prog.Phase != "error" || !strings.Contains(prog.Error, "更新下载地址不在允许的域名内") {
+		t.Fatalf("progress must carry the whitelist error, got %+v", prog)
+	}
+}
+
+// TestOpenURLSchemeWhitelist 验证 OpenURL 仅放行 http/https,其余 scheme
+// 一律报错;合法 scheme 在 ctx 缺失时报的是「应用尚未初始化」而非协议拒绝。
+func TestOpenURLSchemeWhitelist(t *testing.T) {
+	app := &App{}
+	for _, u := range []string{
+		"file:///etc/passwd",
+		"javascript:alert(1)",
+		"ftp://example.com/x",
+		"mailto:a@b.com",
+		"/relative/path",
+		"not a url",
+		"",
+	} {
+		if err := app.OpenURL(u); err == nil {
+			t.Fatalf("OpenURL(%q) must be rejected", u)
+		}
+	}
+	for _, u := range []string{"https://gitee.com/x", "http://gitee.com/x"} {
+		err := app.OpenURL(u)
+		if err == nil {
+			t.Fatalf("OpenURL(%q) without ctx must fail on ctx, got nil", u)
+		}
+		if strings.Contains(err.Error(), "协议") {
+			t.Fatalf("OpenURL(%q) must pass the scheme check: %v", u, err)
+		}
+	}
 }
 
 func TestCheckUpdateFindsNewerVersion(t *testing.T) {
@@ -700,13 +799,81 @@ func TestDownloadUpdateSHA256(t *testing.T) {
 		t.Fatalf("expected error phase with 校验失败, got %+v", prog)
 	}
 
-	// 为空:跳过校验,兼容旧流程。
+	// 为空:重查两源都拿不到 sums(该服务器对 releases/latest 返回 zip 字节,
+	// 解析必失败;回退源恒 503)→ 放行,兼容旧版本 release 的真实场景。
 	skip := newUpdateApp(t, srv)
 	if err := skip.DownloadUpdate(DownloadUpdateRequest{URL: srv.URL + "/u.zip", SHA256: ""}); err != nil {
-		t.Fatalf("empty sha256 must skip verification: %v", err)
+		t.Fatalf("empty sha256 with no sums must skip verification: %v", err)
 	}
 	if skip.UpdateProgress().Phase != "done" {
 		t.Fatalf("unexpected progress %+v", skip.UpdateProgress())
+	}
+}
+
+// newSummedUpdateSource 构造一个完整更新源:releases/latest 指向资产与
+// SHA256SUMS.txt,资产本体可下载;sumsBody 是 sums 文件内容。
+func newSummedUpdateSource(t *testing.T, assetPath string, assetData []byte, sumsBody string) *httptest.Server {
+	t.Helper()
+	var srvURL string
+	mux := http.NewServeMux()
+	mux.HandleFunc(fmt.Sprintf("/repos/%s/%s/releases/latest", updateOwner, updateRepo), func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, fmt.Sprintf(`{
+		  "tag_name": "v1.7.1",
+		  "assets": [
+		    {"name": "圣手运河-v1.7.1-darwin-arm64.zip", "browser_download_url": "%s%s"},
+		    {"name": "sha256sums.txt", "browser_download_url": "%s/SHA256SUMS.txt"}
+		  ]
+		}`, srvURL, assetPath, srvURL))
+	})
+	mux.HandleFunc("/SHA256SUMS.txt", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, sumsBody)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(assetData)
+	})
+	srv := httptest.NewServer(mux)
+	srvURL = srv.URL
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestDownloadUpdateRequeriesSHA256WhenMissing 验证 SHA256 强制化:前端没传
+// sha(篡改/旧流程场景)而后端重查 release 拿得到期望哈希时,必须强制校验。
+// URL 精确对上资产时用资产平台的哈希;对不上退回当前 goos/goarch。
+func TestDownloadUpdateRequeriesSHA256WhenMissing(t *testing.T) {
+	setRuntime(t, "darwin", "arm64")
+	zipPath := filepath.Join(t.TempDir(), "u.zip")
+	makeUpdateZip(t, zipPath)
+	data, err := os.ReadFile(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	goodHash := hex.EncodeToString(sum[:])
+	wrongHash := strings.Repeat("ab", 32)
+
+	// URL 对上资产 + sums 哈希正确:空 sha 重查后校验通过。
+	srv := newSummedUpdateSource(t, "/u.zip", data, "linux-amd64: "+wrongHash+"\ndarwin-arm64: "+goodHash+"\n")
+	if err := newUpdateApp(t, srv).DownloadUpdate(DownloadUpdateRequest{URL: srv.URL + "/u.zip"}); err != nil {
+		t.Fatalf("re-queried matching hash must pass: %v", err)
+	}
+
+	// URL 对上资产 + sums 哈希错误:空 sha 也必须报校验失败。
+	srvBad := newSummedUpdateSource(t, "/u.zip", data, "darwin-arm64: "+wrongHash+"\n")
+	bad := newUpdateApp(t, srvBad)
+	err = bad.DownloadUpdate(DownloadUpdateRequest{URL: srvBad.URL + "/u.zip"})
+	if err == nil || !strings.Contains(err.Error(), "SHA256 校验失败") {
+		t.Fatalf("re-queried mismatched hash must fail, got %v", err)
+	}
+	if prog := bad.UpdateProgress(); prog.Phase != "error" || !strings.Contains(prog.Error, "校验失败") {
+		t.Fatalf("expected error phase with 校验失败, got %+v", prog)
+	}
+
+	// URL 对不上资产(镜像路径):退回当前平台 darwin-arm64 的哈希校验。
+	srvMirror := newSummedUpdateSource(t, "/u.zip", data, "linux-amd64: "+wrongHash+"\ndarwin-arm64: "+goodHash+"\n")
+	if err := newUpdateApp(t, srvMirror).DownloadUpdate(DownloadUpdateRequest{URL: srvMirror.URL + "/mirror.zip"}); err != nil {
+		t.Fatalf("platform-fallback hash must apply for unmatched URL: %v", err)
 	}
 }
 
@@ -714,14 +881,42 @@ func TestDownloadUpdateSHA256(t *testing.T) {
 // 模拟 CI 里 tar -C 打包的产物形态)。
 func makeUpdateTarGz(t *testing.T, path, entryName, content string) {
 	t.Helper()
+	makeTarGzEntries(t, path, []tarEntry{{name: entryName, content: content}})
+}
+
+// tarEntry 描述 tar.gz 内的一个待打包条目;typeflag 零值为普通文件。
+type tarEntry struct {
+	name     string
+	typeflag byte
+	linkname string
+	content  string
+}
+
+// makeTarGzEntries 打包多条目 tar.gz,供安全解包用例构造攻击形态。
+func makeTarGzEntries(t *testing.T, path string, entries []tarEntry) {
+	t.Helper()
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
-	if err := tw.WriteHeader(&tar.Header{Name: entryName, Mode: 0o755, Size: int64(len(content))}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tw.Write([]byte(content)); err != nil {
-		t.Fatal(err)
+	for _, e := range entries {
+		hdr := &tar.Header{
+			Name:     e.name,
+			Mode:     0o755,
+			Size:     int64(len(e.content)),
+			Typeflag: tar.TypeReg,
+		}
+		if e.typeflag != 0 {
+			hdr.Typeflag = e.typeflag
+		}
+		if e.linkname != "" {
+			hdr.Linkname = e.linkname
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(e.content)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
@@ -734,9 +929,69 @@ func makeUpdateTarGz(t *testing.T, path, entryName, content string) {
 	}
 }
 
+// TestExtractTarGzPayloadRejectsUnsafeEntries 覆盖安全解包:正常包通过并把
+// 二进制解到暂存目录;含 ../ 段、符号链接、硬链接、绝对路径条目的包一律拒绝。
+func TestExtractTarGzPayloadRejectsUnsafeEntries(t *testing.T) {
+	okPath := filepath.Join(t.TempDir(), "ok.tar.gz")
+	makeTarGzEntries(t, okPath, []tarEntry{
+		{name: "./README.md", content: "hi"},
+		{name: "./圣手运河", content: "binary-bytes"},
+	})
+	dest := t.TempDir()
+	bin, err := extractTarGzPayload(okPath, dest)
+	if err != nil {
+		t.Fatalf("normal package must pass: %v", err)
+	}
+	if want := filepath.Join(dest, "圣手运河"); bin != want {
+		t.Fatalf("extracted path = %q, want %q", bin, want)
+	}
+	got, err := os.ReadFile(bin)
+	if err != nil || string(got) != "binary-bytes" {
+		t.Fatalf("extracted content = %q, %v", got, err)
+	}
+	if fi, err := os.Stat(bin); err != nil || fi.Mode()&0o111 == 0 {
+		t.Fatalf("extracted binary must stay executable: %v, %v", fi, err)
+	}
+
+	attackCases := []struct {
+		name    string
+		entries []tarEntry
+	}{
+		{"父目录穿越", []tarEntry{
+			{name: "./圣手运河", content: "x"},
+			{name: "../evil.sh", content: "x"},
+		}},
+		{"嵌套上跳", []tarEntry{
+			{name: "a/../../evil.sh", content: "x"},
+		}},
+		{"符号链接条目", []tarEntry{
+			{name: "./圣手运河", content: "x"},
+			{name: "link", typeflag: tar.TypeSymlink, linkname: "/etc/passwd"},
+		}},
+		{"硬链接条目", []tarEntry{
+			{name: "./圣手运河", content: "x"},
+			{name: "hard", typeflag: tar.TypeLink, linkname: "圣手运河"},
+		}},
+		{"绝对路径条目", []tarEntry{
+			{name: "/etc/evil", content: "x"},
+			{name: "./圣手运河", content: "x"},
+		}},
+	}
+	for _, c := range attackCases {
+		t.Run(c.name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "x.tar.gz")
+			makeTarGzEntries(t, p, c.entries)
+			dest := t.TempDir()
+			if _, err := extractTarGzPayload(p, dest); err == nil {
+				t.Fatal("unsafe entry must be rejected")
+			}
+		})
+	}
+}
+
 // TestDownloadUpdateTarGz 验证 Linux 资产(.tar.gz)的下载闭环:落盘为暂存
-// 目录的 update.tar.gz(ApplyUpdate 的 linux 分支按此名取包),SHA256 校验
-// 同样生效,且要求包内含 圣手运河 二进制,缺失时报错。
+// 目录的 update.tar.gz,并在暂存目录安全解包出 圣手运河 二进制(apply 脚本
+// 直接 mv 该文件,不再 tar 解包),SHA256 校验同样生效,缺二进制时报错。
 func TestDownloadUpdateTarGz(t *testing.T) {
 	tgzPath := filepath.Join(t.TempDir(), "u.tar.gz")
 	makeUpdateTarGz(t, tgzPath, "./圣手运河", "binary-bytes")
@@ -763,6 +1018,10 @@ func TestDownloadUpdateTarGz(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(staging, "update.tar.gz")); err != nil {
 		t.Fatalf("staged update.tar.gz missing: %v", err)
 	}
+	binData, err := os.ReadFile(filepath.Join(staging, "圣手运河"))
+	if err != nil || string(binData) != "binary-bytes" {
+		t.Fatalf("staged binary missing or wrong content: %q, %v", binData, err)
+	}
 
 	// 缺二进制的 tar.gz:报错且进度置 error。
 	badPath := filepath.Join(t.TempDir(), "bad.tar.gz")
@@ -786,29 +1045,35 @@ func TestDownloadUpdateTarGz(t *testing.T) {
 
 // --- 4. Linux 原位替换 ---
 
-// TestBuildLinuxUpdaterScript 验证 Linux 脚本:tar 解压 → /proc/self/exe
-// 解析当前可执行文件真实路径 → mv 原位替换 → chmod +x → 清理 → 后台重启。
+// TestBuildLinuxUpdaterScript 验证 Linux 脚本:二进制已由 DownloadUpdate
+// 安全解包到暂存目录,脚本只做 /proc 解析真实路径 → mv 原位替换 →
+// chmod +x → 后台重启;不再 tar 解包。
 func TestBuildLinuxUpdaterScript(t *testing.T) {
 	s := buildLinuxUpdaterScript("/tmp/stage", "/opt/apps/圣手运河")
 	for _, want := range []string{
-		"tar -xzf",
 		"/proc/self/exe",
-		"mv ",
-		"chmod +x",
+		`SRC="/tmp/stage/圣手运河"`,
 		`TARGET="/opt/apps/圣手运河"`,
+		`mv -f "$SRC" "$TARGET"`,
+		"chmod +x",
 	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("script missing %q:\n%s", want, s)
 		}
 	}
+	for _, banned := range []string{"tar ", "mktemp", "find "} {
+		if strings.Contains(s, banned) {
+			t.Fatalf("script must not unpack the archive anymore (found %q):\n%s", banned, s)
+		}
+	}
 }
 
-// TestApplyUpdateLinuxRunsSh 验证 Linux 分支:定位暂存 tar.gz,生成替换
-// 脚本并以分离进程启动。
+// TestApplyUpdateLinuxRunsSh 验证 Linux 分支:定位暂存目录里已解包的
+// 二进制,生成替换脚本并以分离进程启动。
 func TestApplyUpdateLinuxRunsSh(t *testing.T) {
 	setRuntime(t, "linux", "amd64")
 	staging := t.TempDir()
-	os.WriteFile(filepath.Join(staging, "update.tar.gz"), []byte("fake tgz"), 0o644)
+	os.WriteFile(filepath.Join(staging, "圣手运河"), []byte("fake binary"), 0o755)
 	oldExePath := exePath
 	exePath = func() (string, error) { return "/opt/apps/圣手运河", nil }
 	t.Cleanup(func() { exePath = oldExePath })
@@ -833,8 +1098,11 @@ func TestApplyUpdateLinuxRunsSh(t *testing.T) {
 	if !strings.Contains(string(data), `TARGET="/opt/apps/圣手运河"`) {
 		t.Fatalf("script must target the running binary:\n%s", data)
 	}
-	if !strings.Contains(string(data), "tar -xzf") {
-		t.Fatalf("script must extract the tar.gz:\n%s", data)
+	if !strings.Contains(string(data), `SRC="`+filepath.Join(staging, "圣手运河")+`"`) {
+		t.Fatalf("script must mv the pre-extracted binary:\n%s", data)
+	}
+	if strings.Contains(string(data), "tar ") {
+		t.Fatalf("script must not unpack the archive:\n%s", data)
 	}
 }
 

@@ -7,9 +7,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -199,10 +201,10 @@ func stripSHA256Fence(body string) string {
 	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
-// fetchPlatformSHA256 下载 release 内的 sha256sums.txt(资产名大小写不敏感),
-// 解析当前平台对应的哈希;找不到文件、下载失败或没有本平台行时返回空串
-// ——旧版本 Release 无此文件,必须优雅降级。
-func (a *App) fetchPlatformSHA256(rel giteeRelease, goos, goarch string) string {
+// fetchSHA256Sums 下载并解析 release 内的 sha256sums.txt(资产名大小写不
+// 敏感)为 平台→哈希 映射;release 无该资产、下载失败或内容无合法行时返回
+// nil——旧版本 Release 无此文件,必须优雅降级。
+func (a *App) fetchSHA256Sums(rel giteeRelease) map[string]string {
 	var sumsURL string
 	for _, asset := range rel.Assets {
 		if strings.EqualFold(asset.Name, "sha256sums.txt") && asset.BrowserDownloadURL != "" {
@@ -211,37 +213,83 @@ func (a *App) fetchPlatformSHA256(rel giteeRelease, goos, goarch string) string 
 		}
 	}
 	if sumsURL == "" {
-		return ""
+		return nil
 	}
 	resp, err := a.updateHTTP().Get(sumsURL)
 	if err != nil {
-		return ""
+		return nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return ""
+		return nil
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return ""
+		return nil
 	}
-	return parseSHA256ForPlatform(string(data), goos+"-"+goarch)
+	return parseSHA256Sums(string(data))
+}
+
+// fetchPlatformSHA256 下载 release 的 sha256sums.txt 并取出当前平台对应的
+// 哈希;找不到文件、下载失败或没有本平台行时返回空串。
+func (a *App) fetchPlatformSHA256(rel giteeRelease, goos, goarch string) string {
+	return a.fetchSHA256Sums(rel)[goos+"-"+goarch]
 }
 
 // parseSHA256ForPlatform 从 SHA256SUMS 内容(每行 "<os>-<arch>: <64位十六
 // 进制>")中取出 platform 对应的哈希,找不到或格式不对返回空串。
 func parseSHA256ForPlatform(content, platform string) string {
+	return parseSHA256Sums(content)[platform]
+}
+
+// parseSHA256Sums 解析 SHA256SUMS 的全部合法行("名称: 64位十六进制")为
+// 映射;非法行跳过。
+func parseSHA256Sums(content string) map[string]string {
+	sums := map[string]string{}
 	for _, line := range strings.Split(content, "\n") {
 		name, hash, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if !ok || name != platform {
+		if !ok {
 			continue
 		}
 		hash = strings.TrimSpace(hash)
-		if len(hash) == 64 {
-			return hash
+		if len(hash) != 64 {
+			continue
+		}
+		sums[strings.TrimSpace(name)] = hash
+	}
+	return sums
+}
+
+// lookupAssetSHA256 在前端未携带期望哈希时自行重查一次来源 release 的
+// SHA256SUMS(Gitee 主用,失败回退 GitHub):按下载 URL 精确对上资产后从
+// 资产名反推平台键,对不上则按当前 goos/goarch 取。两源都不可用或 release
+// 根本没有 SHA256SUMS.txt 资产(旧版本 release 的真实场景)时返回空串,
+// 由调用方放行。
+func (a *App) lookupAssetSHA256(downloadURL string) string {
+	rel, err := a.fetchLatestRelease(a.updateBaseURL(), updateOwner, updateRepo)
+	if err != nil {
+		if rel, err = a.fetchLatestRelease(a.updateFallbackURL(), fallbackUpdateOwner, fallbackUpdateRepo); err != nil {
+			return ""
 		}
 	}
-	return ""
+	sums := a.fetchSHA256Sums(rel)
+	if len(sums) == 0 {
+		return ""
+	}
+	// 按 URL 精确对上资产,用资产名认出 sums 已知的平台键。
+	for _, asset := range rel.Assets {
+		if asset.BrowserDownloadURL != downloadURL {
+			continue
+		}
+		name := strings.ToLower(asset.Name)
+		for platform, hash := range sums {
+			if strings.Contains(name, platform) {
+				return hash
+			}
+		}
+	}
+	// 对不上下载 URL:退回当前平台键(发布资产名与平台键同名约定)。
+	return sums[runtimeGOOS+"-"+runtimeGOARCH]
 }
 
 // CheckUpdate probes the latest release (Gitee 主用,失败回退 GitHub) and
@@ -274,6 +322,46 @@ func (a *App) CheckUpdate(req CheckUpdateRequest) (UpdateCheckResult, error) {
 }
 
 // --- 下载与安装 ---
+
+// defaultDownloadHosts 是更新下载入口 URL 的域名白名单:gitee.com /
+// github.com 是两平台 API 返回的 browser_download_url 所属域;
+// objects.githubusercontent.com 与 foruda.gitee.com 是两平台的附件实际
+// 存放域(API 也可能直接返回它们)。注意:这里只校验入口 URL,HTTP 客户端
+// 跟随 302 之后的最终 URL 不再校验——入口已限定在两平台域,重定向目标由
+// 平台自身控制,这是明确接受的边界。
+var defaultDownloadHosts = []string{
+	"gitee.com",
+	"github.com",
+	"objects.githubusercontent.com",
+	"foruda.gitee.com",
+}
+
+// errUpdateDownloadURLForbidden 表示入口 URL 不是 https 或不在白名单域内。
+var errUpdateDownloadURLForbidden = errors.New("更新下载地址不在允许的域名内")
+
+// validateUpdateDownloadURL 校验更新下载入口 URL:必须 https 且域名在
+// defaultDownloadHosts 内(域名大小写不敏感,端口不参与匹配)。
+func validateUpdateDownloadURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "https" {
+		return errUpdateDownloadURLForbidden
+	}
+	host := u.Hostname()
+	for _, allowed := range defaultDownloadHosts {
+		if strings.EqualFold(host, allowed) {
+			return nil
+		}
+	}
+	return errUpdateDownloadURLForbidden
+}
+
+// checkDownloadURL 按注入情况选择入口 URL 校验(测试注入旁路)。
+func (a *App) checkDownloadURL(rawURL string) error {
+	if a.downloadURLCheck != nil {
+		return a.downloadURLCheck(rawURL)
+	}
+	return validateUpdateDownloadURL(rawURL)
+}
 
 // UpdateProgressInfo is polled by the frontend while downloading.
 type UpdateProgressInfo struct {
@@ -330,9 +418,10 @@ func (a *App) apply() func(cmd *exec.Cmd) error {
 	return func(cmd *exec.Cmd) error { return cmd.Start() }
 }
 
-// DownloadUpdateRequest carries the release asset URL to fetch. SHA256 可选:
-// 非空时在解压前对下载文件做完整性校验(CheckUpdate 从 SHA256SUMS.txt 解析
-// 得到),为空则跳过校验,兼容旧流程。
+// DownloadUpdateRequest carries the release asset URL to fetch. SHA256 为
+// 期望完整性哈希(CheckUpdate 从 SHA256SUMS.txt 解析得到):为空时后端会
+// 重查来源 release 兜底(见 lookupAssetSHA256),重查仍拿不到(旧版本
+// release 无 SHA256SUMS.txt 资产)才放行。
 type DownloadUpdateRequest struct {
 	URL    string `json:"url"`
 	SHA256 string `json:"sha256,omitempty"`
@@ -340,9 +429,9 @@ type DownloadUpdateRequest struct {
 
 // DownloadUpdate fetches the release asset into a private staging dir and
 // unpacks the payload: macOS zips carry a 圣手运河.app tree, Windows zips
-// the payload exe, Linux tar.gz 按契约落盘为 update.tar.gz(不在此处解开,
-// ApplyUpdate 的替换脚本负责)。安装位置由 ApplyUpdate 决定(原位替换),
-// 与下载无关。
+// the payload exe, Linux tar.gz 落盘为 update.tar.gz 并在暂存目录安全解包
+// 出 圣手运河 二进制(ApplyUpdate 的替换脚本直接 mv,不再解包)。安装位置
+// 由 ApplyUpdate 决定(原位替换),与下载无关。
 func (a *App) DownloadUpdate(req DownloadUpdateRequest) error {
 	dl := a.downloadState()
 	dl.phase.Store(1)
@@ -356,6 +445,12 @@ func (a *App) DownloadUpdate(req DownloadUpdateRequest) error {
 		}
 	}()
 
+	// 入口 URL 白名单:https + 平台域,必须在发起任何网络请求前拒绝。
+	if err := a.checkDownloadURL(req.URL); err != nil {
+		dl.phase.Store(3)
+		dl.err.Store(err.Error())
+		return err
+	}
 	resp, err := a.updateHTTP().Get(req.URL)
 	if err != nil {
 		dl.phase.Store(3)
@@ -386,17 +481,23 @@ func (a *App) DownloadUpdate(req DownloadUpdateRequest) error {
 		dl.err.Store(err.Error())
 		return err
 	}
-	// 下载完成、解压前做完整性校验:期望哈希来自 release 的 SHA256SUMS.txt。
-	if req.SHA256 != "" {
-		if err := verifyFileSHA256(archivePath, req.SHA256); err != nil {
+	// 下载完成、解压前做完整性校验:期望哈希优先取前端传值;为空时重查
+	// 来源 release 兜底——同 release 明明提供 SHA256SUMS.txt 而请求里没带
+	// sha 的(篡改场景)必须拦下,重查拿不到才放行(旧版本 release)。
+	expectSHA := req.SHA256
+	if expectSHA == "" {
+		expectSHA = a.lookupAssetSHA256(req.URL)
+	}
+	if expectSHA != "" {
+		if err := verifyFileSHA256(archivePath, expectSHA); err != nil {
 			dl.phase.Store(3)
 			dl.err.Store(fmt.Sprintf("SHA256 校验失败: %v", err))
 			return fmt.Errorf("更新包 SHA256 校验失败: %w", err)
 		}
 	}
 	if isTar {
-		// Linux 包不解包,只验内含二进制;替换脚本解开并原位替换。
-		if err := validateTarGzPayload(archivePath); err != nil {
+		// Linux 包:安全校验全部条目后在暂存目录解开二进制;替换脚本只 mv。
+		if _, err := extractTarGzPayload(archivePath, staging); err != nil {
 			dl.phase.Store(3)
 			dl.err.Store(fmt.Sprintf("更新包校验失败: %v", err))
 			return err
@@ -432,33 +533,120 @@ func isTarGzAsset(url string) bool {
 	return strings.HasSuffix(strings.ToLower(url), ".tar.gz")
 }
 
-// validateTarGzPayload 检查暂存的 tar.gz 内含 圣手运河 二进制条目(条目名
-// 允许带 ./ 等目录前缀);只列条目不解包,异常包最多遍历 1024 条防失控。
-func validateTarGzPayload(path string) error {
+// checkTarEntry 拒绝 tar 穿越攻击面:绝对路径、含 ".." 段的路径与符号链接/
+// 硬链接条目。历史上 apply 脚本直接 tar -xzf 无任何检查,这里在下载阶段
+// 全量校验后才允许解包。
+func checkTarEntry(hdr *tar.Header) error {
+	if hdr.Typeflag == tar.TypeSymlink || hdr.Typeflag == tar.TypeLink {
+		return fmt.Errorf("更新包含链接条目: %s", hdr.Name)
+	}
+	if filepath.IsAbs(hdr.Name) || strings.HasPrefix(hdr.Name, "/") {
+		return fmt.Errorf("更新包含绝对路径条目: %s", hdr.Name)
+	}
+	for _, seg := range strings.Split(hdr.Name, "/") {
+		if seg == ".." {
+			return fmt.Errorf("更新包含上跳路径条目: %s", hdr.Name)
+		}
+	}
+	return nil
+}
+
+// findTarGzBinary 只读遍历 tar.gz 的全部条目:逐条过安全校验,并返回包内
+// 圣手运河 二进制条目名(条目名允许带 ./ 等目录前缀);异常包最多遍历
+// 1024 条防失控。不落盘任何内容。
+func findTarGzBinary(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer f.Close()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
-	for i := 0; i < 1024; i++ {
+	bin := ""
+	for i := 0; ; i++ {
+		if i >= 1024 {
+			return "", fmt.Errorf("更新包条目过多")
+		}
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return err
+			return "", err
 		}
-		if hdr.Typeflag == tar.TypeReg && filepath.Base(hdr.Name) == "圣手运河" {
-			return nil
+		if err := checkTarEntry(hdr); err != nil {
+			return "", err
+		}
+		if bin == "" && hdr.Typeflag == tar.TypeReg && filepath.Base(hdr.Name) == "圣手运河" {
+			bin = hdr.Name
 		}
 	}
-	return fmt.Errorf("更新包缺少 圣手运河")
+	if bin == "" {
+		return "", fmt.Errorf("更新包缺少 圣手运河")
+	}
+	return bin, nil
+}
+
+// extractTarGzPayload 校验暂存 tar.gz 的全部条目(见 checkTarEntry)后,把
+// 包内 圣手运河 二进制解到 destDir 下(与 update.tar.gz 并排落盘);apply
+// 脚本改为直接 mv 该文件,不再执行 tar 解包。返回解出的二进制路径。
+func extractTarGzPayload(archivePath, destDir string) (string, error) {
+	binEntry, err := findTarGzBinary(archivePath)
+	if err != nil {
+		return "", err
+	}
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return "", err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		if hdr.Typeflag != tar.TypeReg || hdr.Name != binEntry {
+			continue
+		}
+		target := filepath.Join(destDir, filepath.Base(hdr.Name))
+		// 双保险:解包目标必须仍在 destDir 内(与 unzipUpdate 同一约束)。
+		if !strings.HasPrefix(target, filepath.Clean(destDir)+string(filepath.Separator)) {
+			return "", fmt.Errorf("非法解包路径: %s", hdr.Name)
+		}
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+		if err != nil {
+			return "", err
+		}
+		if _, err := io.CopyN(out, tr, hdr.Size); err != nil {
+			out.Close()
+			return "", err
+		}
+		if err := out.Close(); err != nil {
+			return "", err
+		}
+		mode := os.FileMode(hdr.Mode)
+		if mode&0o111 == 0 {
+			mode = 0o755 // 头部未带可执行位时按可执行落盘(apply 脚本要直接运行)
+		}
+		if err := os.Chmod(target, mode); err != nil {
+			return "", err
+		}
+		return target, nil
+	}
+	return "", fmt.Errorf("更新包缺少 圣手运河")
 }
 
 // verifyFileSHA256 计算 path 文件的 SHA-256 并与 expect 比对(十六进制,
@@ -671,35 +859,33 @@ func buildWindowsUpdaterScript(stagingDir, target string) string {
 }
 
 // buildLinuxUpdaterScript renders the detached shell script for Linux 原位
-// 替换:从暂存的 tar.gz 解出新二进制到临时目录 → 解析运行中可执行文件的
-// 真实路径 → mv 原位替换 → chmod +x → 清理临时目录 → 后台分离重启。
-// Linux 没有包结构,目标就是二进制本身;解析真实路径用 procfs——
-// /proc/self/exe 是脚本自身进程的视角(会解析到 bash),故读父进程的
-// /proc/$PPID/exe:脚本由应用派生,此刻父进程正是待替换的应用;解析失败
-// 回退到 Go 侧传入的路径(os.Executable 在 Linux 上同样源自 /proc/self/exe)。
+// 替换:DownloadUpdate 已在暂存目录安全解包并校验过 圣手运河 二进制,脚本
+// 只解析运行中可执行文件的真实路径 → mv 原位替换 → chmod +x → 后台分离
+// 重启,不再执行任何 tar 解包。Linux 没有包结构,目标就是二进制本身;解析
+// 真实路径用 procfs——/proc/self/exe 是脚本自身进程的视角(会解析到
+// bash),故读父进程的 /proc/$PPID/exe:脚本由应用派生,此刻父进程正是待
+// 替换的应用;解析失败回退到 Go 侧传入的路径(os.Executable 在 Linux 上
+// 同样源自 /proc/self/exe)。
 func buildLinuxUpdaterScript(stagingDir, target string) string {
+	src := filepath.Join(stagingDir, "圣手运河")
 	return fmt.Sprintf(`#!/bin/bash
 # 用 procfs 解析当前可执行文件真实路径:/proc/self/exe 在本脚本进程里会
 # 解析到 bash 自身,故取父进程视角 /proc/$PPID/exe——脚本由应用派生,父
 # 进程正是待替换的应用;解析失败回退到 Go 侧传入的路径(os.Executable 在
 # Linux 上同样源自 /proc/self/exe)。
 SELF="$(readlink -f "/proc/$PPID/exe" 2>/dev/null || true)"
-STAGE=%q
+SRC=%q
 TARGET=%q
 if [ -z "$TARGET" ]; then
   TARGET="$SELF"
 fi
 sleep 2
-WORK="$(mktemp -d)"
-tar -xzf "$STAGE/update.tar.gz" -C "$WORK"
-BIN="$(find "$WORK" -type f -name 圣手运河 | head -n 1)"
-if [ -n "$BIN" ] && [ -n "$TARGET" ]; then
-  mv -f "$BIN" "$TARGET"
+if [ -n "$TARGET" ] && [ -f "$SRC" ]; then
+  mv -f "$SRC" "$TARGET"
   chmod +x "$TARGET"
 fi
-rm -rf "$WORK"
 nohup "$TARGET" >/dev/null 2>&1 &
-`, stagingDir, target)
+`, src, target)
 }
 
 // ApplyUpdate performs the install, in place, from the staged payload:
@@ -726,8 +912,8 @@ func (a *App) ApplyUpdate(_ ApplyUpdateRequest) error {
 		}
 		cmd = exec.Command("cmd", "/c", script)
 	} else if runtimeGOOS == "linux" {
-		if _, err := os.Stat(filepath.Join(staging, "update.tar.gz")); err != nil {
-			return fmt.Errorf("更新包缺少 update.tar.gz: %w", err)
+		if _, err := os.Stat(filepath.Join(staging, "圣手运河")); err != nil {
+			return fmt.Errorf("更新包缺少已解包的 圣手运河: %w", err)
 		}
 		script = filepath.Join(staging, "apply-update.sh")
 		if err := os.WriteFile(script, []byte(buildLinuxUpdaterScript(staging, filepath.Clean(self))), 0o755); err != nil {
@@ -779,11 +965,20 @@ func (a *App) UpdateProgress() UpdateProgressInfo {
 	return info
 }
 
-// OpenURL opens a URL in the system browser.
-func (a *App) OpenURL(url string) error {
+// OpenURL opens a URL in the system browser. 仅放行 http/https——其余
+// scheme(file:、javascript:、ftp: 等)一律拒绝,防止前端注入危险协议
+// 触发系统打开。
+func (a *App) OpenURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("链接解析失败: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("不允许的链接协议: %q", u.Scheme)
+	}
 	if a.ctx == nil {
 		return fmt.Errorf("应用尚未初始化")
 	}
-	runtime.BrowserOpenURL(a.ctx, url)
+	runtime.BrowserOpenURL(a.ctx, rawURL)
 	return nil
 }

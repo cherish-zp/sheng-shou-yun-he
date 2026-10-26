@@ -21,11 +21,10 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	dbPath := filepath.Join(home, ".db-client", "config.db")
-	master := os.Getenv("DB_CLIENT_MASTER")
-	if master == "" {
-		master = "dbclient-default-master"
-	}
+	dbDir := filepath.Join(home, ".db-client")
+	dbPath := filepath.Join(dbDir, "config.db")
+	// 与 GUI(main.go)同一主密钥解析优先级,保证两边读写同一套密文。
+	master, _ := backend.ResolveMasterKey(os.Getenv("DB_CLIENT_MASTER"), filepath.Join(dbDir, "master.key"), os.Stderr)
 
 	app, closeDB, err := backend.NewDefaultApp(dbPath, master)
 	if err != nil {
@@ -63,7 +62,7 @@ func main() {
 		if err != nil {
 			fatal(err)
 		}
-		if err := app.TestConnection(cfg); err != nil {
+		if err := app.TestConnection(backend.TestConnectionRequest{Config: cfg}); err != nil {
 			fatal(err)
 		}
 		fmt.Println("connection ok")

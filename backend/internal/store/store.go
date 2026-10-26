@@ -81,7 +81,14 @@ func Open(path string, masterPassword string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate connections sort_order: %w", err)
 	}
-	return &Store{db: db, crypto: crypto}, nil
+	s := &Store{db: db, crypto: crypto}
+	// 旧参数(4096 轮)/旧默认主密钥的密文一次性迁移为当前 KDF 参数;
+	// 实现与迁移条件见 crypto.go 的 EnsureCurrentKDF。
+	if err := s.EnsureCurrentKDF(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate kdf: %w", err)
+	}
+	return s, nil
 }
 
 // migrateConnectionSortOrder 为存量库补齐 connections.sort_order 列,并按
