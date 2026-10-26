@@ -25,11 +25,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	dbPath := filepath.Join(home, ".db-client", "config.db")
-	master := os.Getenv("DB_CLIENT_MASTER")
-	if master == "" {
-		master = "dbclient-default-master"
-	}
+	dbDir := filepath.Join(home, ".db-client")
+	dbPath := filepath.Join(dbDir, "config.db")
+	// 主密钥解析:DB_CLIENT_MASTER > ~/.db-client/master.key > 首次生成随机
+	// 密钥;全部不可用才回退内置默认(ResolveMasterKey 内已向 stderr 告警)。
+	// 绝不打印密钥内容。
+	master, _ := backend.ResolveMasterKey(os.Getenv("DB_CLIENT_MASTER"), filepath.Join(dbDir, "master.key"), os.Stderr)
 
 	app, closeDB, err := backend.NewDefaultApp(dbPath, master)
 	if err != nil {
