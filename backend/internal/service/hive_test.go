@@ -878,3 +878,16 @@ func TestHiveStoreConfigRoundtrip(t *testing.T) {
 		t.Fatalf("roundtrip mismatch: %+v", cfg)
 	}
 }
+
+// TestQuoteHiveStringBackslashSafety 反斜杠是 Hive 字面量转义字符:以 \
+// 结尾的值若不双写反斜杠会吞掉闭合引号、打乱整条语句(CH 版已修的同款)。
+func TestQuoteHiveStringBackslashSafety(t *testing.T) {
+	got := quoteHiveString(`a\b\`)
+	want := `'a\\b\\'`
+	if got != want {
+		t.Fatalf("quoteHiveString(%q) = %s, want %s", `a\b\`, got, want)
+	}
+	if got2 := quoteHiveString("it's"); got2 != `'it''s'` {
+		t.Fatalf("quote doubling must be preserved, got %s", got2)
+	}
+}

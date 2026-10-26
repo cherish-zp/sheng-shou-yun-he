@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { prettyJSON, formatTime, displayValue, truncateCell, formatCount } from './format'
+import { prettyJSON, formatTime, displayValue, truncateCell, formatCount, isJsonContainer } from './format'
 
 describe('prettyJSON', () => {
   it('formats valid JSON with indentation', () => {
@@ -14,6 +14,19 @@ describe('formatTime', () => {
   it('formats a unix-ms timestamp', () => {
     expect(formatTime(0)).toBe('-')
     expect(formatTime(1700000000000)).toMatch(/2023|2024|2025/)
+  })
+})
+
+describe('isJsonContainer', () => {
+  it('accepts complete JSON objects and arrays only', () => {
+    expect(isJsonContainer('{"id":1}')).toBe(true)
+    expect(isJsonContainer('  [1, 2]  ')).toBe(true)
+    expect(isJsonContainer('{"id":1')).toBe(false)
+    expect(isJsonContainer('hello')).toBe(false)
+    expect(isJsonContainer('123')).toBe(false)
+    expect(isJsonContainer('"str"')).toBe(false)
+    expect(isJsonContainer('')).toBe(false)
+    expect(isJsonContainer(null)).toBe(false)
   })
 })
 

@@ -202,7 +202,9 @@
   --editor-bg: #fffafc;
   --cm-gutter-bg: #fdeef5;
   --cm-cursor: #cc337d;
-  --cm-selection: #f9a8c9;
+  /* 半透明:选区层绘制在行背景与文字之上(见 SqlEditor 的 selectionLayer
+     zIndex),不透明色会盖住字形 */
+  --cm-selection: rgba(249, 168, 201, 0.45);
   --zebra: #fef3f8;
   --body-glow-a: rgba(244, 127, 184, 0.1);
   --body-glow-b: rgba(239, 95, 164, 0.07);

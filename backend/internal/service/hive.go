@@ -343,9 +343,11 @@ func quoteHiveIdent(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
-// quoteHiveString single-quotes a string literal, doubling embedded quotes
-// (Hive 同时接受 \' 转义,双写形态更通用)。
+// quoteHiveString single-quotes a string literal: 反斜杠是 Hive 的转义
+// 字符必须先双写(以 \ 结尾的值会吞掉闭合引号、打乱整条语句——CH 版
+// quoteCHString 已修的同款问题),单引号按双写转义(比 \' 更通用)。
 func quoteHiveString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 

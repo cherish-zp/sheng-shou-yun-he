@@ -3,6 +3,11 @@
 <head>
     <meta charset="UTF-8"/>
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <!-- 纵深防御:脚本仅允许同源(Wails 资产服务),阻断渲染层被注入时的
+         外部脚本加载;样式放开 unsafe-inline 是 CodeMirror 运行时注入
+         <style> 与组件内联样式的需要 -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'"/>
     <link rel="icon" type="image/png" href="/favicon.png" />
     <title>圣手运河</title>
 </head>

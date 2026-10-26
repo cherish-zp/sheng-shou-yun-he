@@ -169,9 +169,14 @@ const extraKeywordCompletion = EditorState.languageData.of(() => [
 // 主题色全部走 CSS 变量,自动跟随 [data-theme] 深浅色/少女粉切换。
 const editorTheme = EditorView.theme({
   '&': { height: '100%', fontSize: '13px', backgroundColor: 'transparent' },
-  '.cm-scroller': { fontFamily: 'var(--mono)', lineHeight: '1.5', overflow: 'auto' },
+  // 行高取整(13×1.5=19.5px 的亚像素舍入会在选区上留下逐行细缝)。
+  '.cm-scroller': { fontFamily: 'var(--mono)', lineHeight: '20px', overflow: 'auto' },
   '.cm-content': { padding: '8px 10px 10px 0' },
   '&.cm-focused': { outline: 'none' },
+  // 选区层提到行背景之上:当前语句底色(accent-soft)与光标行底色
+  // (bg-hover,不透明)原先盖在选区矩形上,长语句选区被切成深浅
+  // 相间的条纹;选区色本身低透明度,置顶不影响文字可读性。
+  '.cm-selectionLayer': { zIndex: '1' },
   '.cm-gutters': { backgroundColor: 'var(--cm-gutter-bg)', border: 'none', color: 'var(--text-tertiary)' },
   '.cm-activeLine': { backgroundColor: 'var(--bg-hover)' },
   '.cm-activeLineGutter': { backgroundColor: 'var(--bg-hover)', color: 'var(--text-secondary)' },
