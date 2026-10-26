@@ -28,5 +28,13 @@ export default defineConfig({
     globals: true,
     include: ['src/**/*.spec.ts'],
     setupFiles: ['src/test/setup.ts'],
+    // jsdom 大组件树(ConnectionTree/KeepAlive 缓存视图)在共享 worker 里
+    // 累积内存,会触发 V8 堆耗尽崩溃(worker died, heap out of memory)——
+    // 限 4 worker 分摊并发,每个 worker 堆 6GB(4×6=24GB < 32GB 物理内存)。
+    minWorkers: 2,
+    maxWorkers: 4,
+    poolOptions: {
+      forks: { execArgv: ['--max-old-space-size=6144'] },
+    },
   },
 })

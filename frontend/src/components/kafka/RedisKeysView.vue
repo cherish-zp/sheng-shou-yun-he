@@ -3,10 +3,11 @@ import { computed, onMounted, ref } from 'vue'
 import { getApi } from '@/api/client'
 import type { RedisKeyInfo, RedisListPushRequest, RedisServerInfo, RedisValue } from '@/api/types'
 import { formatBytes } from '@/utils/bytes'
+import { isJsonContainer, prettyJSON } from '@/utils/format'
 import { useToastStore } from '@/store/toast'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
-const props = defineProps<{ connectionId: string; db: number }>()
+const props = defineProps<{ connectionId: string; db: number; keyLimit?: number }>()
 
 // 键列表状态(SCAN 游标分页)
 const keys = ref<RedisKeyInfo[]>([])
@@ -16,13 +17,18 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 // SCAN 累积上限:无 match 全库扫描时防止结果无限累积撑爆响应式数组与 DOM。
 // 达到上限后停止追加与续扫;下一次 scan(true)(切换库/改 match/重扫)即重置。
-const KEY_LIMIT = 20000
+// 上限可经 keyLimit prop 注入(spec 用小上限全路径验证,不渲染两万行)。
+const keyLimit = computed(() => props.keyLimit ?? 20000)
 const limitReached = ref(false)
 // 选中键与其值
 const selectedKey = ref<string | null>(null)
 const value = ref<RedisValue | null>(null)
 const valueLoading = ref(false)
 const editedString = ref('')
+// JSON 字符串的格式化只读态:合法 JSON 默认格式化展示(只读),「编辑」
+// 切回原始可编辑文本——保存永远写原始字节,不把格式化结果悄悄写回。
+const stringPretty = ref(false)
+const stringEditing = ref(false)
 // 摘要与确认
 const summary = ref<RedisServerInfo | null>(null)
 const confirmDelete = ref(false)
@@ -43,9 +49,9 @@ async function scan(reset: boolean): Promise<void> {
       count: 50,
     })
     const merged = reset ? res.keys : [...keys.value, ...res.keys]
-    if (merged.length >= KEY_LIMIT) {
+    if (merged.length >= keyLimit.value) {
       // 截断到上限并清零游标:隐藏「加载更多」,界面给出缩小范围的提示。
-      keys.value = merged.slice(0, KEY_LIMIT)
+      keys.value = merged.slice(0, keyLimit.value)
       limitReached.value = true
       cursor.value = 0
     } else {
@@ -82,7 +88,7 @@ async function selectKey(k: RedisKeyInfo): Promise<void> {
       db: props.db,
       key: k.key,
     })
-    if (value.value.string !== undefined) editedString.value = value.value.string
+    if (value.value.string !== undefined) applyString(value.value.string)
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -105,9 +111,43 @@ async function loadFullString(): Promise<void> {
       return
     }
     value.value = full
-    if (full.string !== undefined) editedString.value = full.string
+    if (full.string !== undefined) applyString(full.string)
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+// applyString 载入字符串原始值并决定默认展示形态:合法 JSON 对象/数组
+// 默认进格式化只读视图,其余保持可编辑 textarea。
+function applyString(raw: string): void {
+  editedString.value = raw
+  stringPretty.value = isJsonContainer(raw)
+  stringEditing.value = false
+}
+
+// prettyString 非空 = 当前应渲染格式化只读视图。
+const prettyString = computed(() =>
+  stringPretty.value && !stringEditing.value && isJsonContainer(editedString.value)
+    ? prettyJSON(editedString.value)
+    : null,
+)
+
+function startStringEdit(): void {
+  stringEditing.value = true
+}
+
+// hashPretty 字段值为完整 JSON 对象/数组时返回格式化文本,否则 null 走原文。
+function hashPretty(raw: string): string | null {
+  return isJsonContainer(raw) ? prettyJSON(raw) : null
+}
+
+// copyStringRaw 复制原始字节(而非格式化结果),保证与存储内容逐字一致。
+async function copyStringRaw(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(editedString.value)
+    useToastStore().show('已复制原始值')
+  } catch {
+    useToastStore().show('复制失败:浏览器未授权剪贴板')
   }
 }
 
@@ -161,6 +201,9 @@ async function doSaveString(): Promise<void> {
     ttl_seconds: -1,
   })
   await loadKeySilently(selectedKey.value)
+  // 保存后按最新值重判展示形态:仍是 JSON 则回格式化只读态。
+  stringPretty.value = isJsonContainer(editedString.value)
+  stringEditing.value = false
 }
 
 async function loadKeySilently(key: string): Promise<void> {
@@ -437,7 +480,7 @@ const ttlOfSelected = computed(() => value.value?.ttl_seconds ?? -1)
         <div v-else-if="!value" class="empty">选择左侧键查看值</div>
         <template v-else>
           <div class="value-head">
-            <span class="mono">{{ value.key }}</span>
+            <span class="mono value-key">{{ value.key }}</span>
             <span class="key-type" :data-type="value.type">{{ value.type }}</span>
             <span class="mono ttl" data-test="redis-value-ttl">TTL {{ value.ttl_seconds >= 0 ? value.ttl_seconds + 's' : '∞' }}</span>
             <div class="spacer"></div>
@@ -463,17 +506,27 @@ const ttlOfSelected = computed(() => value.value?.ttl_seconds ?? -1)
               <button class="btn ghost small" type="button" data-test="btn-load-full" @click="loadFullString">加载完整</button>
             </div>
             <div class="string-editor" data-test="redis-string-editor">
-              <textarea v-model="editedString" class="input textarea mono" rows="12" spellcheck="false"></textarea>
-              <button class="btn primary small" type="button" data-test="btn-string-save" @click="doSaveString">保存</button>
+              <template v-if="prettyString !== null">
+                <div class="string-toolbar">
+                  <span class="toolbar-hint">JSON 已格式化(只读)</span>
+                  <button class="btn ghost small" type="button" data-test="btn-string-copy" @click="copyStringRaw">复制原始值</button>
+                  <button class="btn primary small" type="button" data-test="btn-string-edit" @click="startStringEdit">编辑</button>
+                </div>
+                <pre class="json-view mono" data-test="redis-string-pretty">{{ prettyString }}</pre>
+              </template>
+              <template v-else>
+                <textarea v-model="editedString" class="input textarea mono" rows="12" spellcheck="false"></textarea>
+                <button class="btn primary small" type="button" data-test="btn-string-save" @click="doSaveString">保存</button>
+              </template>
             </div>
           </template>
           <template v-else-if="value.type === 'hash'">
-            <table class="table data-table">
-              <thead><tr><th>Field</th><th>Value</th><th></th></tr></thead>
+            <table class="table data-table kv-table">
+              <thead><tr><th class="field-col">Field</th><th>Value</th><th class="actions-col"></th></tr></thead>
               <tbody>
                 <tr v-for="(f, i) in value.hash" :key="f.field" data-test="redis-hash-row">
-                  <td class="mono">{{ f.field }}</td>
-                  <td class="mono">
+                  <td class="mono field-cell">{{ f.field }}</td>
+                  <td class="value-cell mono">
                     <textarea
                       v-if="hashEditField === f.field"
                       v-model="hashEditValue"
@@ -484,7 +537,10 @@ const ttlOfSelected = computed(() => value.value?.ttl_seconds ?? -1)
                       autocomplete="off"
                       spellcheck="false"
                     ></textarea>
-                    <template v-else>{{ f.value }}</template>
+                    <template v-else-if="hashPretty(f.value)">
+                      <pre class="json-view mono" data-test="redis-hash-pretty">{{ hashPretty(f.value) }}</pre>
+                    </template>
+                    <template v-else><span class="val-text">{{ f.value }}</span></template>
                   </td>
                   <td class="row-actions">
                     <template v-if="hashEditField === f.field">
@@ -552,8 +608,8 @@ const ttlOfSelected = computed(() => value.value?.ttl_seconds ?? -1)
             </div>
           </template>
           <template v-else-if="value.type === 'zset'">
-            <table class="table data-table">
-              <thead><tr><th>Score</th><th>Member</th><th></th></tr></thead>
+            <table class="table data-table kv-table">
+              <thead><tr><th class="score-col">Score</th><th>Member</th><th class="actions-col"></th></tr></thead>
               <tbody>
                 <tr v-for="(z, i) in value.zset" :key="z.member" data-test="redis-zset-row">
                   <td class="mono">
@@ -651,10 +707,35 @@ const ttlOfSelected = computed(() => value.value?.ttl_seconds ?? -1)
   border: 1px solid var(--border); border-radius: 8px;
   background: var(--bg-elevated); padding: 10px 12px; min-height: 200px;
 }
-.value-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.value-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border);
+}
+.value-key { font-size: 14px; font-weight: 600; word-break: break-all; }
 .ttl { color: var(--text-secondary); font-size: 12px; }
 .inline-edit { display: flex; gap: 8px; margin: 8px 0; }
 .string-editor { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.string-toolbar { display: flex; gap: 8px; align-items: center; align-self: flex-end; }
+/* JSON 格式化只读视图:等宽、可滚动,底色与输入框同族但不可编辑。 */
+.json-view {
+  width: 100%; box-sizing: border-box; max-height: 50vh; overflow: auto;
+  margin: 0; padding: 10px 12px; font-size: 12px; line-height: 1.6;
+  background: var(--bg-subtle); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text);
+  /* pre-wrap + anywhere:长 token 行折行铺平,绝不出现横向滚动条 */
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+/* KV 表(hash/zset):固定列宽——长 token 值(如无空格 JSON)在自动布局下
+   会把值列撑爆、把 Field 列挤成竖排单字符;fixed + anywhere 双保险。 */
+.kv-table { table-layout: fixed; width: 100%; }
+.kv-table .field-col { width: 170px; }
+.kv-table .score-col { width: 110px; }
+.kv-table .actions-col { width: 118px; }
+.kv-table th, .kv-table td { overflow-wrap: anywhere; vertical-align: top; }
+/* 操作列按钮顶对齐贴齐 JSON 块上缘(td 上的 flex 会让 vertical-align 失效)。 */
+.kv-table .row-actions { align-items: flex-start; }
+.value-cell { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+.val-text { white-space: pre-wrap; }
 .input {
   background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
   border-radius: 7px; padding: 6px 9px; font-size: 13px;

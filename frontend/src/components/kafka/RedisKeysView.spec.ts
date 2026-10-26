@@ -212,6 +212,97 @@ describe('RedisKeysView', () => {
     })
   })
 
+  it('JSON 字符串默认格式化只读展示,编辑切回原文且保存写原始字节', async () => {
+    const raw = '{"id":1,"house_id":"123456","device_id":"7008f493c0f640898120f8ec9ab9d7eb"}'
+    ;(api.redisScan as ReturnType<typeof vi.fn>).mockResolvedValue({
+      cursor: 0,
+      keys: [key('msms:silent:config')],
+    })
+    ;(api.redisGetKey as ReturnType<typeof vi.fn>).mockResolvedValue({
+      key: 'msms:silent:config',
+      type: 'string',
+      ttl_seconds: -1,
+      string: raw,
+    })
+    const set = vi.fn(async () => {})
+    ;(api.redisSetString as ReturnType<typeof vi.fn>).mockImplementation(set)
+    const wrapper = mount(RedisKeysView, { props: { connectionId: 'r1', db: 0 } })
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('[data-test="redis-key-row"]')).toHaveLength(1)
+    })
+    await wrapper.findAll('[data-test="redis-key-row"]')[0].trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="redis-string-pretty"]').exists()).toBe(true)
+    })
+    // 格式化输出:2 空格缩进(JSON.stringify 语义)。
+    expect(wrapper.find('[data-test="redis-string-pretty"]').text()).toContain('"id": 1')
+    // 只读态不出现保存按钮,编辑按钮存在。
+    expect(wrapper.find('[data-test="btn-string-save"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="btn-string-edit"]').exists()).toBe(true)
+
+    // 切编辑:textarea 回来且内容为原始紧凑字节,保存写原始值。
+    await wrapper.find('[data-test="btn-string-edit"]').trigger('click')
+    const ta = wrapper.find('[data-test="redis-string-editor"] textarea')
+    expect(ta.exists()).toBe(true)
+    expect((ta.element as HTMLTextAreaElement).value).toBe(raw)
+    await ta.setValue(raw)
+    await wrapper.find('[data-test="btn-string-save"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(set).toHaveBeenCalledWith(expect.objectContaining({ value: raw }))
+    })
+  })
+
+  it('非 JSON 字符串保持纯 textarea 可编辑', async () => {
+    ;(api.redisScan as ReturnType<typeof vi.fn>).mockResolvedValue({
+      cursor: 0,
+      keys: [key('plain')],
+    })
+    ;(api.redisGetKey as ReturnType<typeof vi.fn>).mockResolvedValue({
+      key: 'plain',
+      type: 'string',
+      ttl_seconds: -1,
+      string: 'hello',
+    })
+    const wrapper = mount(RedisKeysView, { props: { connectionId: 'r1', db: 0 } })
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('[data-test="redis-key-row"]')).toHaveLength(1)
+    })
+    await wrapper.findAll('[data-test="redis-key-row"]')[0].trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="redis-string-editor"] textarea').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-test="redis-string-pretty"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="btn-string-save"]').exists()).toBe(true)
+  })
+
+  it('格式化态「复制原始值」写剪贴板的是原始字节', async () => {
+    const raw = '{"a":1}'
+    ;(api.redisScan as ReturnType<typeof vi.fn>).mockResolvedValue({
+      cursor: 0,
+      keys: [key('msms:silent:config')],
+    })
+    ;(api.redisGetKey as ReturnType<typeof vi.fn>).mockResolvedValue({
+      key: 'msms:silent:config',
+      type: 'string',
+      ttl_seconds: -1,
+      string: raw,
+    })
+    const writeText = vi.fn(async () => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const wrapper = mount(RedisKeysView, { props: { connectionId: 'r1', db: 0 } })
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('[data-test="redis-key-row"]')).toHaveLength(1)
+    })
+    await wrapper.findAll('[data-test="redis-key-row"]')[0].trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="btn-string-copy"]').exists()).toBe(true)
+    })
+    await wrapper.find('[data-test="btn-string-copy"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(raw)
+    })
+  })
+
   it('flushes the db through the confirm dialog: calls API, closes the dialog, refreshes', async () => {
     const flush = vi.fn(async () => {})
     ;(api.redisFlushDB as ReturnType<typeof vi.fn>).mockImplementation(flush)
@@ -263,25 +354,27 @@ describe('RedisKeysView', () => {
   const manyKeys = (n: number, prefix = 'k'): RedisKeyInfo[] =>
     Array.from({ length: n }, (_, i) => key(`${prefix}${i}`))
 
-  it('stops accumulating at 20000 keys with a notice and resets on a fresh scan', async () => {
+  it('stops accumulating at the key limit with a notice and resets on a fresh scan', async () => {
+    // keyLimit 注入小上限:全路径(未达限→越限截断→提示→重扫重置)在
+    // 3 行数据上验证,不再真实渲染两万行(jsdom 大内存曾压崩测试 worker)。
     ;(api.redisScan as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce({ cursor: 7, keys: manyKeys(19995) })
+      .mockResolvedValueOnce({ cursor: 7, keys: manyKeys(2) })
       .mockResolvedValueOnce({ cursor: 0, keys: manyKeys(10, 'm') })
       .mockResolvedValueOnce({ cursor: 0, keys: [key('user:1')] })
-    const wrapper = mount(RedisKeysView, { props: { connectionId: 'r1', db: 0 } })
+    const wrapper = mount(RedisKeysView, { props: { connectionId: 'r1', db: 0, keyLimit: 3 } })
     await vi.waitFor(() => {
-      expect(rowCount(wrapper)).toBe(19995)
+      expect(rowCount(wrapper)).toBe(2)
     })
     // 游标未走完:加载更多可用,尚无上限提示。
     expect(wrapper.find('[data-test="btn-redis-more"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="redis-limit-notice"]').exists()).toBe(false)
 
-    // 加载更多越过上限:追加被截断到 2 万,提示出现,游标清零后加载入口消失。
+    // 加载更多越过上限:追加被截断到 3 条,提示出现,游标清零后加载入口消失。
     await wrapper.find('[data-test="btn-redis-more"]').trigger('click')
     await vi.waitFor(() => {
       expect(wrapper.find('[data-test="redis-limit-notice"]').exists()).toBe(true)
     })
-    expect(rowCount(wrapper)).toBe(20000)
+    expect(rowCount(wrapper)).toBe(3)
     expect(api.redisScan).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 7 }))
     expect(wrapper.find('[data-test="btn-redis-more"]').exists()).toBe(false)
 
@@ -292,7 +385,7 @@ describe('RedisKeysView', () => {
       expect(rowCount(wrapper)).toBe(1)
       expect(wrapper.find('[data-test="redis-limit-notice"]').exists()).toBe(false)
     })
-  }, 60000)
+  })
 
   // 挂载并选中一个键,redisGetKey 返回给定值(编辑类用例共用)。
   async function mountWithValue(val: { key: string; type: string } & Record<string, unknown>) {
@@ -332,6 +425,25 @@ describe('RedisKeysView', () => {
       })
       // 编辑后重新加载该 key(选中 1 次 + 刷新 1 次)
       expect(api.redisGetKey).toHaveBeenCalledTimes(2)
+    })
+
+    it('hash:JSON 字段值默认折叠格式化,可展开,编辑仍拿原始值', async () => {
+      const raw = '{"id":3,"house_id":"20260801","alert_code":"infra_sftp_pwd_exp_check"}'
+      const wrapper = await mountWithValue({
+        key: 'msms:silent:config', type: 'hash', ttl_seconds: 0,
+        hash: [{ field: '3', value: raw }],
+      })
+      await vi.waitFor(() => {
+        expect(wrapper.find('[data-test="redis-hash-pretty"]').exists()).toBe(true)
+      })
+      // 格式化输出 2 空格缩进,默认展开(无折叠机制、无展开按钮)。
+      expect(wrapper.find('[data-test="redis-hash-pretty"]').text()).toContain('"id": 3')
+      expect(wrapper.find('[data-test="redis-hash-pretty"]').classes()).not.toContain('compact')
+      expect(wrapper.find('[data-test="redis-hash-expand-0"]').exists()).toBe(false)
+      // 编辑入口仍拿原始紧凑字节。
+      await wrapper.find('[data-test="redis-hash-edit-0"]').trigger('click')
+      const hashEditor = wrapper.find('[data-test="input-hash-edit-value"]')
+      expect((hashEditor.element as HTMLTextAreaElement).value).toBe(raw)
     })
 
     it('hash:底部添加字段调 redisHashSetField', async () => {
