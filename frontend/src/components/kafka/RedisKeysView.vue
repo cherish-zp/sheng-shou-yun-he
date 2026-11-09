@@ -6,6 +6,9 @@ import { formatBytes } from '@/utils/bytes'
 import { isJsonContainer, prettyJSON } from '@/utils/format'
 import { useToastStore } from '@/store/toast'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 
 const props = defineProps<{ connectionId: string; db: number; keyLimit?: number }>()
 
@@ -401,242 +404,405 @@ const ttlOfSelected = computed(() => value.value?.ttl_seconds ?? -1)
 </script>
 
 <template>
-  <div class="redis-keys" data-test="redis-keys-view">
-    <div class="toolbar">
-      <span class="title">键空间</span>
-      <span class="db-badge" data-test="redis-db-badge">DB{{ props.db }}</span>
-      <div class="spacer"></div>
-      <input
-        v-model="match"
-        class="search-input"
+  <div class="p-4 text-foreground" data-test="redis-keys-view">
+    <!-- 工具栏:标题 + DB 徽章 + match 过滤 + 扫描/清空 -->
+    <div class="flex flex-wrap items-center gap-2.5">
+      <span class="text-sm font-semibold">键空间</span>
+      <Badge variant="secondary" data-test="redis-db-badge">DB{{ props.db }}</Badge>
+      <div class="flex-1"></div>
+      <Input
+        :value="match"
         type="search"
+        class="h-8 w-[220px] bg-muted/50 text-[13px]"
         data-test="redis-match"
         placeholder="模式过滤,如 user:*"
         autocapitalize="off"
         autocorrect="off"
         autocomplete="off"
         spellcheck="false"
+        @input="match = ($event.target as HTMLInputElement).value"
         @keydown.enter="scan(true)"
       />
-      <button class="btn ghost" type="button" data-test="btn-redis-scan" :disabled="loading" @click="scan(true)">
+      <Button variant="outline" size="sm" class="h-8" data-test="btn-redis-scan" :disabled="loading" @click="scan(true)">
         {{ loading ? '扫描中…' : '扫描' }}
-      </button>
-      <button class="btn ghost danger" type="button" data-test="btn-flushdb" @click="confirmFlush = true">清空当前 DB</button>
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        class="h-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+        data-test="btn-flushdb"
+        @click="confirmFlush = true"
+      >
+        清空当前 DB
+      </Button>
     </div>
 
-    <div v-if="summary" class="summary" data-test="redis-summary">
+    <!-- 服务摘要 -->
+    <div
+      v-if="summary"
+      class="mt-2.5 flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground"
+      data-test="redis-summary"
+    >
       <span>{{ summary.mode === 'cluster' ? `集群 · ${summary.nodes?.length ?? 0} 节点` : '单机' }}</span>
-      <span class="sep">·</span>
+      <span class="text-muted-foreground/50">·</span>
       <span>内存 {{ summary.used_memory_human || '—' }}</span>
-      <span class="sep">·</span>
-      <span>键 {{ summary.total_keys }}</span>
-      <span class="sep">·</span>
-      <span>客户端 {{ summary.connected_clients }}</span>
+      <span class="text-muted-foreground/50">·</span>
+      <span class="tabular-nums">键 {{ summary.total_keys }}</span>
+      <span class="text-muted-foreground/50">·</span>
+      <span class="tabular-nums">客户端 {{ summary.connected_clients }}</span>
       <template v-if="summary.hit_rate !== null && summary.hit_rate !== undefined">
-        <span class="sep">·</span>
-        <span>命中率 {{ (summary.hit_rate * 100).toFixed(1) }}%</span>
+        <span class="text-muted-foreground/50">·</span>
+        <span class="tabular-nums">命中率 {{ (summary.hit_rate * 100).toFixed(1) }}%</span>
       </template>
     </div>
 
-    <div v-if="error" class="msg err" data-test="redis-error">{{ error }}</div>
+    <div v-if="error" class="my-2 rounded-md bg-destructive/10 px-2.5 py-2 text-[13px] text-destructive" data-test="redis-error">{{ error }}</div>
 
-    <div v-if="limitReached" class="msg warn" data-test="redis-limit-notice">
+    <div v-if="limitReached" class="my-2 rounded-md bg-warning/15 px-2.5 py-2 text-[13px] text-warning" data-test="redis-limit-notice">
       已达 2 万键展示上限，请使用 match 前缀过滤缩小范围
     </div>
 
-    <div class="columns">
-      <div class="keys-col">
-        <div class="keys-head">
-          <span>键(共 {{ keys.length }})</span>
-          <button
+    <div class="mt-3 grid grid-cols-[300px_1fr] gap-3">
+      <!-- 键列表 -->
+      <div class="overflow-hidden rounded-md border border-border bg-card">
+        <div class="flex items-center justify-between border-b border-border bg-muted/50 px-2.5 py-1.5 text-xs text-muted-foreground">
+          <span class="tabular-nums">键(共 {{ keys.length }})</span>
+          <Button
             v-if="cursor !== 0"
-            class="btn ghost small"
-            type="button"
+            variant="ghost"
+            size="sm"
+            class="h-6 px-2 text-xs"
             data-test="btn-redis-more"
             :disabled="loading"
             @click="scan(false)"
           >
             加载更多
-          </button>
+          </Button>
         </div>
         <div
           v-for="k in keys"
           :key="k.key"
-          class="key-row"
-          :class="{ selected: selectedKey === k.key }"
+          class="flex items-center gap-2 border-b border-border px-2.5 py-1.5 text-[13px] hover:bg-muted"
+          :class="{ 'bg-accent': selectedKey === k.key }"
           data-test="redis-key-row"
           @click="selectKey(k)"
         >
-          <span class="key-type" :data-type="k.type">{{ k.type }}</span>
-          <span class="key-name">{{ k.key }}</span>
-          <span v-if="k.size_bytes > 0" class="key-size" data-test="redis-key-size">{{ formatBytes(k.size_bytes) }}</span>
-          <span v-if="k.ttl_seconds >= 0" class="key-ttl">{{ k.ttl_seconds }}s</span>
+          <Badge
+            variant="outline"
+            class="shrink-0 rounded-[4px] px-1.5 py-0 text-[10px] font-medium uppercase text-muted-foreground"
+            :data-type="k.type"
+          >
+            {{ k.type }}
+          </Badge>
+          <span class="min-w-0 flex-1 truncate font-mono">{{ k.key }}</span>
+          <span v-if="k.size_bytes > 0" class="shrink-0 font-mono text-xs tabular-nums text-muted-foreground" data-test="redis-key-size">{{ formatBytes(k.size_bytes) }}</span>
+          <span v-if="k.ttl_seconds >= 0" class="shrink-0 text-[11px] tabular-nums text-muted-foreground/70">{{ k.ttl_seconds }}s</span>
         </div>
-        <div v-if="keys.length === 0 && !loading" class="empty" data-test="redis-keys-empty">无匹配键</div>
+        <div v-if="keys.length === 0 && !loading" class="py-5 text-center text-[13px] text-muted-foreground" data-test="redis-keys-empty">无匹配键</div>
       </div>
 
-      <div class="value-col" data-test="redis-value-panel">
-        <div v-if="valueLoading" class="empty">加载中…</div>
-        <div v-else-if="!value" class="empty">选择左侧键查看值</div>
+      <!-- 值面板 -->
+      <div class="min-h-[200px] rounded-md border border-border bg-card p-3" data-test="redis-value-panel">
+        <div v-if="valueLoading" class="py-5 text-center text-[13px] text-muted-foreground">加载中…</div>
+        <div v-else-if="!value" class="py-5 text-center text-[13px] text-muted-foreground">选择左侧键查看值</div>
         <template v-else>
-          <div class="value-head">
-            <span class="mono value-key">{{ value.key }}</span>
-            <span class="key-type" :data-type="value.type">{{ value.type }}</span>
-            <span class="mono ttl" data-test="redis-value-ttl">TTL {{ value.ttl_seconds >= 0 ? value.ttl_seconds + 's' : '∞' }}</span>
-            <div class="spacer"></div>
-            <button class="btn ghost small danger" type="button" data-test="btn-key-delete" @click="confirmDelete = true">删除</button>
-            <button class="btn ghost small" type="button" data-test="btn-key-rename" @click="renameTarget = value.key; renameValue = value.key">重命名</button>
-            <button class="btn ghost small" type="button" data-test="btn-key-ttl" @click="ttlTarget = value.key; ttlValue = ttlOfSelected">TTL</button>
+          <div class="mb-3 flex flex-wrap items-center gap-2 border-b border-border pb-2.5">
+            <span class="break-all font-mono text-sm font-semibold">{{ value.key }}</span>
+            <Badge
+              variant="outline"
+              class="rounded-[4px] px-1.5 py-0 text-[10px] font-medium uppercase text-muted-foreground"
+              :data-type="value.type"
+            >
+              {{ value.type }}
+            </Badge>
+            <span class="font-mono text-xs tabular-nums text-muted-foreground" data-test="redis-value-ttl">TTL {{ value.ttl_seconds >= 0 ? value.ttl_seconds + 's' : '∞' }}</span>
+            <div class="flex-1"></div>
+            <Button variant="ghost" size="sm" class="h-7 text-destructive hover:bg-destructive/10 hover:text-destructive" data-test="btn-key-delete" @click="confirmDelete = true">删除</Button>
+            <Button variant="outline" size="sm" class="h-7" data-test="btn-key-rename" @click="renameTarget = value.key; renameValue = value.key">重命名</Button>
+            <Button variant="outline" size="sm" class="h-7" data-test="btn-key-ttl" @click="ttlTarget = value.key; ttlValue = ttlOfSelected">TTL</Button>
           </div>
 
-          <div v-if="renameTarget" class="inline-edit">
-            <input v-model="renameValue" class="input" data-test="input-rename" spellcheck="false" />
-            <button class="btn primary small" type="button" data-test="btn-rename-ok" @click="doRename">确定</button>
-            <button class="btn ghost small" type="button" @click="renameTarget = null">取消</button>
+          <div v-if="renameTarget" class="my-2 flex items-center gap-2">
+            <Input
+              :value="renameValue"
+              class="h-8 font-mono text-[13px]"
+              data-test="input-rename"
+              spellcheck="false"
+              @input="renameValue = ($event.target as HTMLInputElement).value"
+            />
+            <Button size="sm" class="h-8" data-test="btn-rename-ok" @click="doRename">确定</Button>
+            <Button variant="outline" size="sm" class="h-8" @click="renameTarget = null">取消</Button>
           </div>
-          <div v-if="ttlTarget" class="inline-edit">
-            <input v-model.number="ttlValue" class="input" type="number" data-test="input-ttl" placeholder="秒(0 = 永久)" />
-            <button class="btn primary small" type="button" data-test="btn-ttl-ok" @click="doSetTTL">确定</button>
-            <button class="btn ghost small" type="button" @click="ttlTarget = null">取消</button>
+          <div v-if="ttlTarget" class="my-2 flex items-center gap-2">
+            <Input
+              :value="ttlValue ?? ''"
+              type="number"
+              class="h-8 text-[13px]"
+              data-test="input-ttl"
+              placeholder="秒(0 = 永久)"
+              @input="ttlValue = ($event.target as HTMLInputElement).value === '' ? null : Number(($event.target as HTMLInputElement).value)"
+            />
+            <Button size="sm" class="h-8" data-test="btn-ttl-ok" @click="doSetTTL">确定</Button>
+            <Button variant="outline" size="sm" class="h-8" @click="ttlTarget = null">取消</Button>
           </div>
 
+          <!-- string:JSON 格式化只读视图或可编辑 textarea -->
           <template v-if="value.type === 'string'">
-            <div v-if="value.truncated" class="msg warn">
+            <div v-if="value.truncated" class="my-2 flex items-center gap-2 rounded-md bg-warning/15 px-2.5 py-2 text-[13px] text-warning">
               值过大已截断(共 {{ value.size_bytes }} 字节)。
-              <button class="btn ghost small" type="button" data-test="btn-load-full" @click="loadFullString">加载完整</button>
+              <Button variant="ghost" size="sm" class="h-7" data-test="btn-load-full" @click="loadFullString">加载完整</Button>
             </div>
-            <div class="string-editor" data-test="redis-string-editor">
+            <div class="flex flex-col items-end gap-2" data-test="redis-string-editor">
               <template v-if="prettyString !== null">
-                <div class="string-toolbar">
-                  <span class="toolbar-hint">JSON 已格式化(只读)</span>
-                  <button class="btn ghost small" type="button" data-test="btn-string-copy" @click="copyStringRaw">复制原始值</button>
-                  <button class="btn primary small" type="button" data-test="btn-string-edit" @click="startStringEdit">编辑</button>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-muted-foreground">JSON 已格式化(只读)</span>
+                  <Button variant="outline" size="sm" class="h-7" data-test="btn-string-copy" @click="copyStringRaw">复制原始值</Button>
+                  <Button size="sm" class="h-7" data-test="btn-string-edit" @click="startStringEdit">编辑</Button>
                 </div>
-                <pre class="json-view mono" data-test="redis-string-pretty">{{ prettyString }}</pre>
+                <pre
+                  class="wrap-anywhere max-h-[50vh] w-full overflow-auto rounded-md border border-border bg-muted/50 p-2.5 text-xs leading-relaxed whitespace-pre-wrap text-foreground"
+                  data-test="redis-string-pretty"
+                >{{ prettyString }}</pre>
               </template>
               <template v-else>
-                <textarea v-model="editedString" class="input textarea mono" rows="12" spellcheck="false"></textarea>
-                <button class="btn primary small" type="button" data-test="btn-string-save" @click="doSaveString">保存</button>
+                <textarea
+                  v-model="editedString"
+                  class="w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30"
+                  rows="12"
+                  spellcheck="false"
+                ></textarea>
+                <Button size="sm" class="h-7" data-test="btn-string-save" @click="doSaveString">保存</Button>
               </template>
             </div>
           </template>
+
+          <!-- hash:固定列宽 KV 表,JSON 字段值格式化展示 -->
           <template v-else-if="value.type === 'hash'">
-            <table class="table data-table kv-table">
-              <thead><tr><th class="field-col">Field</th><th>Value</th><th class="actions-col"></th></tr></thead>
+            <table class="w-full table-fixed wrap-anywhere text-[13px]">
+              <thead>
+                <tr>
+                  <th class="w-[170px] border-b border-border px-2.5 py-1.5 text-left text-xs font-semibold text-muted-foreground">Field</th>
+                  <th class="border-b border-border px-2.5 py-1.5 text-left text-xs font-semibold text-muted-foreground">Value</th>
+                  <th class="w-[118px] border-b border-border"></th>
+                </tr>
+              </thead>
               <tbody>
-                <tr v-for="(f, i) in value.hash" :key="f.field" data-test="redis-hash-row">
-                  <td class="mono field-cell">{{ f.field }}</td>
-                  <td class="value-cell mono">
+                <tr v-for="(f, i) in value.hash" :key="f.field" class="border-b border-border align-top hover:bg-muted/60" data-test="redis-hash-row">
+                  <td class="break-all px-2.5 py-1.5 font-mono">{{ f.field }}</td>
+                  <td class="px-2.5 py-1.5 font-mono">
                     <textarea
                       v-if="hashEditField === f.field"
                       v-model="hashEditValue"
-                      class="input mono edit-area"
+                      class="min-h-[90px] w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30"
                       rows="4"
                       data-test="input-hash-edit-value"
                       autocapitalize="off"
                       autocomplete="off"
                       spellcheck="false"
                     ></textarea>
-                    <template v-else-if="hashPretty(f.value)">
-                      <pre class="json-view mono" data-test="redis-hash-pretty">{{ hashPretty(f.value) }}</pre>
-                    </template>
-                    <template v-else><span class="val-text">{{ f.value }}</span></template>
+                    <pre
+                      v-else-if="hashPretty(f.value)"
+                      class="wrap-anywhere max-h-[50vh] w-full overflow-auto rounded-md border border-border bg-muted/50 p-2.5 text-xs leading-relaxed whitespace-pre-wrap text-foreground"
+                      data-test="redis-hash-pretty"
+                    >{{ hashPretty(f.value) }}</pre>
+                    <span v-else class="whitespace-pre-wrap">{{ f.value }}</span>
                   </td>
-                  <td class="row-actions">
-                    <template v-if="hashEditField === f.field">
-                      <button class="btn primary small" type="button" data-test="btn-hash-edit-ok" @click="doHashSetField">确定</button>
-                      <button class="btn ghost small" type="button" @click="hashEditField = null">取消</button>
-                    </template>
-                    <template v-else>
-                      <button class="btn ghost small" type="button" :data-test="`redis-hash-edit-${i}`" @click="hashEditField = f.field; hashEditValue = f.value">编辑</button>
-                      <button class="btn ghost small danger" type="button" :data-test="`redis-hash-del-${i}`" @click="doHashDeleteField(f.field)">删除</button>
-                    </template>
+                  <td class="px-2 py-1.5">
+                    <div class="flex justify-end gap-1.5 whitespace-nowrap">
+                      <template v-if="hashEditField === f.field">
+                        <Button size="sm" class="h-6 px-2 text-xs" data-test="btn-hash-edit-ok" @click="doHashSetField">确定</Button>
+                        <Button variant="outline" size="sm" class="h-6 px-2 text-xs" @click="hashEditField = null">取消</Button>
+                      </template>
+                      <template v-else>
+                        <Button variant="outline" size="sm" class="h-6 px-2 text-xs" :data-test="`redis-hash-edit-${i}`" @click="hashEditField = f.field; hashEditValue = f.value">编辑</Button>
+                        <Button variant="ghost" size="sm" class="h-6 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive" :data-test="`redis-hash-del-${i}`" @click="doHashDeleteField(f.field)">删除</Button>
+                      </template>
+                    </div>
                   </td>
                 </tr>
               </tbody>
             </table>
-            <div class="add-row">
-              <input v-model="hashAddFieldName" class="input mono" data-test="input-hash-add-field" placeholder="field" autocapitalize="off" autocomplete="off" spellcheck="false" @keydown.enter="doHashAddField" />
-              <input v-model="hashAddFieldValue" class="input mono" data-test="input-hash-add-value" placeholder="value" autocapitalize="off" autocomplete="off" spellcheck="false" @keydown.enter="doHashAddField" />
-              <button class="btn primary small" type="button" data-test="redis-hash-add-field" @click="doHashAddField">添加字段</button>
+            <div class="mt-2.5 flex flex-wrap items-center gap-2">
+              <Input
+                :value="hashAddFieldName"
+                class="h-8 min-w-[120px] flex-1 font-mono text-[13px]"
+                data-test="input-hash-add-field"
+                placeholder="field"
+                autocapitalize="off"
+                autocomplete="off"
+                spellcheck="false"
+                @input="hashAddFieldName = ($event.target as HTMLInputElement).value"
+                @keydown.enter="doHashAddField"
+              />
+              <Input
+                :value="hashAddFieldValue"
+                class="h-8 min-w-[120px] flex-1 font-mono text-[13px]"
+                data-test="input-hash-add-value"
+                placeholder="value"
+                autocapitalize="off"
+                autocomplete="off"
+                spellcheck="false"
+                @input="hashAddFieldValue = ($event.target as HTMLInputElement).value"
+                @keydown.enter="doHashAddField"
+              />
+              <Button size="sm" class="h-8" data-test="redis-hash-add-field" @click="doHashAddField">添加字段</Button>
             </div>
           </template>
+
+          <!-- list:索引行内编辑 + 头/尾追加 -->
           <template v-else-if="value.type === 'list'">
-            <ul class="coll" data-test="redis-list">
-              <li v-for="(item, i) in value.list" :key="i" class="coll-row" :class="{ editing: listEditIdx === i }">
+            <ul class="m-0 list-none p-0 text-[13px]" data-test="redis-list">
+              <li
+                v-for="(item, i) in value.list"
+                :key="i"
+                class="flex gap-2 break-all border-b border-border px-1.5 py-1"
+                :class="listEditIdx === i ? 'flex-wrap items-start' : 'flex-nowrap items-center'"
+              >
                 <template v-if="listEditIdx === i">
-                  <span class="idx mono">{{ i }}</span>
+                  <span class="w-6 shrink-0 text-right font-mono text-xs tabular-nums text-muted-foreground/70">{{ i }}</span>
                   <!-- 与值显示区同宽的多行编辑器:长日志/JSON 也能完整查看与修改 -->
                   <textarea
                     v-model="listEditValue"
-                    class="input mono edit-area"
+                    class="min-h-[120px] w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30"
                     rows="6"
                     data-test="input-list-edit-value"
                     autocapitalize="off"
                     autocomplete="off"
                     spellcheck="false"
                   ></textarea>
-                  <div class="edit-actions">
-                    <button class="btn primary small" type="button" data-test="btn-list-edit-ok" @click="doListSetIndex">确定</button>
-                    <button class="btn ghost small" type="button" @click="listEditIdx = null">取消</button>
+                  <div class="flex w-full justify-end gap-2">
+                    <Button size="sm" class="h-7" data-test="btn-list-edit-ok" @click="doListSetIndex">确定</Button>
+                    <Button variant="outline" size="sm" class="h-7" @click="listEditIdx = null">取消</Button>
                   </div>
                 </template>
                 <template v-else>
-                  <span class="idx mono">{{ i }}</span>
-                  <span class="mono grow coll-value">{{ item }}</span>
-                  <button class="btn ghost small" type="button" :data-test="`redis-list-edit-${i}`" @click="listEditIdx = i; listEditValue = item">编辑</button>
-                  <button class="btn ghost small danger" type="button" :data-test="`redis-list-del-${i}`" @click="doListDeleteIndex(i)">删除</button>
+                  <span class="w-6 shrink-0 text-right font-mono text-xs tabular-nums text-muted-foreground/70">{{ i }}</span>
+                  <span class="min-w-0 whitespace-pre-wrap break-all font-mono grow">{{ item }}</span>
+                  <Button variant="outline" size="sm" class="h-6 px-2 text-xs" :data-test="`redis-list-edit-${i}`" @click="listEditIdx = i; listEditValue = item">编辑</Button>
+                  <Button variant="ghost" size="sm" class="h-6 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive" :data-test="`redis-list-del-${i}`" @click="doListDeleteIndex(i)">删除</Button>
                 </template>
               </li>
             </ul>
-            <div class="add-row">
-              <input v-model="listAddValue" class="input mono" data-test="input-list-add-value" placeholder="追加元素" autocapitalize="off" autocomplete="off" spellcheck="false" @keydown.enter="doListPush" />
-              <label class="check"><input v-model="listAddAtHead" type="checkbox" data-test="input-list-add-at-head" /> 插到头部</label>
-              <button class="btn primary small" type="button" data-test="redis-list-add-value" @click="doListPush">追加元素</button>
+            <div class="mt-2.5 flex flex-wrap items-center gap-2">
+              <Input
+                :value="listAddValue"
+                class="h-8 min-w-[120px] flex-1 font-mono text-[13px]"
+                data-test="input-list-add-value"
+                placeholder="追加元素"
+                autocapitalize="off"
+                autocomplete="off"
+                spellcheck="false"
+                @input="listAddValue = ($event.target as HTMLInputElement).value"
+                @keydown.enter="doListPush"
+              />
+              <label class="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                <input v-model="listAddAtHead" type="checkbox" class="size-3.5 accent-primary" data-test="input-list-add-at-head" />
+                插到头部
+              </label>
+              <Button size="sm" class="h-8" data-test="redis-list-add-value" @click="doListPush">追加元素</Button>
             </div>
           </template>
+
+          <!-- set:成员列表 + 添加 -->
           <template v-else-if="value.type === 'set'">
-            <ul class="coll" data-test="redis-set">
-              <li v-for="(item, i) in value.set" :key="item" class="coll-row">
-                <span class="mono grow">{{ item }}</span>
-                <button class="btn ghost small danger" type="button" :data-test="`redis-set-del-${i}`" @click="doSetRemove(item)">删除</button>
+            <ul class="m-0 list-none p-0 text-[13px]" data-test="redis-set">
+              <li v-for="(item, i) in value.set" :key="item" class="flex flex-nowrap items-center gap-2 break-all border-b border-border px-1.5 py-1">
+                <span class="min-w-0 font-mono grow">{{ item }}</span>
+                <Button variant="ghost" size="sm" class="h-6 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive" :data-test="`redis-set-del-${i}`" @click="doSetRemove(item)">删除</Button>
               </li>
             </ul>
-            <div class="add-row">
-              <input v-model="setAddMember" class="input mono" data-test="input-set-add-member" placeholder="添加成员" autocapitalize="off" autocomplete="off" spellcheck="false" @keydown.enter="doSetAdd" />
-              <button class="btn primary small" type="button" data-test="redis-set-add-member" @click="doSetAdd">添加成员</button>
+            <div class="mt-2.5 flex flex-wrap items-center gap-2">
+              <Input
+                :value="setAddMember"
+                class="h-8 min-w-[120px] flex-1 font-mono text-[13px]"
+                data-test="input-set-add-member"
+                placeholder="添加成员"
+                autocapitalize="off"
+                autocomplete="off"
+                spellcheck="false"
+                @input="setAddMember = ($event.target as HTMLInputElement).value"
+                @keydown.enter="doSetAdd"
+              />
+              <Button size="sm" class="h-8" data-test="redis-set-add-member" @click="doSetAdd">添加成员</Button>
             </div>
           </template>
+
+          <!-- zset:Score/Member KV 表 + 添加 -->
           <template v-else-if="value.type === 'zset'">
-            <table class="table data-table kv-table">
-              <thead><tr><th class="score-col">Score</th><th>Member</th><th class="actions-col"></th></tr></thead>
+            <table class="w-full table-fixed wrap-anywhere text-[13px]">
+              <thead>
+                <tr>
+                  <th class="w-[110px] border-b border-border px-2.5 py-1.5 text-left text-xs font-semibold text-muted-foreground">Score</th>
+                  <th class="border-b border-border px-2.5 py-1.5 text-left text-xs font-semibold text-muted-foreground">Member</th>
+                  <th class="w-[118px] border-b border-border"></th>
+                </tr>
+              </thead>
               <tbody>
-                <tr v-for="(z, i) in value.zset" :key="z.member" data-test="redis-zset-row">
-                  <td class="mono">
-                    <input v-if="zsetEditIdx === i" v-model.number="zsetEditScore" class="input mono" type="number" step="any" data-test="input-zset-edit-score" />
+                <tr v-for="(z, i) in value.zset" :key="z.member" class="border-b border-border align-top hover:bg-muted/60" data-test="redis-zset-row">
+                  <td class="px-2.5 py-1.5 font-mono tabular-nums">
+                    <Input
+                      v-if="zsetEditIdx === i"
+                      :value="zsetEditScore"
+                      type="number"
+                      step="any"
+                      class="h-7 font-mono text-[13px]"
+                      data-test="input-zset-edit-score"
+                      @input="zsetEditScore = ($event.target as HTMLInputElement).value === '' ? 0 : Number(($event.target as HTMLInputElement).value)"
+                    />
                     <template v-else>{{ z.score }}</template>
                   </td>
-                  <td class="mono">
-                    <input v-if="zsetEditIdx === i" v-model="zsetEditMember" class="input mono" data-test="input-zset-edit-member" autocapitalize="off" autocomplete="off" spellcheck="false" @keydown.enter="doZSetEdit" />
+                  <td class="px-2.5 py-1.5 font-mono">
+                    <Input
+                      v-if="zsetEditIdx === i"
+                      :value="zsetEditMember"
+                      class="h-7 font-mono text-[13px]"
+                      data-test="input-zset-edit-member"
+                      autocapitalize="off"
+                      autocomplete="off"
+                      spellcheck="false"
+                      @input="zsetEditMember = ($event.target as HTMLInputElement).value"
+                      @keydown.enter="doZSetEdit"
+                    />
                     <template v-else>{{ z.member }}</template>
                   </td>
-                  <td class="row-actions">
-                    <template v-if="zsetEditIdx === i">
-                      <button class="btn primary small" type="button" data-test="btn-zset-edit-ok" @click="doZSetEdit">确定</button>
-                      <button class="btn ghost small" type="button" @click="zsetEditIdx = null">取消</button>
-                    </template>
-                    <template v-else>
-                      <button class="btn ghost small" type="button" :data-test="`redis-zset-edit-${i}`" @click="zsetEditIdx = i; zsetEditMember = z.member; zsetEditScore = z.score">编辑</button>
-                      <button class="btn ghost small danger" type="button" :data-test="`redis-zset-del-${i}`" @click="doZSetRemove(z.member)">删除</button>
-                    </template>
+                  <td class="px-2 py-1.5">
+                    <div class="flex justify-end gap-1.5 whitespace-nowrap">
+                      <template v-if="zsetEditIdx === i">
+                        <Button size="sm" class="h-6 px-2 text-xs" data-test="btn-zset-edit-ok" @click="doZSetEdit">确定</Button>
+                        <Button variant="outline" size="sm" class="h-6 px-2 text-xs" @click="zsetEditIdx = null">取消</Button>
+                      </template>
+                      <template v-else>
+                        <Button variant="outline" size="sm" class="h-6 px-2 text-xs" :data-test="`redis-zset-edit-${i}`" @click="zsetEditIdx = i; zsetEditMember = z.member; zsetEditScore = z.score">编辑</Button>
+                        <Button variant="ghost" size="sm" class="h-6 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive" :data-test="`redis-zset-del-${i}`" @click="doZSetRemove(z.member)">删除</Button>
+                      </template>
+                    </div>
                   </td>
                 </tr>
               </tbody>
             </table>
-            <div class="add-row">
-              <input v-model="zsetAddMember" class="input mono" data-test="input-zset-add-member" placeholder="member" autocapitalize="off" autocomplete="off" spellcheck="false" @keydown.enter="doZSetAdd" />
-              <input v-model.number="zsetAddScore" class="input mono" type="number" step="any" data-test="input-zset-add-score" placeholder="score" @keydown.enter="doZSetAdd" />
-              <button class="btn primary small" type="button" data-test="redis-zset-add-member" @click="doZSetAdd">添加成员</button>
+            <div class="mt-2.5 flex flex-wrap items-center gap-2">
+              <Input
+                :value="zsetAddMember"
+                class="h-8 min-w-[120px] flex-1 font-mono text-[13px]"
+                data-test="input-zset-add-member"
+                placeholder="member"
+                autocapitalize="off"
+                autocomplete="off"
+                spellcheck="false"
+                @input="zsetAddMember = ($event.target as HTMLInputElement).value"
+                @keydown.enter="doZSetAdd"
+              />
+              <Input
+                :value="zsetAddScore"
+                type="number"
+                step="any"
+                class="h-8 w-[110px] font-mono text-[13px]"
+                data-test="input-zset-add-score"
+                placeholder="score"
+                @input="zsetAddScore = ($event.target as HTMLInputElement).value === '' ? 0 : Number(($event.target as HTMLInputElement).value)"
+                @keydown.enter="doZSetAdd"
+              />
+              <Button size="sm" class="h-8" data-test="redis-zset-add-member" @click="doZSetAdd">添加成员</Button>
             </div>
           </template>
         </template>
@@ -659,112 +825,3 @@ const ttlOfSelected = computed(() => value.value?.ttl_seconds ?? -1)
     />
   </div>
 </template>
-
-<style scoped>
-.redis-keys { padding: 16px; color: var(--text); font-family: var(--font); }
-.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.title { font-weight: 600; font-size: 14px; }
-.db-badge {
-  background: var(--accent-soft); color: var(--accent);
-  border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 600;
-}
-.spacer { flex: 1; }
-.search-input {
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 6px 9px; font-size: 13px; width: 220px;
-}
-.search-input:focus { outline: none; border-color: var(--accent); }
-.summary {
-  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
-  margin-top: 10px; padding: 8px 12px;
-  background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 8px;
-  font-size: 12px; color: var(--text-secondary);
-}
-.sep { color: var(--text-tertiary); }
-.columns { display: grid; grid-template-columns: 300px 1fr; gap: 12px; margin-top: 12px; }
-.keys-col { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg-elevated); }
-.keys-head {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 6px 10px; font-size: 12px; color: var(--text-secondary);
-  border-bottom: 1px solid var(--border); background: var(--bg-subtle);
-}
-.key-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 10px; cursor: pointer; font-size: 13px;
-  border-bottom: 1px solid var(--border);
-}
-.key-row:hover { background: var(--bg-hover); }
-.key-row.selected { background: var(--accent-soft); }
-.key-type {
-  flex: none; font-size: 10px; text-transform: uppercase;
-  background: var(--bg-hover); border-radius: 4px; padding: 1px 5px;
-  color: var(--text-secondary);
-}
-.key-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
-.key-ttl { flex: none; font-size: 11px; color: var(--text-tertiary); }
-.key-size { flex: none; font-size: 11px; color: var(--text-secondary); font-family: var(--mono); }
-.value-col {
-  border: 1px solid var(--border); border-radius: 8px;
-  background: var(--bg-elevated); padding: 10px 12px; min-height: 200px;
-}
-.value-head {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border);
-}
-.value-key { font-size: 14px; font-weight: 600; word-break: break-all; }
-.ttl { color: var(--text-secondary); font-size: 12px; }
-.inline-edit { display: flex; gap: 8px; margin: 8px 0; }
-.string-editor { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
-.string-toolbar { display: flex; gap: 8px; align-items: center; align-self: flex-end; }
-/* JSON 格式化只读视图:等宽、可滚动,底色与输入框同族但不可编辑。 */
-.json-view {
-  width: 100%; box-sizing: border-box; max-height: 50vh; overflow: auto;
-  margin: 0; padding: 10px 12px; font-size: 12px; line-height: 1.6;
-  background: var(--bg-subtle); border: 1px solid var(--border);
-  border-radius: 8px; color: var(--text);
-  /* pre-wrap + anywhere:长 token 行折行铺平,绝不出现横向滚动条 */
-  white-space: pre-wrap; overflow-wrap: anywhere;
-}
-/* KV 表(hash/zset):固定列宽——长 token 值(如无空格 JSON)在自动布局下
-   会把值列撑爆、把 Field 列挤成竖排单字符;fixed + anywhere 双保险。 */
-.kv-table { table-layout: fixed; width: 100%; }
-.kv-table .field-col { width: 170px; }
-.kv-table .score-col { width: 110px; }
-.kv-table .actions-col { width: 118px; }
-.kv-table th, .kv-table td { overflow-wrap: anywhere; vertical-align: top; }
-/* 操作列按钮顶对齐贴齐 JSON 块上缘(td 上的 flex 会让 vertical-align 失效)。 */
-.kv-table .row-actions { align-items: flex-start; }
-.value-cell { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
-.val-text { white-space: pre-wrap; }
-.input {
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 6px 9px; font-size: 13px;
-}
-.input:focus { outline: none; border-color: var(--accent); }
-.textarea { width: 100%; box-sizing: border-box; resize: vertical; }
-.mono { font-family: var(--mono); }
-/* 表基座走全局 .data-table;这里留紧凑 padding 差异。 */
-.table th { padding: 6px 10px; }
-.table td { padding: 5px 10px; word-break: break-all; }
-.coll { list-style: none; margin: 0; padding: 0; font-size: 13px; }
-.coll li { padding: 4px 6px; border-bottom: 1px solid var(--border); word-break: break-all; }
-.coll-row { display: flex; align-items: center; gap: 8px; }
-.coll-row .idx { flex: none; min-width: 24px; text-align: right; color: var(--text-tertiary); }
-.grow { flex: 1; min-width: 0; word-break: break-all; }
-.row-actions { display: flex; gap: 6px; justify-content: flex-end; white-space: nowrap; }
-.add-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
-.add-row .input { flex: 1; min-width: 120px; }
-.check { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
-.empty { text-align: center; color: var(--text-tertiary); padding: 20px; font-size: 13px; }
-.coll-row { flex-wrap: nowrap; }
-.coll-row.editing { flex-wrap: wrap; }
-.coll-row.editing .edit-area { width: 100%; min-height: 120px; resize: vertical; }
-.coll-row.editing .edit-actions { display: flex; gap: 8px; width: 100%; justify-content: flex-end; }
-.coll-value { white-space: pre-wrap; word-break: break-all; }
-td .edit-area { width: 100%; min-height: 90px; resize: vertical; }
-.msg { padding: 8px 10px; font-size: 13px; border-radius: 7px; margin: 8px 0; }
-.msg.err { background: var(--danger-soft); color: var(--danger); }
-.msg.warn { background: var(--warn-soft); color: var(--warn); display: flex; gap: 8px; align-items: center; }
-/* 基座走全局 .btn;键值编辑小按钮更紧凑(局部修饰)。红边删除按钮走全局 ghost.danger。 */
-.btn.small { padding: 3px 9px; }
-</style>

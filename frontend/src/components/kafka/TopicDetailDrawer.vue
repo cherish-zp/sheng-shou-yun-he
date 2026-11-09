@@ -3,6 +3,8 @@ import { ref, watch } from 'vue'
 import { getApi } from '@/api/client'
 import type { TopicDetail, TopicMessageCounts } from '@/api/types'
 import { formatCount } from '@/utils/format'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 
 const props = defineProps<{ connectionId: string; topic: string | null; show: boolean; edit?: boolean }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -24,6 +26,16 @@ const pendingEdit = ref(false)
 // counts holds the offset-derived message stats for the open topic (retained
 // within retention + total ever produced); null renders nothing.
 const counts = ref<TopicMessageCounts | null>(null)
+
+// ui Input 以 :value/@input 接线(不透传 v-model);spec 的 setInput 以原生
+// input 事件驱动,事件目标即真实 input 元素。
+function onDraftInput(key: string, e: Event): void {
+  drafts.value[key] = (e.target as HTMLInputElement).value
+}
+
+// 表格基座 token 类:卡片化容器 + 粘性表头差异全部并入工具类。
+const TH_CLS = 'border-b border-border bg-muted/50 px-3 py-2 text-left text-xs font-medium text-muted-foreground'
+const TD_CLS = 'px-3 py-1.5'
 
 async function loadCounts(): Promise<void> {
   if (!props.connectionId || !props.topic) return
@@ -139,168 +151,113 @@ function listText(nums: number[]): string {
     <!-- Teleported: the sidebar's backdrop-filter would otherwise become the
          containing block for position:fixed and pin the drawer to the sidebar
          edge instead of the window's right side. -->
-    <div v-if="show && topic" class="drawer" data-test="topic-detail-drawer">
-    <div class="drawer-header">
-      <span class="drawer-title">Topic 详情 <span class="drawer-topic">{{ topic }}</span></span>
-      <button class="drawer-close" data-test="drawer-close" type="button" @click="emit('close')">✕</button>
+    <div v-if="show && topic" class="fixed inset-y-0 right-0 z-[1000] flex w-96 flex-col border-l border-border bg-background text-foreground shadow-lg" data-test="topic-detail-drawer">
+    <div class="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+      <span class="min-w-0 truncate text-[15px] font-semibold">Topic 详情 <span class="ml-1 font-mono text-[13px] text-muted-foreground">{{ topic }}</span></span>
+      <Button variant="ghost" size="sm" class="h-7 w-7 flex-none p-0 text-muted-foreground" data-test="drawer-close" type="button" @click="emit('close')">✕</Button>
     </div>
-    <div class="drawer-body">
-      <div v-if="loading" class="state" data-test="detail-loading">加载中…</div>
-      <div v-else-if="error" class="state err" data-test="detail-error">{{ error }}</div>
+    <div class="overflow-auto p-4">
+      <div v-if="loading" class="text-[13px] text-muted-foreground" data-test="detail-loading">加载中…</div>
+      <div v-else-if="error" class="text-[13px] text-destructive" data-test="detail-error">{{ error }}</div>
       <template v-else-if="detail">
-        <div v-if="counts" class="stats" data-test="drawer-stats">
-          <span class="stat"><span class="stat-num" data-test="stat-retained">{{ formatCount(counts.retained) }}</span> 保留期内</span>
-          <span class="stat-sep">·</span>
-          <span class="stat"><span class="stat-num" data-test="stat-total">{{ formatCount(counts.total) }}</span> 累计生产</span>
-          <span class="stat-sep">·</span>
-          <span class="stat"><span class="stat-num">{{ detail.partitions.length }}</span> 分区</span>
+        <div v-if="counts" class="mb-1 flex flex-wrap items-baseline gap-2 rounded-lg border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground" data-test="drawer-stats">
+          <span><span class="font-mono text-[13px] font-semibold tabular-nums text-foreground" data-test="stat-retained">{{ formatCount(counts.retained) }}</span> 保留期内</span>
+          <span class="text-muted-foreground/60">·</span>
+          <span><span class="font-mono text-[13px] font-semibold tabular-nums text-foreground" data-test="stat-total">{{ formatCount(counts.total) }}</span> 累计生产</span>
+          <span class="text-muted-foreground/60">·</span>
+          <span><span class="font-mono text-[13px] font-semibold tabular-nums text-foreground">{{ detail.partitions.length }}</span> 分区</span>
         </div>
-        <h3 class="section-title">分区拓扑</h3>
-        <table class="table data-table" data-test="topo-table">
-          <thead>
-            <tr>
-              <th>分区</th>
-              <th>Leader</th>
-              <th>Replicas</th>
-              <th>ISR</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="p in detail.partitions" :key="p.id" data-test="topo-row">
-              <td class="mono" data-test="row-partition">{{ p.id }}</td>
-              <td class="mono" data-test="row-leader">{{ p.leader }}</td>
-              <td class="mono" data-test="row-replicas">{{ listText(p.replicas) }}</td>
-              <td class="mono" data-test="row-isr">{{ listText(p.isr) }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <h3 class="mb-2 mt-3.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground first:mt-0">分区拓扑</h3>
+        <div class="overflow-hidden rounded-lg border border-border bg-card">
+          <table class="w-full border-collapse text-[13px]" data-test="topo-table">
+            <thead>
+              <tr>
+                <th :class="TH_CLS">分区</th>
+                <th :class="TH_CLS">Leader</th>
+                <th :class="TH_CLS">Replicas</th>
+                <th :class="TH_CLS">ISR</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="p in detail.partitions" :key="p.id" class="border-b border-border last:border-b-0" data-test="topo-row">
+                <td class="font-mono tabular-nums" :class="TD_CLS" data-test="row-partition">{{ p.id }}</td>
+                <td class="font-mono tabular-nums" :class="TD_CLS" data-test="row-leader">{{ p.leader }}</td>
+                <td class="font-mono tabular-nums" :class="TD_CLS" data-test="row-replicas">{{ listText(p.replicas) }}</td>
+                <td class="font-mono tabular-nums" :class="TD_CLS" data-test="row-isr">{{ listText(p.isr) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
-        <div class="cfg-head">
-          <h3 class="section-title">关键配置</h3>
-          <button
+        <div class="mt-3.5 flex items-center justify-between">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">关键配置</h3>
+          <Button
             v-if="detail.configs.length > 0 && !editing"
-            class="btn ghost small"
+            variant="ghost"
+            size="sm"
+            class="text-xs"
             type="button"
             data-test="cfg-edit"
             @click="startEdit"
           >
             编辑
-          </button>
+          </Button>
         </div>
         <template v-if="editing">
-          <table class="table data-table" data-test="cfg-table">
-            <thead>
-              <tr>
-                <th>配置项</th>
-                <th>值</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="c in detail.configs" :key="c.key" data-test="cfg-row">
-                <td class="mono" data-test="cfg-key">{{ c.key }}</td>
-                <td>
-                  <input v-model="drafts[c.key]" class="cfg-input" data-test="cfg-input" />
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <div v-if="cfgError" class="state err cfg-error" data-test="cfg-error">{{ cfgError }}</div>
-          <div class="cfg-actions">
-            <button class="btn ghost small" type="button" data-test="cfg-cancel" :disabled="saving" @click="cancelEdit">
+          <div class="mt-2 overflow-hidden rounded-lg border border-border bg-card">
+            <table class="w-full border-collapse text-[13px]" data-test="cfg-table">
+              <thead>
+                <tr>
+                  <th :class="TH_CLS">配置项</th>
+                  <th :class="TH_CLS">值</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="c in detail.configs" :key="c.key" class="border-b border-border last:border-b-0" data-test="cfg-row">
+                  <td class="font-mono" :class="TD_CLS" data-test="cfg-key">{{ c.key }}</td>
+                  <td :class="TD_CLS">
+                    <Input
+                      :value="drafts[c.key]"
+                      class="h-8 w-full font-mono text-[13px]"
+                      data-test="cfg-input"
+                      @input="onDraftInput(c.key, $event)"
+                    />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-if="cfgError" class="mt-2.5 rounded-md bg-destructive/10 px-2.5 py-1.5 text-[13px] text-destructive" data-test="cfg-error">{{ cfgError }}</div>
+          <div class="mt-2.5 flex justify-end gap-2">
+            <Button variant="ghost" size="sm" class="text-xs" type="button" data-test="cfg-cancel" :disabled="saving" @click="cancelEdit">
               取消
-            </button>
-            <button class="btn primary small" type="button" data-test="cfg-save" :disabled="saving" @click="save">
+            </Button>
+            <Button variant="default" size="sm" class="text-xs" type="button" data-test="cfg-save" :disabled="saving" @click="save">
               {{ saving ? '保存中…' : '保存' }}
-            </button>
+            </Button>
           </div>
         </template>
         <template v-else>
-          <table v-if="detail.configs.length" class="table data-table" data-test="cfg-table">
-            <thead>
-              <tr>
-                <th>配置项</th>
-                <th>值</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="c in detail.configs" :key="c.key" data-test="cfg-row">
-                <td class="mono" data-test="cfg-key">{{ c.key }}</td>
-                <td class="mono" data-test="cfg-value">{{ c.value }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <div v-else class="state" data-test="config-empty">（无配置）</div>
+          <div v-if="detail.configs.length" class="mt-2 overflow-hidden rounded-lg border border-border bg-card">
+            <table class="w-full border-collapse text-[13px]" data-test="cfg-table">
+              <thead>
+                <tr>
+                  <th :class="TH_CLS">配置项</th>
+                  <th :class="TH_CLS">值</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="c in detail.configs" :key="c.key" class="border-b border-border last:border-b-0" data-test="cfg-row">
+                  <td class="font-mono" :class="TD_CLS" data-test="cfg-key">{{ c.key }}</td>
+                  <td class="font-mono" :class="TD_CLS" data-test="cfg-value">{{ c.value }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-else class="text-[13px] text-muted-foreground" data-test="config-empty">（无配置）</div>
         </template>
       </template>
     </div>
     </div>
   </Teleport>
 </template>
-
-<style scoped>
-.drawer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 460px;
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
-  border-left: 1px solid var(--border);
-  box-shadow: var(--glass-shadow);
-  z-index: 1000;
-  display: flex;
-  flex-direction: column;
-  color: var(--text);
-  font-family: var(--font);
-}
-.drawer-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border);
-}
-.drawer-title { font-weight: 600; font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.drawer-topic { font-family: var(--mono); font-size: 13px; color: var(--text-secondary); margin-left: 4px; }
-.drawer-close { background: none; border: none; color: var(--text-tertiary); font-size: 16px; cursor: pointer; border-radius: 5px; padding: 1px 6px; flex: none; }
-.drawer-close:hover { background: var(--bg-hover); color: var(--text); }
-.drawer-body { padding: 16px 18px; overflow: auto; }
-.stats {
-  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-  padding: 9px 12px; margin-bottom: 4px;
-  background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 9px;
-  font-size: 12px; color: var(--text-secondary);
-}
-.stat-num { font-family: var(--mono); font-weight: 600; color: var(--text); font-size: 13px; }
-.stat-sep { color: var(--text-tertiary); }
-.cfg-head { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; }
-.cfg-head .section-title { margin-top: 0; }
-.section-title {
-  font-size: 12px; font-weight: 600; color: var(--text-secondary);
-  text-transform: uppercase; letter-spacing: 0.04em; margin: 14px 0 8px;
-}
-.section-title:first-child { margin-top: 0; }
-/* 表基座走全局 .data-table;这里留卡片化容器与紧凑 padding 差异。 */
-.table {
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: var(--radius-md); overflow: hidden;
-}
-.table th { padding: 7px 12px; }
-.table td { padding: 5px 12px; }
-.mono { font-family: var(--mono); }
-.cfg-input {
-  width: 100%; box-sizing: border-box;
-  background: var(--bg-subtle); border: 1px solid var(--border);
-  border-radius: 6px; color: var(--text);
-  padding: 4px 8px; font-size: 13px; font-family: var(--mono);
-  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
-}
-.cfg-input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: var(--focus-ring); }
-.cfg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
-.cfg-error { margin-top: 10px; }
-.state { color: var(--text-secondary); font-size: 13px; padding: 4px 0; }
-.state.err { color: var(--danger); }
-.btn { padding: 7px 14px; }
-</style>

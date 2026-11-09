@@ -4,6 +4,8 @@ import { getApi } from '@/api/client'
 import type { EsClusterStats } from '@/api/types'
 import { useTabsStore } from '@/store/tabs'
 import { formatBytes } from '@/utils/bytes'
+import { Button } from '@/components/ui/button'
+import { RefreshCw } from 'lucide-vue-next'
 
 const props = defineProps<{ connectionId: string }>()
 const tabs = useTabsStore()
@@ -80,6 +82,26 @@ onActivated(() => {
 })
 onDeactivated(stopPolling)
 
+// status-card 的 status-green/yellow/red 为 spec hook 类,与语义 token 并存。
+const statusClasses = computed(() => {
+  const tone =
+    stats.value?.status === 'green'
+      ? 'border-l-success'
+      : stats.value?.status === 'yellow'
+        ? 'border-l-warning'
+        : 'border-l-destructive'
+  const dot =
+    stats.value?.status === 'green'
+      ? 'bg-success'
+      : stats.value?.status === 'yellow'
+        ? 'bg-warning'
+        : 'bg-destructive'
+  return {
+    card: [`status-${stats.value?.status ?? ''}`, tone],
+    dot: [dot],
+  }
+})
+
 const statusText = computed(() => {
   switch (stats.value?.status) {
     case 'green':
@@ -99,92 +121,95 @@ const updatedText = computed(() =>
 </script>
 
 <template>
-  <div class="monitor" data-test="es-cluster-monitor">
-    <div v-if="loading && !stats" class="state" data-test="monitor-loading">加载中…</div>
+  <div class="h-full overflow-y-auto px-0.5 py-1 text-foreground" data-test="es-cluster-monitor">
+    <div v-if="loading && !stats" class="py-1 text-[13px] text-muted-foreground" data-test="monitor-loading">加载中…</div>
     <template v-else>
-      <div v-if="error" class="state err" data-test="monitor-error">{{ error }}</div>
+      <div v-if="error" class="py-1 text-[13px] text-destructive" data-test="monitor-error">{{ error }}</div>
       <template v-if="stats">
-        <div class="header">
+        <div class="flex flex-wrap items-stretch gap-2.5">
           <div
-            class="status-card"
-            :class="`status-${stats.status}`"
+            class="status-card flex min-w-[220px] flex-1 items-center gap-2.5 rounded-lg border border-border border-l-4 bg-card px-3.5 py-3"
+            :class="statusClasses.card"
             :data-status="stats.status"
             data-test="monitor-status"
           >
-            <span class="status-dot" aria-hidden="true"></span>
-            <div class="status-meta">
-              <span class="cluster-name mono">{{ stats.cluster_name }}</span>
-              <span class="status-label">{{ statusText }}（{{ stats.status }}）</span>
+            <span class="size-2.5 shrink-0 rounded-full" :class="statusClasses.dot" aria-hidden="true"></span>
+            <div class="flex min-w-0 flex-col gap-0.5">
+              <span class="truncate font-mono text-sm font-semibold">{{ stats.cluster_name }}</span>
+              <span class="text-xs text-muted-foreground">{{ statusText }}（{{ stats.status }}）</span>
             </div>
           </div>
-          <div class="header-side">
-            <span class="updated" data-test="monitor-updated">{{ updatedText }}</span>
-            <label class="auto">
-              <input v-model="auto" type="checkbox" data-test="monitor-auto" />
+          <div class="flex flex-none items-center gap-3">
+            <span class="text-xs text-muted-foreground" data-test="monitor-updated">{{ updatedText }}</span>
+            <label class="inline-flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+              <input v-model="auto" type="checkbox" data-test="monitor-auto" class="cursor-pointer accent-primary" />
               自动刷新
             </label>
-            <button class="btn-refresh" type="button" data-test="monitor-refresh" @click="refresh">刷新</button>
+            <Button variant="outline" size="sm" class="text-xs" type="button" data-test="monitor-refresh" @click="refresh">
+              <RefreshCw />
+              刷新
+            </Button>
           </div>
         </div>
 
-        <h3 class="section-title">概览</h3>
-        <div class="tiles" data-test="monitor-tiles">
-          <div class="tile" data-test="tile-nodes">
-            <span class="label">节点数</span>
-            <span class="value mono">{{ stats.number_of_nodes }}</span>
-            <span class="sub">数据节点 {{ stats.number_of_data_nodes }}</span>
+        <h3 class="mb-2 mt-3.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">概览</h3>
+        <div class="grid grid-cols-6 gap-2" data-test="monitor-tiles">
+          <div class="tile flex min-w-0 flex-col gap-0.5 rounded-lg border border-border bg-card px-3 py-2.5" data-test="tile-nodes">
+            <span class="text-[11px] text-muted-foreground">节点数</span>
+            <span class="truncate font-mono text-[13px] tabular-nums">{{ stats.number_of_nodes }}</span>
+            <span class="truncate text-[11px] text-muted-foreground">数据节点 {{ stats.number_of_data_nodes }}</span>
           </div>
-          <div class="tile" data-test="tile-indices">
-            <span class="label">索引数</span>
-            <span class="value mono">{{ stats.indices_count }}</span>
+          <div class="tile flex min-w-0 flex-col gap-0.5 rounded-lg border border-border bg-card px-3 py-2.5" data-test="tile-indices">
+            <span class="text-[11px] text-muted-foreground">索引数</span>
+            <span class="truncate font-mono text-[13px] tabular-nums">{{ stats.indices_count }}</span>
           </div>
-          <div class="tile" data-test="tile-shards">
-            <span class="label">分片</span>
-            <span class="value mono" data-test="tile-shards-active">{{ stats.active_shards }}</span>
-            <span class="sub mono" data-test="tile-shards-primary">主分片 {{ stats.active_primary_shards }}</span>
-            <span class="sub">迁移 {{ stats.relocating_shards }} · 未分配 {{ stats.unassigned_shards }}</span>
+          <div class="tile flex min-w-0 flex-col gap-0.5 rounded-lg border border-border bg-card px-3 py-2.5" data-test="tile-shards">
+            <span class="text-[11px] text-muted-foreground">分片</span>
+            <span class="truncate font-mono text-[13px] tabular-nums" data-test="tile-shards-active">{{ stats.active_shards }}</span>
+            <span class="truncate font-mono text-[11px] text-muted-foreground" data-test="tile-shards-primary">主分片 {{ stats.active_primary_shards }}</span>
+            <span class="truncate text-[11px] text-muted-foreground">迁移 {{ stats.relocating_shards }} · 未分配 {{ stats.unassigned_shards }}</span>
           </div>
-          <div class="tile" data-test="tile-docs">
-            <span class="label">文档数</span>
-            <span class="value mono">{{ stats.docs_count }}</span>
+          <div class="tile flex min-w-0 flex-col gap-0.5 rounded-lg border border-border bg-card px-3 py-2.5" data-test="tile-docs">
+            <span class="text-[11px] text-muted-foreground">文档数</span>
+            <span class="truncate font-mono text-[13px] tabular-nums">{{ stats.docs_count }}</span>
           </div>
-          <div class="tile" data-test="tile-store">
-            <span class="label">存储大小</span>
-            <span class="value mono">{{ formatBytes(stats.store_size_bytes) }}</span>
+          <div class="tile flex min-w-0 flex-col gap-0.5 rounded-lg border border-border bg-card px-3 py-2.5" data-test="tile-store">
+            <span class="text-[11px] text-muted-foreground">存储大小</span>
+            <span class="truncate font-mono text-[13px] tabular-nums">{{ formatBytes(stats.store_size_bytes) }}</span>
           </div>
           <button
-            class="tile clickable"
+            class="tile flex min-w-0 cursor-pointer flex-col gap-0.5 rounded-lg border border-border bg-card px-3 py-2.5 text-left text-foreground transition-colors hover:border-ring hover:bg-accent/50"
             type="button"
             data-test="tile-templates"
             title="打开索引模板管理"
             @click="tabs.openEsTemplates(connectionId)"
           >
-            <span class="label">模板数</span>
-            <span class="value mono">{{ stats.templates_count }}</span>
-            <span class="sub">去管理 →</span>
+            <span class="text-[11px] text-muted-foreground">模板数</span>
+            <span class="truncate font-mono text-[13px] tabular-nums">{{ stats.templates_count }}</span>
+            <span class="truncate text-[11px] text-muted-foreground">去管理 →</span>
           </button>
         </div>
 
-        <h3 class="section-title">节点</h3>
-        <div class="nodes" data-test="monitor-nodes">
-          <div v-if="stats.nodes.length === 0" class="state" data-test="nodes-empty">无节点信息</div>
-          <table v-else class="nodes-table">
+        <h3 class="mb-2 mt-3.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">节点</h3>
+        <div data-test="monitor-nodes">
+          <div v-if="stats.nodes.length === 0" class="py-1 text-[13px] text-muted-foreground" data-test="nodes-empty">无节点信息</div>
+          <table v-else class="w-full overflow-hidden rounded-lg border border-border bg-card text-xs">
             <thead>
               <tr>
-                <th>名称</th>
-                <th>IP</th>
-                <th>角色</th>
-                <th>堆%</th>
-                <th>磁盘%</th>
+                <th class="border-b border-border bg-muted/50 px-2.5 py-1.5 text-left text-[11px] font-semibold text-muted-foreground">名称</th>
+                <th class="border-b border-border bg-muted/50 px-2.5 py-1.5 text-left text-[11px] font-semibold text-muted-foreground">IP</th>
+                <th class="border-b border-border bg-muted/50 px-2.5 py-1.5 text-left text-[11px] font-semibold text-muted-foreground">角色</th>
+                <th class="border-b border-border bg-muted/50 px-2.5 py-1.5 text-left text-[11px] font-semibold text-muted-foreground">堆%</th>
+                <th class="border-b border-border bg-muted/50 px-2.5 py-1.5 text-left text-[11px] font-semibold text-muted-foreground">磁盘%</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="n in stats.nodes" :key="`${n.name}:${n.ip}`" data-test="node-row">
-                <td>{{ n.name }}</td>
-                <td class="mono">{{ n.ip }}</td>
-                <td class="roles">{{ n.roles }}</td>
-                <td class="mono" :class="{ danger: n.heap_percent >= 90 }" data-test="node-heap">{{ n.heap_percent }}%</td>
-                <td class="mono" :class="{ danger: n.disk_percent >= 90 }" data-test="node-disk">{{ n.disk_percent }}%</td>
+              <tr v-for="n in stats.nodes" :key="`${n.name}:${n.ip}`" class="border-b border-border last:border-b-0" data-test="node-row">
+                <td class="px-2.5 py-1.5 text-left">{{ n.name }}</td>
+                <td class="px-2.5 py-1.5 text-left font-mono">{{ n.ip }}</td>
+                <td class="max-w-[220px] truncate px-2.5 py-1.5 text-left text-muted-foreground">{{ n.roles }}</td>
+                <td class="px-2.5 py-1.5 text-left font-mono tabular-nums" :class="n.heap_percent >= 90 ? 'danger font-semibold text-destructive' : ''" data-test="node-heap">{{ n.heap_percent }}%</td>
+                <td class="px-2.5 py-1.5 text-left font-mono tabular-nums" :class="n.disk_percent >= 90 ? 'danger font-semibold text-destructive' : ''" data-test="node-disk">{{ n.disk_percent }}%</td>
               </tr>
             </tbody>
           </table>
@@ -193,65 +218,3 @@ const updatedText = computed(() =>
     </template>
   </div>
 </template>
-
-<style scoped>
-.monitor { height: 100%; overflow-y: auto; padding: 4px 2px; color: var(--text); font-family: var(--font); }
-.state { color: var(--text-secondary); font-size: 13px; padding: 4px 0; }
-.state.err { color: var(--danger); }
-.header { display: flex; align-items: stretch; gap: 10px; flex-wrap: wrap; }
-.status-card {
-  display: flex; align-items: center; gap: 10px; flex: 1; min-width: 220px;
-  background: var(--bg-elevated); border: 1px solid var(--border); border-left-width: 4px;
-  border-radius: var(--radius-md, 10px); padding: 12px 14px;
-}
-.status-card.status-green { border-left-color: var(--ok); }
-.status-card.status-yellow { border-left-color: var(--warn); }
-.status-card.status-red { border-left-color: var(--danger); }
-.status-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
-.status-card.status-green .status-dot { background: var(--ok); }
-.status-card.status-yellow .status-dot { background: var(--warn); }
-.status-card.status-red .status-dot { background: var(--danger); }
-.status-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.cluster-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-label { font-size: 12px; color: var(--text-secondary); }
-.header-side { display: flex; align-items: center; gap: 12px; flex: none; }
-.updated { font-size: 12px; color: var(--text-secondary); }
-.auto { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary); cursor: pointer; }
-.auto input { accent-color: var(--accent); cursor: pointer; }
-.btn-refresh {
-  border: 1px solid var(--border-strong); background: transparent; color: var(--text);
-  font-size: 12px; font-family: var(--font); border-radius: 7px; padding: 5px 12px;
-  cursor: pointer; transition: background 0.15s ease;
-}
-.btn-refresh:hover { background: var(--bg-hover); }
-.section-title {
-  font-size: 12px; font-weight: 600; color: var(--text-secondary);
-  text-transform: uppercase; letter-spacing: 0.04em; margin: 14px 0 8px;
-}
-.tiles {
-  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px;
-}
-.tile {
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: var(--radius-md, 10px); padding: 9px 12px;
-  display: flex; flex-direction: column; gap: 2px; min-width: 0;
-  text-align: left; color: var(--text); font-family: var(--font);
-}
-.tile.clickable { cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; }
-.tile.clickable:hover { border-color: var(--accent); background: var(--accent-soft); }
-.tile .label { font-size: 11px; color: var(--text-secondary); }
-.tile .value { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tile .sub { font-size: 11px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mono { font-family: var(--mono); }
-.nodes-table {
-  width: 100%; border-collapse: collapse; font-size: 12px;
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: var(--radius-md, 10px); overflow: hidden;
-}
-.nodes-table th,
-.nodes-table td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--border); }
-.nodes-table th { font-size: 11px; font-weight: 600; color: var(--text-secondary); }
-.nodes-table tbody tr:last-child td { border-bottom: none; }
-.nodes-table .roles { color: var(--text-secondary); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nodes-table .danger { color: var(--danger); font-weight: 600; }
-</style>

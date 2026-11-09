@@ -7,6 +7,9 @@ import SearchSelect, { type SelectOption } from '@/components/common/SearchSelec
 import GroupLagPanel from './GroupLagPanel.vue'
 import ActiveProducersPanel from './ActiveProducersPanel.vue'
 import LagTrend from './LagTrend.vue'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { RefreshCw, TriangleAlert } from 'lucide-vue-next'
 
 const props = withDefaults(
   defineProps<{
@@ -30,6 +33,16 @@ const timestampMs = ref<number | null>(null)
 const previewRows = ref<ResetPreviewRow[] | null>(null)
 const groupDetail = ref<GroupDetail | null>(null)
 const membersNote = ref('')
+
+// 原生 select 保留(spec 以 setValue 驱动);ui Input 以 :value/@input 接线
+// (不透传 v-model)。
+const SELECT_CLS =
+  'h-8 min-w-[160px] rounded-md border border-input bg-transparent px-2.5 text-[13px] shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
+
+function onTimestampInput(e: Event): void {
+  const v = (e.target as HTMLInputElement).value
+  timestampMs.value = v === '' ? null : Number(v)
+}
 
 const groups = computed(() => st.value.groups)
 const group = computed(() => groups.value.find((g) => g.name === selectedGroup.value) ?? null)
@@ -201,22 +214,23 @@ onMounted(refresh)
 </script>
 
 <template>
-  <div class="group-view" data-test="group-view">
-    <div class="toolbar">
-      <label class="field" data-test="field-group">
+  <div class="p-4 text-foreground" data-test="group-view">
+    <div class="flex flex-wrap items-end gap-3">
+      <label class="flex flex-col gap-1 text-xs text-muted-foreground" data-test="field-group">
         消费组
         <SearchSelect v-model="selectedGroup" :options="groupOptions" placeholder="选择消费组" />
       </label>
-      <label class="field" data-test="field-topic">
+      <label class="flex flex-col gap-1 text-xs text-muted-foreground" data-test="field-topic">
         Topic
         <SearchSelect v-model="selectedTopic" :options="topicOptions" placeholder="选择 Topic" />
       </label>
-      <button class="btn ghost" type="button" data-test="btn-refresh" :disabled="st.loading" @click="refresh">
+      <Button variant="ghost" size="sm" class="text-xs" type="button" data-test="btn-refresh" :disabled="st.loading" @click="refresh">
+        <RefreshCw />
         {{ st.loading ? '加载中…' : '刷新' }}
-      </button>
+      </Button>
     </div>
 
-    <div v-if="st.error" class="msg err" data-test="group-error">{{ st.error }}</div>
+    <div v-if="st.error" class="mt-2 rounded-md bg-destructive/10 px-2.5 py-1.5 text-[13px] text-destructive" data-test="group-error">{{ st.error }}</div>
 
     <LagTrend
       v-if="selectedGroup && selectedTopic"
@@ -227,83 +241,65 @@ onMounted(refresh)
 
     <!-- 非 Stable 组没有活跃成员:broker 不返回 member 信息,Lag 表三列
          为空属正常,必须说明否则用户会当成 bug。 -->
-    <div v-if="group && group.state !== 'Stable'" class="msg warn" data-test="lag-member-note">
-      消费组当前状态 {{ group.state }}：无活跃成员，Lag 表的 Host / Consumer ID / Client ID 列为空属正常现象；位移与 Lag 数值不受影响。
+    <div v-if="group && group.state !== 'Stable'" class="mt-2.5 flex items-start gap-1.5 rounded-md bg-warning-bg px-2.5 py-1.5 text-[13px] text-warning" data-test="lag-member-note">
+      <TriangleAlert class="mt-0.5 size-3.5 shrink-0" />
+      <span>消费组当前状态 {{ group.state }}：无活跃成员，Lag 表的 Host / Consumer ID / Client ID 列为空属正常现象；位移与 Lag 数值不受影响。</span>
     </div>
 
     <GroupLagPanel :rows="lags" :loading="st.loading" :preview="previewRows" @confirm-reset="confirmReset" @cancel-preview="previewRows = null" />
 
     <ActiveProducersPanel :producers="producers" :note="producersNote" :loading="membersLoading" />
 
-    <div class="members-panel" data-test="members-panel">
-      <div class="members-header">
-        <span class="members-title">成员拓扑</span>
-        <span v-if="groupDetail && groupDetail.members.length > 0" class="mono members-state" data-test="members-state">{{ groupDetail.state }}</span>
+    <div class="mt-3.5 overflow-hidden rounded-lg border border-border bg-card" data-test="members-panel">
+      <div class="flex items-center justify-between border-b border-border px-3 py-2.5">
+        <span class="text-[13px] font-semibold">成员拓扑</span>
+        <span v-if="groupDetail && groupDetail.members.length > 0" class="font-mono text-xs text-muted-foreground" data-test="members-state">{{ groupDetail.state }}</span>
       </div>
-      <div v-if="membersNote" class="members-note" data-test="members-note">{{ membersNote }}</div>
-      <div v-else-if="!groupDetail || groupDetail.members.length === 0" class="members-empty" data-test="members-empty">
+      <div v-if="membersNote" class="px-3 py-3 text-xs text-warning" data-test="members-note">{{ membersNote }}</div>
+      <div v-else-if="!groupDetail || groupDetail.members.length === 0" class="px-4 py-4 text-center text-[13px] text-muted-foreground" data-test="members-empty">
         暂无活跃成员
       </div>
       <div v-else class="members-list">
-        <div v-for="m in groupDetail.members" :key="m.member_id" class="member-row" data-test="member-row">
-          <span class="mono" data-test="member-id">{{ m.member_id }}</span>
-          <span class="mono" data-test="member-client-id">{{ m.client_id || '—' }}</span>
+        <div v-for="m in groupDetail.members" :key="m.member_id" class="flex flex-wrap items-center gap-4 border-b border-border px-3 py-2 text-[13px] last:border-b-0" data-test="member-row">
+          <span class="font-mono" data-test="member-id">{{ m.member_id }}</span>
+          <span class="font-mono" data-test="member-client-id">{{ m.client_id || '—' }}</span>
           <span data-test="member-host">{{ m.host || '—' }}</span>
-          <span class="mono" data-test="member-assignment">{{ assignmentText(m.assignment) || '—' }}</span>
+          <span class="font-mono text-muted-foreground" data-test="member-assignment">{{ assignmentText(m.assignment) || '—' }}</span>
         </div>
       </div>
     </div>
 
-    <div class="reset-panel" data-test="reset-panel">
-      <span class="reset-title">重置 Offset</span>
-      <label class="field">
+    <div class="mt-4 flex flex-wrap items-end gap-3 border-t border-border pt-3.5" data-test="reset-panel">
+      <span class="pb-1.5 text-[13px] font-semibold">重置 Offset</span>
+      <label class="flex flex-col gap-1 text-xs text-muted-foreground">
         目标
-        <select v-model="resetMode" data-test="select-reset-mode" class="input">
+        <select v-model="resetMode" data-test="select-reset-mode" :class="SELECT_CLS">
           <option value="latest">Latest</option>
           <option value="earliest">Earliest</option>
           <option value="timestamp">指定时间戳</option>
         </select>
       </label>
-      <label v-if="resetMode === 'timestamp'" class="field">
+      <label v-if="resetMode === 'timestamp'" class="flex flex-col gap-1 text-xs text-muted-foreground">
         时间戳(ms)
-        <input v-model.number="timestampMs" data-test="input-reset-timestamp" type="number" class="input" />
+        <Input
+          :value="timestampMs"
+          data-test="input-reset-timestamp"
+          type="number"
+          class="h-8 w-[160px] text-[13px]"
+          @input="onTimestampInput"
+        />
       </label>
-      <button
-        class="btn warn"
+      <Button
+        variant="outline"
+        size="sm"
+        class="border-warning/40 text-warning hover:bg-warning/10 hover:text-warning"
         type="button"
         data-test="btn-dry-run"
         :disabled="!selectedGroup || !selectedTopic || st.resetting"
         @click="previewReset"
       >
         预览(Dry-run)
-      </button>
+      </Button>
     </div>
   </div>
 </template>
-
-<style scoped>
-.group-view { padding: 16px; color: var(--text); font-family: var(--font); }
-.toolbar { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
-.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
-.input {
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 6px 9px; font-size: 13px; min-width: 160px;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-.input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: var(--focus-ring); }
-.msg { padding: 8px 10px; font-size: 13px; margin-top: 8px; border-radius: 7px; }
-.msg.err { background: var(--danger-soft); color: var(--danger); }
-.msg.warn { background: var(--warn-soft); color: var(--warn); margin-top: 10px; }
-.reset-panel { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
-.reset-title { font-weight: 600; font-size: 13px; color: var(--text); padding-bottom: 6px; }
-.members-panel { margin-top: 14px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
-.members-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border); }
-.members-title { font-weight: 600; font-size: 13px; color: var(--text); }
-.members-state { font-size: 12px; color: var(--text-secondary); }
-.members-note { padding: 12px; font-size: 12px; color: var(--warn); }
-.members-empty { padding: 16px; text-align: center; color: var(--text-tertiary); font-size: 13px; }
-.member-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
-.member-row:last-child { border-bottom: none; }
-.mono { font-family: var(--mono); }
-[data-test="member-assignment"] { color: var(--text-secondary); }
-</style>

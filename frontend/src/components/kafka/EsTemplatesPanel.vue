@@ -3,6 +3,9 @@ import { computed, onMounted, ref, watch } from 'vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import * as App from '../../../wailsjs/go/backend/App'
 import { useToastStore } from '@/store/toast'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Plus, Trash2 } from 'lucide-vue-next'
 
 const props = defineProps<{
   connectionId: string
@@ -49,6 +52,20 @@ const saving = ref(false)
 // 删除确认:待删模板名与弹窗开关(ConfirmDialog Teleport 到 body)。
 const confirmDelete = ref(false)
 const deleteName = ref('')
+
+// ui Input 以 :value/@input 接线(不透传 v-model);名称/JSON 编辑器仍为原生
+// 元素驱动(spec 按 .element.value 断言)。
+function onSearchInput(e: Event): void {
+  search.value = (e.target as HTMLInputElement).value
+}
+
+function onNameInput(e: Event): void {
+  nameDraft.value = (e.target as HTMLInputElement).value
+}
+
+function onJsonInput(e: Event): void {
+  jsonDraft.value = (e.target as HTMLTextAreaElement).value
+}
 
 const filtered = computed(() => {
   const q = search.value.trim().toLowerCase()
@@ -232,13 +249,13 @@ async function doDelete(): Promise<void> {
 </script>
 
 <template>
-  <div class="es-templates" data-test="es-templates-panel">
-    <!-- 左栏:模板列表(搜索 + 新建 + 名称/order 徽标) -->
-    <aside class="tpl-list">
-      <div class="list-head">
-        <input
-          v-model="search"
-          class="search-input"
+  <div class="flex h-full gap-3 overflow-hidden p-3 text-foreground" data-test="es-templates-panel">
+    <!-- 左栏:模板列表(搜索 + 新建 + 名称/order 徽标);active 为既有 hook 类 -->
+    <aside class="flex w-[260px] flex-none flex-col gap-1.5 overflow-auto rounded-lg border border-border bg-card p-2">
+      <div class="flex flex-none items-center gap-1.5">
+        <Input
+          :value="search"
+          class="h-8 min-w-0 flex-1 text-xs"
           type="search"
           data-test="es-tpl-search"
           placeholder="🔍 模糊搜索模板…"
@@ -246,47 +263,59 @@ async function doDelete(): Promise<void> {
           autocorrect="off"
           autocomplete="off"
           spellcheck="false"
+          @input="onSearchInput"
         />
-        <button class="btn ghost" type="button" data-test="es-tpl-new" title="新建模板" @click="startNew">新建</button>
+        <Button variant="ghost" size="sm" class="text-xs" type="button" data-test="es-tpl-new" title="新建模板" @click="startNew">
+          <Plus />
+          新建
+        </Button>
       </div>
-      <div v-if="loading" class="muted" data-test="es-tpl-loading">加载中…</div>
+      <div v-if="loading" class="px-2 py-1.5 text-xs text-muted-foreground" data-test="es-tpl-loading">加载中…</div>
       <template v-else>
         <div
           v-for="t in filtered"
           :key="t.name"
-          class="tpl-item"
-          :class="{ active: !isNew && selectedName === t.name }"
+          class="flex flex-none cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 transition-colors"
+          :class="!isNew && selectedName === t.name ? 'active bg-accent' : 'hover:bg-accent/50'"
           :data-test="`es-tpl-item-${t.name}`"
           :title="`${t.name}(order ${t.order})`"
           @click="selectTemplate(t)"
         >
-          <span class="tpl-name">{{ t.name }}</span>
-          <span class="tpl-order" data-test="es-tpl-order" title="模板合并顺序(order 越大优先级越高)">{{ t.order }}</span>
+          <span
+            class="min-w-0 flex-1 truncate font-mono text-[13px]"
+            :class="!isNew && selectedName === t.name ? 'active font-semibold text-primary' : ''"
+          >{{ t.name }}</span>
+          <span
+            class="flex-none rounded-full bg-muted px-1.5 font-mono text-[10px] leading-4 text-muted-foreground"
+            :class="!isNew && selectedName === t.name ? 'bg-background text-primary' : ''"
+            data-test="es-tpl-order"
+            title="模板合并顺序(order 越大优先级越高)"
+          >{{ t.order }}</span>
         </div>
-        <div v-if="filtered.length === 0" class="muted" data-test="es-tpl-empty">
+        <div v-if="filtered.length === 0" class="px-2 py-1.5 text-xs text-muted-foreground" data-test="es-tpl-empty">
           {{ templates.length === 0 ? '（无模板）' : '无匹配模板' }}
         </div>
       </template>
     </aside>
 
     <!-- 右栏:编辑器 / 空态引导 -->
-    <section class="tpl-editor">
-      <div v-if="error" class="msg err" data-test="es-tpl-error">{{ error }}</div>
+    <section class="flex min-w-0 flex-1 flex-col overflow-auto rounded-lg border border-border bg-card p-3">
+      <div v-if="error" class="mb-2 rounded-md bg-destructive/10 px-2.5 py-1.5 text-[13px] text-destructive" data-test="es-tpl-error">{{ error }}</div>
 
-      <div v-if="!isNew && !selectedName" class="empty" data-test="es-tpl-guide">
-        <div class="empty-icon">⚙</div>
+      <div v-if="!isNew && !selectedName" class="m-auto p-7 text-center text-muted-foreground" data-test="es-tpl-guide">
+        <div class="mb-1.5 text-[26px] leading-none">⚙</div>
         <div>索引模板管理</div>
-        <div class="empty-hint">新建模板:{"index_patterns":["log-*"],"settings":{...},"mappings":{...}}</div>
-        <button class="btn ghost" type="button" data-test="es-tpl-sample" @click="fillSample">填入示例模板</button>
+        <div class="mb-3 mt-1.5 break-all font-mono text-xs text-muted-foreground">新建模板:{"index_patterns":["log-*"],"settings":{...},"mappings":{...}}</div>
+        <Button variant="outline" size="sm" class="text-xs" type="button" data-test="es-tpl-sample" @click="fillSample">填入示例模板</Button>
       </div>
 
       <template v-else>
-        <div class="editor-head">
-          <label class="name-label">
+        <div class="mb-2 flex flex-none items-center gap-2">
+          <label class="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
             名称
-            <input
-              v-model="nameDraft"
-              class="name-input"
+            <Input
+              :value="nameDraft"
+              class="h-8 min-w-0 flex-1 font-mono text-[13px]"
               type="text"
               data-test="es-tpl-name"
               :disabled="!isNew"
@@ -296,33 +325,38 @@ async function doDelete(): Promise<void> {
               autocomplete="off"
               spellcheck="false"
               title="新建态可编辑;已有模板名称锁定,改名请另建新模板"
+              @input="onNameInput"
             />
           </label>
         </div>
         <textarea
-          v-model="jsonDraft"
-          class="json-editor"
+          :value="jsonDraft"
+          class="min-h-[240px] w-full flex-1 resize-none rounded-md border border-input bg-transparent p-2 font-mono text-xs leading-relaxed shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
           data-test="es-tpl-editor"
           autocapitalize="off"
           autocorrect="off"
           autocomplete="off"
           spellcheck="false"
+          @input="onJsonInput"
         ></textarea>
-        <div class="actions">
-          <button class="btn primary" type="button" data-test="es-tpl-save" :disabled="!canSave" @click="save">
+        <div class="mt-2.5 flex flex-none gap-2">
+          <Button variant="default" size="sm" class="text-xs" type="button" data-test="es-tpl-save" :disabled="!canSave" @click="save">
             {{ saving ? '保存中…' : '保存' }}
-          </button>
-          <button
-            class="btn ghost danger"
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            class="border-destructive/40 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
             type="button"
             data-test="es-tpl-delete"
             :disabled="isNew || !selectedName"
             @click="askDelete"
           >
+            <Trash2 />
             删除
-          </button>
+          </Button>
         </div>
-        <div class="hint">保存以该 JSON 整体创建/替换模板(PUT /_template/{名称});JSON 语法错误由后端校验。</div>
+        <div class="mt-2 flex-none text-[11px] text-muted-foreground">保存以该 JSON 整体创建/替换模板(PUT /_template/{名称});JSON 语法错误由后端校验。</div>
       </template>
     </section>
 
@@ -337,89 +371,3 @@ async function doDelete(): Promise<void> {
     />
   </div>
 </template>
-
-<style scoped>
-/* 两栏布局整体撑满 tab(与 SQL 控制台同款 height:100% 思路)。 */
-.es-templates {
-  height: 100%;
-  box-sizing: border-box;
-  display: flex;
-  gap: 12px;
-  padding: 12px;
-  color: var(--text);
-  font-family: var(--font);
-  overflow: hidden;
-}
-.tpl-list {
-  flex: none;
-  width: 260px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-elevated);
-  padding: 8px;
-}
-.list-head { display: flex; gap: 6px; align-items: center; flex: none; }
-.list-head .search-input { flex: 1; min-width: 0; }
-.search-input {
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 5px 9px; font-size: 12px;
-}
-.search-input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--accent-soft); }
-.search-input::placeholder { color: var(--text-tertiary); }
-.tpl-item {
-  flex: none;
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 8px; border-radius: 7px; cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-.tpl-item:hover { background: var(--bg-hover); }
-.tpl-item.active { background: var(--accent-soft); }
-.tpl-item.active .tpl-name { color: var(--accent); font-weight: 600; }
-.tpl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-family: var(--mono); }
-.tpl-order {
-  flex: none; font-size: 10px; font-family: var(--mono);
-  color: var(--text-tertiary);
-  background: var(--bg-hover); border-radius: 99px; padding: 0 7px; line-height: 16px;
-}
-.tpl-item.active .tpl-order { color: var(--accent); background: var(--bg-elevated); }
-.muted { color: var(--text-tertiary); font-size: 12px; padding: 6px 8px; }
-.tpl-editor {
-  flex: 1; min-width: 0;
-  display: flex; flex-direction: column;
-  border: 1px solid var(--border); border-radius: 10px;
-  background: var(--bg-elevated);
-  padding: 12px;
-  overflow: auto;
-}
-.msg { padding: 8px 10px; font-size: 13px; border-radius: 7px; margin-bottom: 8px; }
-.msg.err { background: var(--danger-soft); color: var(--danger); }
-.empty { margin: auto; text-align: center; color: var(--text-tertiary); padding: 28px 24px; }
-.empty-icon { font-size: 26px; margin-bottom: 6px; }
-.empty-hint { font-size: 12px; margin: 6px 0 12px; color: var(--text-tertiary); font-family: var(--mono); word-break: break-all; }
-.editor-head { display: flex; gap: 8px; align-items: center; flex: none; margin-bottom: 8px; }
-.name-label {
-  display: flex; flex: 1; align-items: center; gap: 8px;
-  font-size: 12px; color: var(--text-secondary); min-width: 0;
-}
-.name-input {
-  flex: 1; min-width: 0;
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 6px 9px; font-size: 13px; font-family: var(--mono);
-}
-.name-input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--accent-soft); }
-.name-input:disabled { opacity: 0.6; cursor: not-allowed; background: var(--bg-subtle); }
-.json-editor {
-  flex: 1; min-height: 240px; resize: none;
-  box-sizing: border-box; width: 100%;
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 8px 10px; font-size: 12px; line-height: 1.5;
-  font-family: var(--mono);
-}
-.json-editor:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
-.actions { display: flex; gap: 8px; margin-top: 10px; flex: none; }
-.hint { margin-top: 8px; font-size: 11px; color: var(--text-tertiary); flex: none; }
-</style>

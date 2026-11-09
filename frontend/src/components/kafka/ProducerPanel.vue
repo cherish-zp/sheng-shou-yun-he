@@ -3,6 +3,11 @@ import { reactive, ref, computed, watch } from 'vue'
 import { getApi } from '@/api/client'
 import { buildBatchMessages, clampCount, COUNT_MAX, loadTemplates, saveTemplate, type BatchProduceItem } from '@/utils/batchProduce'
 import { parseImportFile } from '@/utils/importMessages'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { Send, Upload } from 'lucide-vue-next'
 
 const props = defineProps<{
   show: boolean
@@ -11,6 +16,14 @@ const props = defineProps<{
   partitions: number[]
 }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
+
+// 原生 select/checkbox 保留(spec 以 setValue 驱动);ui Input/Textarea 以
+// :value/@input 接线(不透传 v-model)。msg/ok/err 为既有 hook 类,与语义
+// token 并存(batch-failures 的用例按 .msg.err 选择器定位)。
+const SELECT_CLS =
+  'h-8 w-full rounded-md border border-input bg-transparent px-2.5 text-[13px] shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
+
+const LABEL_CLS = 'mb-1 block text-xs font-normal text-muted-foreground'
 
 const form = reactive({
   topic: props.topic,
@@ -165,117 +178,134 @@ function fillTemplate(tpl: string): void {
   showTemplates.value = false
 }
 
+function onTopicInput(e: Event): void {
+  form.topic = (e.target as HTMLInputElement).value
+}
+
+function onKeyInput(e: Event): void {
+  form.key = (e.target as HTMLInputElement).value
+}
+
+// looseToNumber 与 v-model.number 同语义:不可解析时保留原串。
+function looseToNumber(v: string): number | string {
+  const n = Number.parseFloat(v)
+  return Number.isNaN(n) ? v : n
+}
+
+function onCountInput(e: Event): void {
+  form.count = looseToNumber((e.target as HTMLInputElement).value) as number
+}
+
+function onValueInput(e: Event): void {
+  form.value = (e.target as HTMLTextAreaElement).value
+}
+
 function close(): void {
   emit('close')
 }
 </script>
 
 <template>
-  <div v-if="show" class="modal-backdrop" data-test="producer-panel" @click.self="close">
-    <div class="modal">
-      <div class="modal-header">
-        <span class="modal-title">生产消息</span>
-        <button class="modal-close" type="button" data-test="modal-close" @click="close">✕</button>
+  <div v-if="show" class="fixed inset-0 z-[900] flex items-center justify-center bg-black/50" data-test="producer-panel" @click.self="close">
+    <div class="flex max-h-[88vh] w-[480px] max-w-[92vw] flex-col overflow-auto rounded-lg border border-border bg-background text-foreground shadow-lg">
+      <div class="flex items-center justify-between border-b border-border px-4 py-3">
+        <span class="text-[15px] font-semibold">生产消息</span>
+        <Button variant="ghost" size="sm" class="h-7 w-7 p-0 text-muted-foreground" type="button" data-test="modal-close" @click="close">✕</Button>
       </div>
-      <div class="modal-body">
-        <div class="field">
-          <label class="label">Topic</label>
-          <input v-model="form.topic" data-test="input-topic" class="input" />
+      <div class="p-4">
+        <div class="mb-3">
+          <Label :class="LABEL_CLS">Topic</Label>
+          <Input :value="form.topic" data-test="input-topic" class="text-[13px]" @input="onTopicInput" />
         </div>
-        <div class="field">
-          <label class="label">Partition</label>
-          <select v-model="form.partition" data-test="input-partition" class="input">
+        <div class="mb-3">
+          <Label :class="LABEL_CLS">Partition</Label>
+          <select v-model="form.partition" data-test="input-partition" :class="SELECT_CLS">
             <option v-for="opt in partitionOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
           </select>
         </div>
-        <div class="field">
-          <label class="label">Key（可选）</label>
-          <input v-model="form.key" data-test="input-key" class="input" placeholder="分区键" />
+        <div class="mb-3">
+          <Label :class="LABEL_CLS">Key（可选）</Label>
+          <Input :value="form.key" data-test="input-key" class="text-[13px]" placeholder="分区键" @input="onKeyInput" />
         </div>
-        <div class="field">
-          <div class="batch-row">
-            <label class="label" for="batch-count">批量行数</label>
-            <input id="batch-count" v-model.number="form.count" data-test="input-count" class="input count" type="number" min="1" max="1000" />
-            <span v-if="form.count > COUNT_MAX" class="cap-hint" data-test="count-cap-hint">将按上限 {{ COUNT_MAX }} 发送</span>
-            <label class="check"><input v-model="form.randomKey" data-test="input-random-key" type="checkbox" /> 随机 key</label>
-            <label class="check"><input v-model="form.loop" data-test="input-loop" type="checkbox" /> 循环发送</label>
+        <div class="mb-3">
+          <div class="flex items-center gap-3.5">
+            <Label class="text-xs font-normal text-muted-foreground" for="batch-count">批量行数</Label>
+            <Input
+              id="batch-count"
+              :value="form.count"
+              data-test="input-count"
+              class="h-8 w-[84px] text-[13px]"
+              type="number"
+              min="1"
+              max="1000"
+              @input="onCountInput"
+            />
+            <span v-if="form.count > COUNT_MAX" class="whitespace-nowrap text-xs text-warning" data-test="count-cap-hint">将按上限 {{ COUNT_MAX }} 发送</span>
+            <label class="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"><input v-model="form.randomKey" data-test="input-random-key" type="checkbox" class="accent-primary" /> 随机 key</label>
+            <label class="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"><input v-model="form.loop" data-test="input-loop" type="checkbox" class="accent-primary" /> 循环发送</label>
           </div>
         </div>
-        <div class="field">
-          <div class="batch-row">
-            <button class="btn ghost" type="button" data-test="import-file" @click="openImport">导入文件</button>
-            <input ref="importInput" class="hidden-input" type="file" accept=".jsonl,.ndjson,.json,.csv,text/plain" data-test="import-input" @change="onImportInput" />
+        <div class="mb-3">
+          <div class="flex items-center gap-3.5">
+            <Button variant="outline" size="sm" type="button" data-test="import-file" @click="openImport">
+              <Upload />
+              导入文件
+            </Button>
+            <input ref="importInput" class="hidden" type="file" accept=".jsonl,.ndjson,.json,.csv,text/plain" data-test="import-input" @change="onImportInput" />
           </div>
-          <div v-if="importedMessages" class="msg ok" data-test="import-summary">
+          <div v-if="importedMessages" class="msg ok mt-2 rounded-md bg-success/10 px-2.5 py-1.5 text-[13px] text-success" data-test="import-summary">
             已导入 {{ importedMessages.length }} 条消息，点击「发送」发送
           </div>
         </div>
-        <div class="field">
-          <div class="value-head">
-            <label class="label">Value <span class="req">*</span></label>
-            <button v-if="templates.length > 0" class="btn ghost template-toggle" type="button" data-test="template-toggle" @click="showTemplates = !showTemplates">
+        <div class="mb-3">
+          <div class="mb-1 flex items-center justify-between">
+            <Label :class="LABEL_CLS">Value <span class="text-destructive">*</span></Label>
+            <Button v-if="templates.length > 0" variant="ghost" size="sm" class="h-6 px-2 text-xs" type="button" data-test="template-toggle" @click="showTemplates = !showTemplates">
               最近模板 ▾
-            </button>
+            </Button>
           </div>
-          <div v-if="showTemplates" class="template-list">
-            <button v-for="(tpl, i) in templates" :key="i" class="template-item" type="button" data-test="template-item" :title="tpl" @click="fillTemplate(tpl)">
+          <div v-if="showTemplates" class="mb-2 flex flex-col gap-1">
+            <Button
+              v-for="(tpl, i) in templates"
+              :key="i"
+              variant="ghost"
+              size="sm"
+              class="h-auto justify-start truncate px-2 py-1 text-left font-normal text-xs text-muted-foreground"
+              type="button"
+              data-test="template-item"
+              :title="tpl"
+              @click="fillTemplate(tpl)"
+            >
               {{ tpl.length > 48 ? tpl.slice(0, 48) + '…' : tpl }}
-            </button>
+            </Button>
           </div>
-          <textarea v-model="form.value" data-test="input-value" class="input textarea" rows="6" placeholder='{"key":"value"}'></textarea>
-          <span v-if="valueInvalid && !importedMessages" class="err" data-test="produce-value-error">消息内容不能为空</span>
+          <Textarea
+            :value="form.value"
+            data-test="input-value"
+            class="min-h-[140px] resize-y font-mono text-[13px]"
+            rows="6"
+            placeholder='{"key":"value"}'
+            @input="onValueInput"
+          ></Textarea>
+          <span v-if="valueInvalid && !importedMessages" class="text-xs text-destructive" data-test="produce-value-error">消息内容不能为空</span>
         </div>
 
-        <div v-if="ok" class="msg ok" data-test="produce-ok">消息已发送</div>
-        <div v-if="batchSummary" :class="batchSummary.failed > 0 ? 'msg err' : 'msg ok'" data-test="batch-summary">
+        <div v-if="ok" class="msg ok mt-2 rounded-md bg-success/10 px-2.5 py-1.5 text-[13px] text-success" data-test="produce-ok">消息已发送</div>
+        <div v-if="batchSummary" class="mt-2 rounded-md px-2.5 py-1.5 text-[13px]" :class="batchSummary.failed > 0 ? 'msg err bg-destructive/10 text-destructive' : 'msg ok bg-success/10 text-success'" data-test="batch-summary">
           成功 {{ batchSummary.ok }} / 失败 {{ batchSummary.failed }}
         </div>
         <div v-if="batchFailures.length > 0" data-test="batch-failures">
-          <div v-for="f in batchFailures" :key="f.index" class="msg err">第 {{ f.index + 1 }} 条：{{ f.error }}</div>
+          <div v-for="f in batchFailures" :key="f.index" class="msg err mt-2 rounded-md bg-destructive/10 px-2.5 py-1.5 text-[13px] text-destructive">第 {{ f.index + 1 }} 条：{{ f.error }}</div>
         </div>
-        <div v-if="error" class="msg err" data-test="produce-error">{{ error }}</div>
+        <div v-if="error" class="msg err mt-2 rounded-md bg-destructive/10 px-2.5 py-1.5 text-[13px] text-destructive" data-test="produce-error">{{ error }}</div>
       </div>
-      <div class="modal-footer">
-        <button class="btn ghost" type="button" @click="close">取消</button>
-        <button class="btn primary" type="button" data-test="btn-produce" :disabled="producing || (valueInvalid && !importedMessages)" @click="produce">
+      <div class="flex justify-end gap-2 border-t border-border px-4 py-3">
+        <Button variant="ghost" size="sm" type="button" @click="close">取消</Button>
+        <Button variant="default" size="sm" type="button" data-test="btn-produce" :disabled="producing || (valueInvalid && !importedMessages)" @click="produce">
+          <Send />
           {{ producing ? '发送中…' : '发送' }}
-        </button>
+        </Button>
       </div>
     </div>
   </div>
 </template>
-
-<style scoped>
-/* 遮罩/容器/按钮基座走全局 .modal-backdrop/.modal/.btn;这里只留尺寸。 */
-.modal {
-  width: 480px; max-width: 92vw; max-height: 88vh; overflow: auto;
-}
-.modal-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--border); }
-.modal-title { font-weight: 600; font-size: 15px; }
-.modal-close { background: none; border: none; color: var(--text-tertiary); font-size: 16px; cursor: pointer; border-radius: 6px; padding: 1px 6px; }
-.modal-close:hover { background: var(--bg-hover); color: var(--text); }
-.modal-body { padding: 16px 18px; }
-.field { margin-bottom: 12px; }
-.label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
-.req { color: var(--danger); }
-.input { width: 100%; box-sizing: border-box; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 7px; color: var(--text); padding: 8px 10px; font-size: 13px; transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease; }
-.input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: var(--focus-ring); }
-.textarea { resize: vertical; }
-.err { color: var(--danger); font-size: 12px; }
-.msg { margin-top: 8px; font-size: 13px; border-radius: 7px; padding: 8px 10px; }
-.msg.ok { background: var(--ok-soft); color: var(--ok); }
-.msg.err { background: var(--danger-soft); color: var(--danger); }
-.batch-row { display: flex; align-items: center; gap: 14px; }
-.batch-row .label { margin-bottom: 0; }
-.count { width: 84px; }
-.cap-hint { font-size: 12px; color: var(--warn); white-space: nowrap; }
-.check { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary); cursor: pointer; }
-.check input { accent-color: var(--accent); }
-.hidden-input { display: none; }
-.value-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
-.template-toggle { padding: 2px 8px; font-size: 12px; border-radius: 6px; }
-.template-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
-.template-item { text-align: left; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 6px; color: var(--text-secondary); font-size: 12px; padding: 5px 8px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.template-item:hover { background: var(--bg-hover); color: var(--text); border-color: var(--border-strong); }
-.modal-footer { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 18px; border-top: 1px solid var(--border); }
-</style>

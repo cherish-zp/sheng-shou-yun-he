@@ -2,6 +2,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { getApi } from '@/api/client'
 import type { ClusterHealth } from '@/api/types'
+import { Badge } from '@/components/ui/badge'
 
 const props = withDefaults(
   defineProps<{ connectionId: string; refreshRequest?: number }>(),
@@ -62,63 +63,67 @@ watch(
 </script>
 
 <template>
-  <div class="health-view" data-test="cluster-health-panel">
-    <div v-if="loading" class="state" data-test="health-loading">加载中…</div>
-    <div v-else-if="error" class="state err" data-test="health-error">{{ error }}</div>
+  <div class="max-w-[860px] px-0.5 py-1 text-foreground" data-test="cluster-health-panel">
+    <div v-if="loading" class="py-1 text-[13px] text-muted-foreground" data-test="health-loading">加载中…</div>
+    <div v-else-if="error" class="py-1 text-[13px] text-destructive" data-test="health-error">{{ error }}</div>
     <template v-else-if="health">
-      <div v-if="health.brokers.length === 0" class="state" data-test="health-empty">
+      <div v-if="health.brokers.length === 0" class="py-1 text-[13px] text-muted-foreground" data-test="health-empty">
         未获取到任何 Broker，请确认连接是否可用后重试。
       </div>
       <template v-else>
-        <h3 class="section-title">概览</h3>
-        <div class="summary" data-test="health-summary">
-          <div class="summary-item">
-            <span class="label">Kafka 版本</span>
-            <span class="value mono" data-test="summary-version">{{ health.kafka_version || '未知' }}</span>
+        <h3 class="mb-2 mt-3.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground first:mt-0">概览</h3>
+        <div class="grid grid-cols-4 gap-2" data-test="health-summary">
+          <div class="flex min-w-0 flex-col gap-0.5 rounded-lg border border-border bg-card px-3 py-2.5">
+            <span class="text-[11px] text-muted-foreground">Kafka 版本</span>
+            <span class="truncate font-mono text-[13px]" data-test="summary-version">{{ health.kafka_version || '未知' }}</span>
           </div>
-          <div class="summary-item">
-            <span class="label">Controller</span>
-            <span class="value mono" data-test="summary-controller">broker {{ health.controller_id }}</span>
+          <div class="flex min-w-0 flex-col gap-0.5 rounded-lg border border-border bg-card px-3 py-2.5">
+            <span class="text-[11px] text-muted-foreground">Controller</span>
+            <span class="truncate font-mono text-[13px]" data-test="summary-controller">broker {{ health.controller_id }}</span>
           </div>
-          <div class="summary-item">
-            <span class="label">Broker 数</span>
-            <span class="value mono" data-test="summary-brokers">{{ health.brokers.length }}</span>
+          <div class="flex min-w-0 flex-col gap-0.5 rounded-lg border border-border bg-card px-3 py-2.5">
+            <span class="text-[11px] text-muted-foreground">Broker 数</span>
+            <span class="truncate font-mono text-[13px] tabular-nums" data-test="summary-brokers">{{ health.brokers.length }}</span>
           </div>
-          <div class="summary-item">
-            <span class="label">Under-Replicated 分区</span>
+          <div class="flex min-w-0 flex-col gap-0.5 rounded-lg border border-border bg-card px-3 py-2.5">
+            <span class="text-[11px] text-muted-foreground">Under-Replicated 分区</span>
             <span
-              class="value mono"
-              :class="{ danger: health.under_replicated_partitions > 0 }"
+              class="truncate font-mono text-[13px] tabular-nums"
+              :class="health.under_replicated_partitions > 0 ? 'danger font-semibold text-destructive' : ''"
               data-test="urp-value"
             >{{ health.under_replicated_partitions }}</span>
           </div>
-          <div class="summary-item wide">
-            <span class="label">Cluster ID</span>
-            <span class="value mono" data-test="summary-cluster-id">{{ health.cluster_id || '未知' }}</span>
+          <div class="col-span-2 flex min-w-0 flex-col gap-0.5 rounded-lg border border-border bg-card px-3 py-2.5">
+            <span class="text-[11px] text-muted-foreground">Cluster ID</span>
+            <span class="truncate font-mono text-[13px]" data-test="summary-cluster-id">{{ health.cluster_id || '未知' }}</span>
           </div>
         </div>
 
-        <h3 class="section-title">Broker 拓扑</h3>
+        <h3 class="mb-2 mt-3.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Broker 拓扑</h3>
         <div
           v-for="b in health.brokers"
           :key="b.id"
-          class="broker-card"
-          :class="{ offline: !b.online }"
+          class="mb-2 rounded-lg border border-border bg-card px-3 py-2.5"
+          :class="!b.online ? 'offline border-destructive shadow-[inset_0_0_0_1px_var(--destructive)]' : ''"
           data-test="broker-card"
         >
-          <div class="broker-line">
-            <span class="mono broker-id" data-test="broker-id">broker {{ b.id }}</span>
-            <span v-if="b.id === health.controller_id" class="controller-badge" data-test="controller-badge">controller</span>
-            <span
-              class="state-pill"
-              :class="{ offline: !b.online }"
+          <div class="flex items-center gap-1.5">
+            <span class="font-mono text-[13px] font-semibold" data-test="broker-id">broker {{ b.id }}</span>
+            <Badge
+              v-if="b.id === health.controller_id"
+              class="rounded-full border-transparent bg-info-bg px-1.5 text-[10px] uppercase tracking-wide text-info"
+              data-test="controller-badge"
+            >controller</Badge>
+            <Badge
+              class="ml-auto rounded-full border-transparent"
+              :class="b.online ? 'bg-success-bg text-success' : 'bg-destructive/10 text-destructive'"
               :data-status="b.online ? 'online' : 'offline'"
               data-test="broker-state"
-            >{{ b.online ? '在线' : '离线' }}</span>
+            >{{ b.online ? '在线' : '离线' }}</Badge>
           </div>
-          <div class="broker-meta mono" data-test="broker-host">{{ b.host }}:{{ b.port }}</div>
-          <div class="broker-meta">
-            <span v-if="b.rack" class="rack" data-test="broker-rack">机架 {{ b.rack }}</span>
+          <div class="mt-1 font-mono text-xs text-muted-foreground" data-test="broker-host">{{ b.host }}:{{ b.port }}</div>
+          <div class="mt-1 flex flex-wrap gap-3 text-xs text-muted-foreground">
+            <span v-if="b.rack" data-test="broker-rack">机架 {{ b.rack }}</span>
             <span data-test="broker-version">{{ b.version || '版本未知' }}</span>
           </div>
         </div>
@@ -126,46 +131,3 @@ watch(
     </template>
   </div>
 </template>
-
-<style scoped>
-.health-view { max-width: 860px; padding: 4px 2px; color: var(--text); font-family: var(--font); }
-.section-title {
-  font-size: 12px; font-weight: 600; color: var(--text-secondary);
-  text-transform: uppercase; letter-spacing: 0.04em; margin: 14px 0 8px;
-}
-.section-title:first-child { margin-top: 0; }
-.summary {
-  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;
-}
-.summary-item {
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: var(--radius-md, 10px); padding: 9px 12px;
-  display: flex; flex-direction: column; gap: 2px; min-width: 0;
-}
-.summary-item.wide { grid-column: span 2; }
-.summary-item .label { font-size: 11px; color: var(--text-secondary); }
-.summary-item .value { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.summary-item .value.danger { color: var(--danger); font-weight: 600; }
-.mono { font-family: var(--mono); }
-.broker-card {
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: var(--radius-md, 10px); padding: 10px 12px; margin-bottom: 8px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-.broker-card.offline { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger) inset; }
-.broker-line { display: flex; align-items: center; gap: 7px; }
-.broker-id { font-size: 13px; font-weight: 600; }
-.controller-badge {
-  font-size: 10px; font-weight: 600; color: var(--info); background: var(--info-soft);
-  padding: 1px 6px; border-radius: 99px; text-transform: uppercase; letter-spacing: 0.03em;
-}
-.state-pill {
-  margin-left: auto; font-size: 11px; padding: 1px 8px; border-radius: 99px;
-  color: var(--ok); background: var(--ok-soft); flex: none;
-}
-.state-pill.offline { color: var(--danger); background: var(--danger-soft); }
-.broker-meta { margin-top: 4px; font-size: 12px; color: var(--text-secondary); display: flex; gap: 12px; flex-wrap: wrap; }
-.broker-meta .rack { color: var(--text-secondary); }
-.state { color: var(--text-secondary); font-size: 13px; padding: 4px 0; }
-.state.err { color: var(--danger); }
-</style>

@@ -8,6 +8,9 @@ import { formatTime, truncateCell } from '@/utils/format'
 import { CSV_MIME, JSONL_MIME, MESSAGE_EXPORT_COLUMNS, exportCsv, exportJsonl, saveFile } from '@/utils/export'
 import ExportDropdown from '@/components/common/ExportDropdown.vue'
 import MessageDetailDrawer from './MessageDetailDrawer.vue'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { ArrowRightToLine, ChevronDown, Search, Send } from 'lucide-vue-next'
 
 const props = withDefaults(
   defineProps<{
@@ -36,6 +39,39 @@ const partitionOptions = computed(() => [
   { label: 'All', value: -1 },
   ...props.partitions.map((p) => ({ label: String(p), value: p })),
 ])
+
+// 原生 select 保留(spec 以 setValue 驱动);ui Input 以 :value/@input 接线
+// (不透传 v-model),数值输入沿用 v-model.number 的宽松转换语义。
+const SELECT_CLS =
+  'h-8 min-w-0 rounded-md border border-input bg-transparent px-2.5 text-[13px] shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
+
+// looseToNumber 与 v-model.number 同语义:不可解析时保留原串。
+function looseToNumber(v: string): number | string {
+  const n = Number.parseFloat(v)
+  return Number.isNaN(n) ? v : n
+}
+
+function onTimestampInput(e: Event): void {
+  timestampMs.value = looseToNumber((e.target as HTMLInputElement).value) as number | null
+}
+
+function onLimitInput(e: Event): void {
+  limit.value = looseToNumber((e.target as HTMLInputElement).value) as number
+}
+
+function onStartTimeInput(e: Event): void {
+  startTime.value = (e.target as HTMLInputElement).value
+}
+
+function onEndTimeInput(e: Event): void {
+  endTime.value = (e.target as HTMLInputElement).value
+}
+
+function onJumpOffsetInput(e: Event): void {
+  // 非法输入(非数字/负数/小数)一律回退为空串,jumpValid 据此禁用跳转按钮。
+  const n = Number.parseFloat((e.target as HTMLInputElement).value)
+  jumpOffsetInput.value = Number.isNaN(n) ? '' : n
+}
 
 // dtToMs converts a datetime-local value ('') to unix ms; empty input = unset.
 function dtToMs(v: string): number | null {
@@ -159,137 +195,133 @@ onMounted(runQuery)
 </script>
 
 <template>
-  <div class="browser" data-test="message-browser">
-    <div class="filter-bar">
-      <label class="filter-item">
+  <div class="flex h-full flex-col text-foreground" data-test="message-browser">
+    <div class="flex flex-wrap items-end gap-3 border-b border-border bg-muted/50 px-4 py-3">
+      <label class="flex flex-col gap-1 text-xs text-muted-foreground">
         分区
-        <select v-model="partition" data-test="filter-partition" class="input">
+        <select v-model="partition" data-test="filter-partition" :class="SELECT_CLS">
           <option v-for="opt in partitionOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
       </label>
-      <label class="filter-item">
+      <label class="flex flex-col gap-1 text-xs text-muted-foreground">
         起点
-        <select v-model="mode" data-test="filter-mode" class="input">
+        <select v-model="mode" data-test="filter-mode" :class="SELECT_CLS">
           <option value="earliest">最早 Earliest</option>
           <option value="latest">最新 Latest</option>
           <option value="timestamp">指定时间戳</option>
         </select>
       </label>
-      <label v-if="mode === 'timestamp'" class="filter-item">
+      <label v-if="mode === 'timestamp'" class="flex flex-col gap-1 text-xs text-muted-foreground">
         时间戳(ms)
-        <input v-model.number="timestampMs" data-test="filter-timestamp" type="number" class="input" placeholder="毫秒时间戳" />
-      </label>
-      <label class="filter-item">
-        起始时间
-        <input v-model="startTime" data-test="filter-start-time" type="datetime-local" class="input" />
-      </label>
-      <label class="filter-item">
-        结束时间
-        <input
-          v-model="endTime"
-          data-test="filter-end-time"
-          type="datetime-local"
-          class="input"
-          :disabled="!startTime"
-          :title="startTime ? undefined : '起始时间为空时结束时间无效'"
+        <Input
+          :value="timestampMs"
+          data-test="filter-timestamp"
+          type="number"
+          class="h-8 w-[150px] text-[13px]"
+          placeholder="毫秒时间戳"
+          @input="onTimestampInput"
         />
       </label>
-      <label class="filter-item">
+      <label class="flex flex-col gap-1 text-xs text-muted-foreground">
+        起始时间
+        <Input :value="startTime" data-test="filter-start-time" type="datetime-local" class="h-8 w-[190px] text-[13px]" @input="onStartTimeInput" />
+      </label>
+      <label class="flex flex-col gap-1 text-xs text-muted-foreground">
+        结束时间
+        <Input
+          :value="endTime"
+          data-test="filter-end-time"
+          type="datetime-local"
+          class="h-8 w-[190px] text-[13px]"
+          :disabled="!startTime"
+          :title="startTime ? undefined : '起始时间为空时结束时间无效'"
+          @input="onEndTimeInput"
+        />
+      </label>
+      <label class="flex flex-col gap-1 text-xs text-muted-foreground">
         条数
-        <input v-model.number="limit" data-test="filter-limit" type="number" min="1" max="10000" class="input" />
+        <Input :value="limit" data-test="filter-limit" type="number" min="1" max="10000" class="h-8 w-[84px] text-[13px]" @input="onLimitInput" />
       </label>
-      <label class="filter-item">
+      <label class="flex flex-col gap-1 text-xs text-muted-foreground">
         跳转 Offset
-        <input v-model.number="jumpOffsetInput" data-test="jump-offset-input" type="number" min="0" class="input" placeholder="输入 offset" />
+        <Input
+          :value="jumpOffsetInput"
+          data-test="jump-offset-input"
+          type="number"
+          min="0"
+          class="h-8 w-[130px] text-[13px]"
+          placeholder="输入 offset"
+          @input="onJumpOffsetInput"
+        />
       </label>
-      <button class="btn ghost" type="button" data-test="btn-jump-offset" :disabled="!jumpValid || st.loading" @click="jumpToOffset">
+      <Button variant="ghost" size="sm" type="button" data-test="btn-jump-offset" :disabled="!jumpValid || st.loading" @click="jumpToOffset">
+        <ArrowRightToLine />
         跳转
-      </button>
-      <button class="btn primary" type="button" data-test="btn-query" :disabled="st.loading" @click="runQuery">
+      </Button>
+      <Button variant="default" size="sm" type="button" data-test="btn-query" :disabled="st.loading" @click="runQuery">
+        <Search />
         {{ st.loading ? '查询中…' : '查询' }}
-      </button>
-      <div class="filter-actions">
-        <button class="btn ghost" type="button" data-test="btn-open-producer" @click="emit('open-producer')">生产消息</button>
+      </Button>
+      <div class="ml-auto flex items-end gap-2">
+        <Button variant="outline" size="sm" type="button" data-test="btn-open-producer" @click="emit('open-producer')">
+          <Send />
+          生产消息
+        </Button>
         <ExportDropdown :disabled="st.messages.length === 0" @export="exportAs" />
       </div>
     </div>
 
-    <div v-if="st.error" class="msg err" data-test="browse-error">{{ st.error }}</div>
+    <div v-if="st.error" class="bg-destructive/10 px-4 py-2 text-[13px] text-destructive" data-test="browse-error">{{ st.error }}</div>
 
-    <div ref="tableWrap" class="table-wrap" data-test="browse-table">
-      <table class="table data-table">
+    <div ref="tableWrap" class="min-h-0 flex-1 overflow-auto bg-card" data-test="browse-table">
+      <table class="w-full border-collapse text-[13px]">
         <thead>
           <tr>
-            <th>Partition</th>
-            <th>Offset</th>
-            <th>Timestamp</th>
-            <th>Key</th>
-            <th>Value</th>
+            <th class="sticky top-0 z-[1] border-b border-border bg-muted px-3 py-2 text-left text-xs font-medium text-muted-foreground">Partition</th>
+            <th class="sticky top-0 z-[1] border-b border-border bg-muted px-3 py-2 text-left text-xs font-medium text-muted-foreground">Offset</th>
+            <th class="sticky top-0 z-[1] border-b border-border bg-muted px-3 py-2 text-left text-xs font-medium text-muted-foreground">Timestamp</th>
+            <th class="sticky top-0 z-[1] border-b border-border bg-muted px-3 py-2 text-left text-xs font-medium text-muted-foreground">Key</th>
+            <th class="sticky top-0 z-[1] border-b border-border bg-muted px-3 py-2 text-left text-xs font-medium text-muted-foreground">Value</th>
           </tr>
         </thead>
         <tbody>
           <tr
             v-for="m in st.messages"
             :key="`${m.partition}:${m.offset}`"
-            class="row"
-            :class="{ 'row--target': isTarget(m) }"
+            class="cursor-pointer border-b border-border transition-colors last:border-b-0"
+            :class="isTarget(m) ? 'bg-info-bg shadow-[inset_2px_0_0_var(--info)] hover:bg-info-bg' : 'hover:bg-accent/50'"
             :data-test="isTarget(m) ? 'target-row' : 'message-row'"
             @click="openDetail(m)"
           >
-            <td>{{ m.partition }}</td>
-            <td class="mono">{{ m.offset }}</td>
-            <td class="mono">{{ formatTime(m.timestamp) }}</td>
-            <td class="mono truncate">{{ truncateCell(m.key) }}</td>
-            <td class="truncate">{{ truncateCell(m.value) }}</td>
+            <td class="px-3 py-1.5 tabular-nums">{{ m.partition }}</td>
+            <td class="px-3 py-1.5 font-mono tabular-nums">{{ m.offset }}</td>
+            <td class="whitespace-nowrap px-3 py-1.5 font-mono tabular-nums">{{ formatTime(m.timestamp) }}</td>
+            <td class="max-w-[320px] truncate px-3 py-1.5 font-mono">{{ truncateCell(m.key) }}</td>
+            <td class="max-w-[320px] truncate px-3 py-1.5">{{ truncateCell(m.value) }}</td>
           </tr>
           <tr v-if="st.messages.length === 0 && !st.loading">
-            <td colspan="5" class="empty" data-test="browse-empty">暂无消息</td>
+            <td colspan="5" class="px-3 py-6 text-center text-muted-foreground" data-test="browse-empty">暂无消息</td>
           </tr>
         </tbody>
       </table>
     </div>
 
-    <div class="actions">
-      <button
+    <div class="flex items-center gap-3 border-t border-border bg-muted/50 px-4 py-2">
+      <Button
         v-if="st.hasMore"
-        class="btn ghost"
+        variant="ghost"
+        size="sm"
         type="button"
         data-test="btn-load-more"
         :disabled="st.loading"
         @click="loadMore"
       >
+        <ChevronDown />
         {{ st.loading ? '加载中…' : '加载更多' }}
-      </button>
-      <span class="count" data-test="message-count">{{ st.messages.length }} 条</span>
+      </Button>
+      <span class="text-xs tabular-nums text-muted-foreground" data-test="message-count">{{ st.messages.length }} 条</span>
     </div>
 
     <MessageDetailDrawer :message="st.selected" :show="detailOpen" @close="closeDetail" />
   </div>
 </template>
-
-<style scoped>
-.browser { display: flex; flex-direction: column; height: 100%; font-family: var(--font); color: var(--text); }
-.filter-bar { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--bg-elevated); }
-.filter-item { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
-.filter-actions { margin-left: auto; display: flex; gap: 8px; align-items: flex-end; }
-.input {
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 6px 9px; font-size: 13px;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-.input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: var(--focus-ring); }
-.msg { padding: 8px 16px; font-size: 13px; }
-.msg.err { background: var(--danger-soft); color: var(--danger); }
-.table-wrap { flex: 1; overflow: auto; background: var(--bg-elevated); }
-/* 表基座走全局 .data-table;这里只留粘性表头差异。 */
-.table th { position: sticky; top: 0; z-index: 1; }
-.row { cursor: pointer; transition: background 0.1s ease; }
-.row:hover { background: var(--bg-hover); }
-.row--target { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
-.row--target:hover { background: var(--accent-soft); }
-.mono { font-family: var(--mono); }
-.truncate { max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.empty { text-align: center; color: var(--text-tertiary); padding: 24px; }
-.actions { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-top: 1px solid var(--border); background: var(--bg-elevated); }
-.count { font-size: 12px; color: var(--text-tertiary); }
-</style>

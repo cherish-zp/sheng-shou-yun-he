@@ -4,6 +4,10 @@ import { getApi } from '@/api/client'
 import type { ConsumerGroup } from '@/api/types'
 import { flattenGroupLag } from '@/utils/lag'
 import { fuzzyScore } from '@/utils/fuzzy'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { RefreshCw } from 'lucide-vue-next'
 
 const props = withDefaults(
   defineProps<{ connectionId: string; refreshRequest?: number }>(),
@@ -17,6 +21,19 @@ const groups = ref<ConsumerGroup[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
 const query = ref('')
+
+// ui Input 以 :value/@input 接线(不透传 v-model)。
+function onSearchInput(e: Event): void {
+  query.value = (e.target as HTMLInputElement).value
+}
+
+// lagBadgeClass 输出语义色 Badge 类:lag-danger(>1000)/lag-warn(>100)为
+// spec 的 hook 类,与语义 token 并存。
+function lagBadgeClass(lag: number): string {
+  if (lag > 1000) return 'lag-danger border-transparent bg-destructive/10 text-destructive'
+  if (lag > 100) return 'lag-warn border-transparent bg-warning-bg text-warning'
+  return 'border-transparent bg-muted text-muted-foreground'
+}
 
 // requestSeq guards against last-write-wins on a quick connection switch: a
 // slow response from the previous connection must never overwrite the data of
@@ -82,12 +99,12 @@ function emptyText(): string {
 </script>
 
 <template>
-  <div class="global-lag" data-test="global-lag-view">
-    <div class="toolbar">
-      <span class="title">Lag 总览</span>
-      <input
-        v-model="query"
-        class="search-input"
+  <div class="p-4 text-foreground" data-test="global-lag-view">
+    <div class="flex flex-wrap items-center gap-3">
+      <span class="text-sm font-semibold">Lag 总览</span>
+      <Input
+        :value="query"
+        class="h-8 w-[220px] text-[13px]"
         type="search"
         data-test="global-lag-search"
         placeholder="🔍 模糊搜索 Group / Topic…"
@@ -95,66 +112,45 @@ function emptyText(): string {
         autocorrect="off"
         autocomplete="off"
         spellcheck="false"
+        @input="onSearchInput"
       />
-      <button class="btn ghost" type="button" data-test="btn-refresh" :disabled="loading" @click="refresh">
+      <Button variant="ghost" size="sm" class="text-xs" type="button" data-test="btn-refresh" :disabled="loading" @click="refresh">
+        <RefreshCw />
         {{ loading ? '加载中…' : '刷新' }}
-      </button>
+      </Button>
     </div>
 
-    <div v-if="error" class="msg err" data-test="lag-error">{{ error }}</div>
+    <div v-if="error" class="mt-2.5 rounded-md bg-destructive/10 px-2.5 py-1.5 text-[13px] text-destructive" data-test="lag-error">{{ error }}</div>
 
-    <table class="table data-table" data-test="global-lag-table">
-      <thead>
-        <tr>
-          <th>Group</th>
-          <th>Topic</th>
-          <th>Total Lag</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr
-          v-for="r in rows"
-          :key="`${r.group}:${r.topic}`"
-          class="row clickable"
-          data-test="lag-row"
-          :title="`查看 ${r.group} / ${r.topic} 消费详情`"
-          @click="emit('open-group-lag', r.group, r.topic)"
-        >
-          <td class="mono" data-test="row-group">{{ r.group }}</td>
-          <td class="mono" data-test="row-topic">{{ r.topic }}</td>
-          <td class="mono" :class="{ 'lag-danger': r.lag > 1000, 'lag-warn': r.lag > 100 && r.lag <= 1000 }" data-test="lag-value">{{ r.lag }}</td>
-        </tr>
-        <tr v-if="rows.length === 0 && !loading && !error">
-          <td colspan="3" class="empty" data-test="lag-empty">{{ emptyText() }}</td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="mt-3 overflow-hidden rounded-lg border border-border bg-card">
+      <table class="w-full border-collapse text-[13px]" data-test="global-lag-table">
+        <thead>
+          <tr>
+            <th class="border-b border-border bg-muted/50 px-3 py-2 text-left text-xs font-medium text-muted-foreground">Group</th>
+            <th class="border-b border-border bg-muted/50 px-3 py-2 text-left text-xs font-medium text-muted-foreground">Topic</th>
+            <th class="border-b border-border bg-muted/50 px-3 py-2 text-left text-xs font-medium text-muted-foreground">Total Lag</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="r in rows"
+            :key="`${r.group}:${r.topic}`"
+            class="cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-accent/50"
+            data-test="lag-row"
+            :title="`查看 ${r.group} / ${r.topic} 消费详情`"
+            @click="emit('open-group-lag', r.group, r.topic)"
+          >
+            <td class="px-3 py-1.5 font-mono" data-test="row-group">{{ r.group }}</td>
+            <td class="px-3 py-1.5 font-mono" data-test="row-topic">{{ r.topic }}</td>
+            <td class="px-3 py-1.5">
+              <Badge class="font-mono tabular-nums" :class="lagBadgeClass(r.lag)" data-test="lag-value">{{ r.lag }}</Badge>
+            </td>
+          </tr>
+          <tr v-if="rows.length === 0 && !loading && !error">
+            <td colspan="3" class="px-3 py-5 text-center text-muted-foreground" data-test="lag-empty">{{ emptyText() }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </template>
-
-<style scoped>
-.global-lag { padding: 16px; color: var(--text); font-family: var(--font); }
-.toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-.title { font-weight: 600; font-size: 14px; }
-.search-input {
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 6px 9px; font-size: 13px; width: 220px;
-  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
-}
-.search-input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: var(--focus-ring); }
-.search-input::placeholder { color: var(--text-tertiary); }
-.msg { padding: 8px 10px; font-size: 13px; margin-top: 10px; border-radius: 7px; }
-.msg.err { background: var(--danger-soft); color: var(--danger); }
-/* 表基座走全局 .data-table;这里留卡片化容器差异。 */
-.table {
-  margin-top: 12px;
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: var(--radius-md); overflow: hidden;
-}
-.row.clickable { cursor: pointer; }
-.row.clickable:hover td { background: var(--bg-hover); }
-.mono { font-family: var(--mono); }
-.lag-danger { color: var(--danger); font-weight: 600; }
-.lag-warn { color: var(--warn); font-weight: 600; }
-.empty { text-align: center; color: var(--text-tertiary); padding: 20px; }
-</style>

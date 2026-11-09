@@ -3,6 +3,8 @@ import { computed, ref, watch } from 'vue'
 import type { Message } from '@/api/types'
 import { formatTime, displayValue, prettyJSON } from '@/utils/format'
 import { renderJsonView } from '@/utils/jsonview'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 
 const props = defineProps<{ message: Message | null; show: boolean }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -31,17 +33,19 @@ const valueView = computed(() => renderJsonView(valueRaw.value))
 const valueFormatted = computed(() => valueView.value.ok && valueMode.value === 'formatted')
 const valueText = computed(() => (valueFormatted.value ? valueView.value.text : valueRaw.value))
 
-// Collapse cap: .value.collapsed caps height at 18em = 12 lines at line-height
-// 1.5; the toggle only appears past that threshold so short values stay clean.
-// It is derived from the view's canonical text (pretty or raw passthrough) so
-// the control stays visible across raw/formatted switches. A character bound
-// catches single-line blobs (base64/hex) that never exceed the line cap.
+// Collapse cap: max-h 18em = 12 lines at line-height 1.5; the toggle only
+// appears past that threshold so short values stay clean. It is derived from
+// the view's canonical text (pretty or raw passthrough) so the control stays
+// visible across raw/formatted switches. A character bound catches
+// single-line blobs (base64/hex) that never exceed the line cap.
 const LONG_LINES = 12
 const COLLAPSE_CHAR_THRESHOLD = 2000
 const valueLong = computed(() => {
   const text = valueView.value.text
   return text.length > COLLAPSE_CHAR_THRESHOLD || text.split('\n').length > LONG_LINES
 })
+// collapsed 同时承载两件事:spec 的 hook 类断言与条件裁剪(18em 封顶)。
+const valueCollapsed = computed(() => valueLong.value && !valueExpanded.value)
 
 function toggleKeyMode(): void {
   keyMode.value = keyMode.value === 'formatted' ? 'raw' : 'formatted'
@@ -52,106 +56,65 @@ function toggleValueMode(): void {
 </script>
 
 <template>
-  <div v-if="show && message" class="drawer" data-test="message-drawer">
-    <div class="drawer-header">
-      <span class="drawer-title">消息详情</span>
-      <button class="drawer-close" data-test="drawer-close" type="button" @click="emit('close')">✕</button>
+  <div v-if="show && message" class="drawer fixed inset-y-0 right-0 z-[1000] flex w-[460px] flex-col border-l border-border text-foreground" data-test="message-drawer">
+    <div class="flex items-center justify-between border-b border-border px-4 py-3">
+      <span class="text-[15px] font-semibold">消息详情</span>
+      <Button variant="ghost" size="sm" class="h-7 w-7 p-0 text-muted-foreground" data-test="drawer-close" type="button" @click="emit('close')">✕</Button>
     </div>
-    <div class="drawer-body">
-      <div class="meta">
-        <span class="tag tag-partition" data-test="meta-partition">Partition {{ message.partition }}</span>
-        <span class="tag tag-offset" data-test="meta-offset">Offset {{ message.offset }}</span>
-        <span class="tag tag-time">{{ formatTime(message.timestamp) }}</span>
+    <div class="overflow-auto p-4">
+      <div class="flex flex-wrap gap-2">
+        <Badge class="border-transparent bg-info-bg font-mono text-info" data-test="meta-partition">Partition {{ message.partition }}</Badge>
+        <Badge class="border-transparent bg-warning-bg font-mono text-warning" data-test="meta-offset">Offset {{ message.offset }}</Badge>
+        <Badge class="border-transparent bg-success-bg font-mono text-success">{{ formatTime(message.timestamp) }}</Badge>
       </div>
-      <div class="kv">
-        <div class="kv-head">
-          <span class="label">Key</span>
-          <button v-if="keyView.ok" class="mode-btn" data-test="key-mode" type="button" :aria-pressed="keyMode === 'formatted'" @click="toggleKeyMode">
+      <div class="mt-4">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs uppercase tracking-wider text-muted-foreground">Key</span>
+          <Button v-if="keyView.ok" variant="outline" size="sm" class="h-6 px-2 text-[11px]" data-test="key-mode" type="button" :aria-pressed="keyMode === 'formatted'" @click="toggleKeyMode">
             {{ keyMode === 'formatted' ? '原始' : '格式化' }}
-          </button>
+          </Button>
         </div>
-        <pre class="value" data-test="key-value"><template v-if="keyFormatted"><span v-for="(t, i) in keyView.tokens" :key="i" :class="'tok-' + t.type">{{ t.text }}</span></template><template v-else>{{ keyRaw }}</template></pre>
+        <pre
+          class="mt-1.5 whitespace-pre-wrap break-all rounded-md border border-border bg-muted/50 p-2.5 font-mono text-[13px] leading-relaxed text-foreground"
+          data-test="key-value"
+        ><template v-if="keyFormatted"><span v-for="(t, i) in keyView.tokens" :key="i" :class="'tok-' + t.type">{{ t.text }}</span></template><template v-else>{{ keyRaw }}</template></pre>
       </div>
-      <div class="kv">
-        <div class="kv-head">
-          <span class="label">Value</span>
-          <span class="kv-actions">
-            <button v-if="valueView.ok" class="mode-btn" data-test="value-mode" type="button" :aria-pressed="valueMode === 'formatted'" @click="toggleValueMode">
+      <div class="mt-4">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs uppercase tracking-wider text-muted-foreground">Value</span>
+          <span class="inline-flex gap-1.5">
+            <Button v-if="valueView.ok" variant="outline" size="sm" class="h-6 px-2 text-[11px]" data-test="value-mode" type="button" :aria-pressed="valueMode === 'formatted'" @click="toggleValueMode">
               {{ valueMode === 'formatted' ? '原始' : '格式化' }}
-            </button>
-            <button v-if="valueLong" class="mode-btn" data-test="value-expand" type="button" @click="valueExpanded = !valueExpanded">
+            </Button>
+            <Button v-if="valueLong" variant="outline" size="sm" class="h-6 px-2 text-[11px]" data-test="value-expand" type="button" @click="valueExpanded = !valueExpanded">
               {{ valueExpanded ? '收起' : '展开' }}
-            </button>
+            </Button>
           </span>
         </div>
-        <pre class="value" :class="{ collapsed: valueLong && !valueExpanded }" data-test="value-body"><template v-if="valueFormatted"><span v-for="(t, i) in valueView.tokens" :key="i" :class="'tok-' + t.type">{{ t.text }}</span></template><template v-else>{{ valueText }}</template></pre>
+        <pre
+          class="mt-1.5 whitespace-pre-wrap break-all rounded-md border border-border bg-muted/50 p-2.5 font-mono text-[13px] leading-relaxed text-foreground"
+          :class="valueCollapsed ? 'collapsed max-h-[18em] overflow-hidden' : ''"
+          data-test="value-body"
+        ><template v-if="valueFormatted"><span v-for="(t, i) in valueView.tokens" :key="i" :class="'tok-' + t.type">{{ t.text }}</span></template><template v-else>{{ valueText }}</template></pre>
       </div>
-      <div v-if="message.headers && message.headers.length" class="kv">
-        <span class="label">Headers</span>
-        <pre class="value" data-test="headers-body">{{ prettyJSON(JSON.stringify(message.headers)) }}</pre>
+      <div v-if="message.headers && message.headers.length" class="mt-4">
+        <span class="text-xs uppercase tracking-wider text-muted-foreground">Headers</span>
+        <pre class="mt-1.5 whitespace-pre-wrap break-all rounded-md border border-border bg-muted/50 p-2.5 font-mono text-[13px] leading-relaxed text-foreground" data-test="headers-body">{{ prettyJSON(JSON.stringify(message.headers)) }}</pre>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
+/* 玻璃抽屉壳:复合 backdrop-filter 与玻璃 token 难以用工具类表达,保留
+   最小 scoped 壳(布局/边框/文字色已走语义 token);styles.css 迁移期共存。 */
 .drawer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 460px;
   background: var(--glass-bg);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
-  border-left: 1px solid var(--border);
   box-shadow: var(--glass-shadow);
-  z-index: 1000;
-  display: flex;
-  flex-direction: column;
-  color: var(--text);
-  font-family: var(--font);
 }
-.drawer-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border);
-}
-.drawer-title { font-weight: 600; font-size: 15px; }
-.drawer-close { background: none; border: none; color: var(--text-tertiary); font-size: 16px; cursor: pointer; border-radius: 5px; padding: 1px 6px; }
-.drawer-close:hover { background: var(--bg-hover); color: var(--text); }
-.drawer-body { padding: 16px 18px; overflow: auto; }
-.meta { display: flex; gap: 8px; flex-wrap: wrap; }
-.tag { padding: 2px 10px; border-radius: 6px; font-size: 12px; font-family: var(--mono); font-weight: 500; }
-.tag-partition { background: var(--info-soft); color: var(--info); border: 1px solid transparent; }
-.tag-offset { background: var(--warn-soft); color: var(--warn); border: 1px solid transparent; }
-.tag-time { background: var(--ok-soft); color: var(--ok); border: 1px solid transparent; }
-.kv { margin-top: 16px; }
-.kv-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.kv-actions { display: inline-flex; gap: 6px; }
-.label { font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
-.mode-btn {
-  background: none; border: 1px solid var(--border-strong); color: var(--text-secondary);
-  font-size: 11px; line-height: 1.5; border-radius: 5px; padding: 0 8px; cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-.mode-btn:hover { background: var(--bg-hover); color: var(--text); }
-.value {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px;
-  margin: 6px 0 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-  font-family: var(--mono);
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text);
-}
-.value.collapsed { max-height: 18em; overflow: hidden; }
+/* JSON 语法高亮调色板:无对应语义 token,沿用 --json-* 主题变量。 */
 .tok-key { color: var(--json-key); }
 .tok-string { color: var(--json-string); }
 .tok-number { color: var(--json-number); }

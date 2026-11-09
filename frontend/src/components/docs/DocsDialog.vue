@@ -38,19 +38,22 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
 <template>
   <Teleport to="body">
-    <div v-if="show" class="overlay">
-      <div class="dialog" data-test="docs-dialog">
-        <div class="head">
-          <span class="title">使用文档</span>
-          <button class="close" type="button" data-test="btn-docs-close" @click="emit('close')">✕</button>
+    <div v-if="show" class="fixed inset-0 z-[1200] flex items-center justify-center bg-black/50">
+      <div
+        class="flex h-[70vh] w-[760px] max-w-[calc(100vw-48px)] flex-col gap-3 rounded-lg border border-border bg-background p-4 text-foreground shadow-lg"
+        data-test="docs-dialog"
+      >
+        <div class="flex items-center justify-between">
+          <span class="text-[15px] font-semibold">使用文档</span>
+          <button class="rounded-md px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" type="button" data-test="btn-docs-close" @click="emit('close')">✕</button>
         </div>
-        <div class="body">
-          <aside class="toc" data-test="docs-toc">
+        <div class="flex min-h-0 flex-1 gap-3.5">
+          <aside class="flex w-[150px] flex-none flex-col gap-1 border-r border-border pr-3" data-test="docs-toc">
             <button
               v-for="d in docEntries"
               :key="d.id"
-              class="toc-item"
-              :class="{ active: d.id === currentId }"
+              class="rounded-md px-2.5 py-[7px] text-left text-[13px] transition-colors"
+              :class="d.id === currentId ? 'active bg-accent font-semibold text-accent-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
               type="button"
               :data-test="`docs-toc-item-${d.id}`"
               @click="select(d.id)"
@@ -60,7 +63,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           </aside>
           <!-- 内置可信文档,渲染前已转义。 -->
           <!-- eslint-disable-next-line vue/no-v-html -->
-          <article class="content" data-test="docs-content" v-html="renderedHtml"></article>
+          <article class="docs-content min-w-0 flex-1 overflow-auto text-[13px] leading-relaxed" data-test="docs-content" v-html="renderedHtml"></article>
         </div>
       </div>
     </div>
@@ -68,112 +71,49 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 </template>
 
 <style scoped>
-.overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--overlay);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1200;
-  font-family: var(--font);
-  color: var(--text);
-}
-.dialog {
-  width: 760px;
-  max-width: calc(100vw - 48px);
-  height: 70vh;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.head { display: flex; align-items: center; justify-content: space-between; }
-.title { font-weight: 600; font-size: 15px; }
-.close { background: none; border: none; color: var(--text-tertiary); cursor: pointer; border-radius: 5px; padding: 1px 6px; }
-.close:hover { background: var(--bg-hover); color: var(--text); }
-.body { display: flex; gap: 14px; flex: 1; min-height: 0; }
-.toc {
-  width: 150px;
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding-right: 12px;
-  border-right: 1px solid var(--border);
-}
-.toc-item {
-  text-align: left;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-family: var(--font);
-  padding: 7px 10px;
-  border-radius: var(--radius-sm);
-  transition: background 0.1s ease, color 0.1s ease;
-}
-.toc-item:hover { background: var(--bg-hover); color: var(--text); }
-.toc-item.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 600;
-}
-.content {
-  flex: 1;
-  min-width: 0;
-  overflow: auto;
-  font-size: 13px;
-  line-height: 1.7;
-}
-
-/* v-html 注入的 Markdown 元素样式(scoped 需 :deep),深浅色一律走 CSS 变量。 */
-.content :deep(h1) { font-size: 18px; font-weight: 600; margin: 4px 0 10px; }
-.content :deep(h2) {
+/* 弹窗骨架走 Tailwind 语义 token;v-html 注入的 Markdown 元素无法挂 Tailwind
+   类,保留 :deep 规则并全部改用 shadcn 语义令牌。 */
+.docs-content :deep(h1) { font-size: 18px; font-weight: 600; margin: 4px 0 10px; }
+.docs-content :deep(h2) {
   font-size: 15px;
   font-weight: 600;
   margin: 18px 0 8px;
   padding-bottom: 4px;
   border-bottom: 1px solid var(--border);
 }
-.content :deep(h3) { font-size: 13.5px; font-weight: 600; margin: 14px 0 6px; }
-.content :deep(p) { margin: 6px 0; color: var(--text); }
-.content :deep(ul),
-.content :deep(ol) { margin: 6px 0; padding-left: 20px; }
-.content :deep(li) { margin: 3px 0; }
-.content :deep(strong) { font-weight: 600; }
-.content :deep(code) {
-  font-family: var(--font-mono, ui-monospace, monospace);
+.docs-content :deep(h3) { font-size: 13.5px; font-weight: 600; margin: 14px 0 6px; }
+.docs-content :deep(p) { margin: 6px 0; }
+.docs-content :deep(ul),
+.docs-content :deep(ol) { margin: 6px 0; padding-left: 20px; }
+.docs-content :deep(li) { margin: 3px 0; }
+.docs-content :deep(strong) { font-weight: 600; }
+.docs-content :deep(code) {
+  font-family: var(--font-mono);
   font-size: 12px;
-  background: var(--bg-subtle);
+  background: var(--muted);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 5px;
 }
-.content :deep(pre) {
-  background: var(--bg-subtle);
+.docs-content :deep(pre) {
+  background: var(--muted);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
   overflow: auto;
 }
-.content :deep(pre code) { background: none; border: none; padding: 0; }
-.content :deep(table) {
+.docs-content :deep(pre code) { background: none; border: none; padding: 0; }
+.docs-content :deep(table) {
   border-collapse: collapse;
   width: 100%;
   margin: 8px 0;
   font-size: 12.5px;
 }
-.content :deep(th),
-.content :deep(td) {
+.docs-content :deep(th),
+.docs-content :deep(td) {
   border: 1px solid var(--border);
   padding: 6px 10px;
   text-align: left;
 }
-.content :deep(th) { background: var(--bg-subtle); font-weight: 600; }
+.docs-content :deep(th) { background: var(--muted); font-weight: 600; }
 </style>
