@@ -1,7 +1,29 @@
 <script setup lang="ts">
-import { computed, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onUnmounted, reactive, ref, watch, type Component } from 'vue'
 import { getApi } from '@/api/client'
 import type { Connection, Topic, ConsumerGroup, TopicMessageCounts, RedisDBInfo, CHTableInfo, MysqlTableInfo, PostgresRelationInfo, EsIndexInfo, EsTemplateInfo, HiveTableInfo } from '@/api/types'
+import {
+  ArrowDown,
+  ArrowUp,
+  BarChart3,
+  ChevronRight,
+  Database,
+  FileCog,
+  FileText,
+  Folder,
+  Hash,
+  Info,
+  Plus,
+  RefreshCw,
+  Search,
+  Table2,
+  Trash2,
+  Users,
+} from 'lucide-vue-next'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { fuzzyFilter } from '@/utils/fuzzy'
 import { formatCount } from '@/utils/format'
 import { formatBytes } from '@/utils/bytes'
@@ -48,8 +70,8 @@ const connStore = useConnectionsStore()
 
 // Per data-source type metadata so the tree can grow to ES later.
 // letter 驱动行尾「圆角小方块 + 品牌色首字母」徽标;品牌主色/柔和底色不经
-// JS,统一走 styles.css 的 --type-* CSS 变量(亮暗主题各自取值),由
-// .type-badge-<type> class 关联,保证对比度双主题都成立。
+// JS,统一走本组件 scoped CSS 的 --type-* 局部色表(亮暗主题各自取值,见
+// <style scoped> 头部),由 .type-badge-<type> class 关联,保证对比度双主题都成立。
 const TYPE_META: Record<string, { label: string; letter: string }> = {
   kafka: { label: 'Kafka', letter: 'K' },
   mysql: { label: 'MySQL', letter: 'M' },
@@ -81,12 +103,13 @@ function isConnected(id: string): boolean {
   return statusOf(id) === 'connected'
 }
 
-// statusClass maps a connection's state to the status-dot colouring. The dot
-// uses the data-source colour (per type) when connected or connecting, and a
-// neutral red/gray otherwise.
+// statusClass maps a connection's state to the status-dot colouring. 保留
+// `conn-status-<type>` 历史 class(既有用例断言),同时追加语义状态 class
+// (conn-status-connected/connecting/...),着色统一走 scoped CSS 的语义 token
+// (success/destructive/muted),不再按数据源类型取色。
 function statusClass(conn: Connection): string[] {
   const s = statusOf(conn.id)
-  if (s === 'connected') return [`conn-status-${conn.type}`]
+  if (s === 'connected') return [`conn-status-${conn.type}`, 'conn-status-connected']
   if (s === 'connecting') return [`conn-status-${conn.type}`, 'conn-status-connecting']
   return [`conn-status-${s}`]
 }
@@ -111,23 +134,36 @@ type ObjectKind = 'topic' | 'table' | 'group' | 'redis-db' | 'es-index' | 'es-te
 interface ObjectCollection {
   key: string
   label: string
-  icon: string
   kind: ObjectKind
   creatable: boolean
   emptyText: string
 }
 
+// 分区(分段按钮/分组标题)与树行统一走 lucide 图标,按 ObjectKind 取件;
+// emoji 字符串随 UI 对齐 DBX 一并退役。
+const KIND_ICONS: Record<ObjectKind, Component> = {
+  topic: Folder,
+  table: Table2,
+  group: Users,
+  'redis-db': Database,
+  'es-index': FileText,
+  'es-template': FileCog,
+  'mysql-table': Table2,
+  'hive-table': Table2,
+  connection: Database,
+}
+
 const COLLECTIONS_BY_TYPE: Record<string, ObjectCollection[]> = {
   kafka: [
-    { key: 'topics', label: 'Topics', icon: '📋', kind: 'topic', creatable: true, emptyText: '（无主题）' },
-    { key: 'consumers', label: 'Consumers', icon: '👥', kind: 'group', creatable: false, emptyText: '（无消费组）' },
+    { key: 'topics', label: 'Topics', kind: 'topic', creatable: true, emptyText: '（无主题）' },
+    { key: 'consumers', label: 'Consumers', kind: 'group', creatable: false, emptyText: '（无消费组）' },
   ],
   redis: [
-    { key: 'dbs', label: 'Databases', icon: '🗂️', kind: 'redis-db' as ObjectKind, creatable: false, emptyText: '（无数据库）' },
+    { key: 'dbs', label: 'Databases', kind: 'redis-db' as ObjectKind, creatable: false, emptyText: '（无数据库）' },
   ],
   // Future data sources plug in here, e.g.:
-  // mysql: [{ key: 'tables', label: 'Tables', icon: '🗄️', kind: 'table', creatable: true, emptyText: '（无表）' }],
-  // es: [{ key: 'indices', label: 'Indices', icon: '🔎', kind: 'index', creatable: true, emptyText: '（无索引）' }],
+  // mysql: [{ key: 'tables', label: 'Tables', kind: 'table', creatable: true, emptyText: '（无表）' }],
+  // es: [{ key: 'indices', label: 'Indices', kind: 'index', creatable: true, emptyText: '（无索引）' }],
 }
 
 function collectionsOf(type: string): ObjectCollection[] {
@@ -1253,16 +1289,20 @@ function exportTopics(conn: Connection): void {
 </script>
 
 <template>
-  <div class="tree" data-test="connection-tree">
-    <button class="tree-new" type="button" data-test="btn-new" @click="emit('new')">＋ 新建连接</button>
-    <div v-if="connections.length === 0" class="tree-empty" data-test="tree-empty">暂无连接</div>
-    <div v-for="conn in connections" :key="conn.id" class="conn" data-test="connection">
+  <div class="conn-tree px-2 pt-2.5 pb-3 text-[13px] text-foreground" data-test="connection-tree">
+    <Button class="mb-2.5 w-full" type="button" data-test="btn-new" @click="emit('new')">
+      <Plus class="size-4" aria-hidden="true" />
+      新建连接
+    </Button>
+    <div v-if="connections.length === 0" class="mx-0.5 mb-2 rounded-lg border border-dashed border-border px-3 py-6 text-center text-xs text-muted-foreground" data-test="tree-empty">暂无连接</div>
+    <div v-for="conn in connections" :key="conn.id" class="mb-px" data-test="connection">
       <div
-        class="conn-row"
+        class="conn-row group relative flex h-8 cursor-pointer items-center gap-1.5 rounded-md px-2 transition-colors select-none hover:bg-accent"
         data-test="conn-row"
         draggable="true"
         :class="{
           active: isExpanded(conn.id),
+          'bg-accent': isExpanded(conn.id),
           'drop-before': dropHint?.targetId === conn.id && dropHint.place === 'before',
           'drop-after': dropHint?.targetId === conn.id && dropHint.place === 'after',
         }"
@@ -1273,32 +1313,36 @@ function exportTopics(conn: Connection): void {
         @drop="onConnDrop(conn, $event)"
         @dragend="onConnDragEnd"
       >
-        <span class="caret" data-test="conn-caret" :class="{ open: isExpanded(conn.id) }">
-          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-            <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
+        <span
+          class="flex size-4 shrink-0 items-center justify-center transition-transform"
+          :class="isExpanded(conn.id) ? 'open rotate-90 text-foreground' : 'text-muted-foreground'"
+          data-test="conn-caret"
+        >
+          <ChevronRight class="size-4" aria-hidden="true" />
         </span>
         <span
-          class="conn-status"
+          class="conn-status size-2 shrink-0 rounded-full"
           data-test="conn-status-dot"
           :class="statusClass(conn)"
           :data-status="statusOf(conn.id)"
           :title="STATUS_LABEL[statusOf(conn.id)]"
         ></span>
-        <span class="conn-name" data-test="conn-name">{{ conn.name }}</span>
-        <!-- 圆角小方块 + 品牌色首字母:主色/字色走 --type-* 变量(亮暗两套)。 -->
-        <span
-          class="conn-type-badge"
+        <span class="min-w-0 flex-1 truncate font-semibold" data-test="conn-name">{{ conn.name }}</span>
+        <!-- 圆角小方块 + 品牌色首字母:Badge 原语承载形状,主色/字色仍走
+             组件内 --type-* 局部色表(亮暗两套),见 scoped CSS 注释。 -->
+        <Badge
+          variant="secondary"
+          class="size-[18px] shrink-0 justify-center rounded-md p-0 font-mono text-[10px] font-bold"
           :class="`type-badge-${conn.type}`"
           data-test="conn-type-badge"
           aria-hidden="true"
-        >{{ typeMeta(conn).letter }}</span>
-        <span class="conn-type" :class="`conn-type-${conn.type}`" data-test="conn-type">{{ typeMeta(conn).label }}</span>
+        >{{ typeMeta(conn).letter }}</Badge>
+        <span class="conn-type shrink-0 rounded px-1.5 text-[11px] font-medium leading-4" :class="`conn-type-${conn.type}`" data-test="conn-type">{{ typeMeta(conn).label }}</span>
         <!-- ↑↓ 排序微调:hover 显现(与 leaf-del 同范式),边界 disabled 置灰;
              click.stop 防止触发行的展开/收起。 -->
-        <span class="conn-actions">
+        <span class="ml-0.5 flex shrink-0 items-center gap-px">
           <button
-            class="conn-move"
+            class="flex size-[18px] items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-0 group-hover:opacity-100 group-hover:disabled:opacity-30"
             type="button"
             data-test="btn-move-up"
             title="上移"
@@ -1306,12 +1350,10 @@ function exportTopics(conn: Connection): void {
             :disabled="isFirstConn(conn.id)"
             @click.stop="moveConn(conn, -1)"
           >
-            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-              <path d="M4 10 8 6l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
+            <ArrowUp class="size-3" aria-hidden="true" />
           </button>
           <button
-            class="conn-move"
+            class="flex size-[18px] items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-0 group-hover:opacity-100 group-hover:disabled:opacity-30"
             type="button"
             data-test="btn-move-down"
             title="下移"
@@ -1319,43 +1361,41 @@ function exportTopics(conn: Connection): void {
             :disabled="isLastConn(conn.id)"
             @click.stop="moveConn(conn, 1)"
           >
-            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-              <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
+            <ArrowDown class="size-3" aria-hidden="true" />
           </button>
         </span>
       </div>
 
-      <div v-if="isExpanded(conn.id) && (conn.type === 'kafka' || conn.type === 'redis')" class="conn-children">
-        <div v-if="loadingByConn[conn.id]" class="conn-loading" data-test="tree-loading">加载中…</div>
-        <div v-else-if="errorByConn[conn.id]" class="conn-error" data-test="tree-error">{{ errorByConn[conn.id] }}</div>
+      <div v-if="isExpanded(conn.id) && (conn.type === 'kafka' || conn.type === 'redis')" class="ml-4 border-l border-border pl-2">
+        <div v-if="loadingByConn[conn.id]" class="px-1 py-1 text-muted-foreground" data-test="tree-loading">加载中…</div>
+        <div v-else-if="errorByConn[conn.id]" class="px-1 py-1 text-destructive" data-test="tree-error">{{ errorByConn[conn.id] }}</div>
         <template v-else>
-          <div class="segmented" data-test="section-tabs" role="tablist">
+          <div class="segmented my-1.5 mb-2 flex gap-0.5 rounded-lg border border-border bg-muted p-0.5" data-test="section-tabs" role="tablist">
             <button
               v-for="col in collectionsOf(conn.type)"
               :key="col.key"
               type="button"
-              class="segmented-btn"
-              :class="{ active: activeSection(conn.id, collectionsOf(conn.type)) === col.key }"
+              class="segmented-btn flex min-w-0 flex-1 items-center justify-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+              :class="activeSection(conn.id, collectionsOf(conn.type)) === col.key ? 'active bg-background text-foreground shadow-sm' : ''"
               :data-test="`section-tab-${col.key}`"
               role="tab"
               :aria-selected="activeSection(conn.id, collectionsOf(conn.type)) === col.key"
               @click="activeSectionByConn[conn.id] = col.key"
             >
-              <span class="segmented-icon">{{ col.icon }}</span>
-              <span class="segmented-label">{{ col.label }}</span>
-              <span class="segmented-count">{{ objectCount(conn.id, col) }}</span>
+              <component :is="KIND_ICONS[col.kind]" class="size-3.5 shrink-0" aria-hidden="true" />
+              <span class="segmented-label min-w-0 flex-1 truncate text-left">{{ col.label }}</span>
+              <span class="segmented-count shrink-0 rounded-full bg-background/80 px-1.5 text-[11px] leading-4 text-muted-foreground">{{ objectCount(conn.id, col) }}</span>
             </button>
           </div>
 
           <button v-if="conn.type === 'kafka'"
-            class="lag-entry"
+            class="lag-entry flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left transition-colors hover:bg-accent"
             type="button"
             data-test="btn-open-lag"
             title="查看该连接所有消费组的 Lag 积压总览"
             @click="emit('open-lag', conn.id)"
           >
-            <span class="lag-entry-icon">📊</span>
+            <BarChart3 class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span>Lag 总览</span>
           </button>
 
@@ -1363,7 +1403,7 @@ function exportTopics(conn: Connection): void {
             <template v-if="activeSection(conn.id, collectionsOf(conn.type)) === col.key">
             <component
               :is="col.creatable ? 'button' : 'div'"
-              class="group-label"
+              class="group-label mt-2 mb-0.5 flex w-full items-center justify-between px-1.5 py-1 text-left text-[11px] uppercase tracking-wide text-muted-foreground"
               :class="{ clickable: col.creatable }"
               data-test="object-group"
               :type="col.creatable ? 'button' : undefined"
@@ -1372,14 +1412,20 @@ function exportTopics(conn: Connection): void {
               :title="col.creatable ? '新建' : undefined"
               @click="col.creatable ? toggleCreate(conn, col) : undefined"
             >
-              <span class="group-title">{{ col.icon }} {{ col.label }}</span>
-              <span v-if="col.creatable" class="group-add" data-test="btn-create-object" aria-hidden="true">＋</span>
+              <span class="group-title flex min-w-0 flex-1 items-center gap-1">
+                <component :is="KIND_ICONS[col.kind]" class="size-3.5 shrink-0" aria-hidden="true" />
+                {{ col.label }}
+              </span>
+              <span v-if="col.creatable" class="group-add flex size-5 items-center justify-center rounded-md text-primary transition-colors" data-test="btn-create-object" aria-hidden="true">
+                <Plus class="size-3.5" />
+              </span>
             </component>
 
-            <div v-if="col.kind === 'topic' && isCreatingFor(conn.id, 'topic')" class="create-form" data-test="create-form">
-              <input
-                v-model="createForm.name"
-                class="input"
+            <div v-if="col.kind === 'topic' && isCreatingFor(conn.id, 'topic')" class="create-form my-1 flex flex-col gap-1.5 rounded-lg border border-border bg-muted/50 p-2" data-test="create-form">
+              <Input
+                :value="createForm.name"
+                @input="createForm.name = ($event.target as HTMLInputElement).value"
+                class="h-7 text-xs"
                 type="text"
                 data-test="create-name"
                 placeholder="Topic 名称"
@@ -1388,32 +1434,34 @@ function exportTopics(conn: Connection): void {
                 autocomplete="off"
                 spellcheck="false"
               />
-              <div class="create-row">
-                <label class="create-field">
+              <div class="flex gap-2">
+                <Label class="flex-1 flex-col items-stretch gap-1 text-xs font-normal text-muted-foreground">
                   分区
-                  <input v-model.number="createForm.partitions" class="input num" type="number" min="1" data-test="create-partitions" />
-                </label>
-                <label class="create-field">
+                  <Input :value="createForm.partitions" @input="createForm.partitions = Number(($event.target as HTMLInputElement).value)" class="h-7 text-xs" type="number" min="1" data-test="create-partitions" />
+                </Label>
+                <Label class="flex-1 flex-col items-stretch gap-1 text-xs font-normal text-muted-foreground">
                   副本
-                  <input v-model.number="createForm.replication" class="input num" type="number" min="1" data-test="create-replication" />
-                </label>
+                  <Input :value="createForm.replication" @input="createForm.replication = Number(($event.target as HTMLInputElement).value)" class="h-7 text-xs" type="number" min="1" data-test="create-replication" />
+                </Label>
               </div>
-              <div v-if="createError" class="create-error" data-test="create-error">{{ createError }}</div>
-              <div class="create-actions">
-                <button class="btn primary" type="button" data-test="btn-create-submit" :disabled="creating" @click="submitCreate(conn)">
+              <div v-if="createError" class="create-error text-xs text-destructive" data-test="create-error">{{ createError }}</div>
+              <div class="create-actions flex gap-2">
+                <Button size="sm" type="button" data-test="btn-create-submit" :disabled="creating" @click="submitCreate(conn)">
                   {{ creating ? '创建中…' : '创建' }}
-                </button>
-                <button class="btn ghost" type="button" data-test="btn-create-cancel" @click="closeCreate">取消</button>
+                </Button>
+                <Button size="sm" variant="outline" type="button" data-test="btn-create-cancel" @click="closeCreate">取消</Button>
               </div>
             </div>
 
-            <div v-if="col.key === 'topics'" class="topic-search">
-              <input
-                v-model="searchByConn[conn.id]"
-                class="search-input"
+            <div v-if="col.key === 'topics'" class="topic-search relative my-1.5">
+              <Search class="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+              <Input
+                :value="searchByConn[conn.id]"
+                @input="searchByConn[conn.id] = ($event.target as HTMLInputElement).value"
+                class="h-7 pl-7 text-xs"
                 type="search"
                 data-test="topic-search"
-                placeholder="🔍 模糊搜索 Topic…"
+                placeholder="模糊搜索 Topic…"
                 autocapitalize="off"
                 autocorrect="off"
                 autocomplete="off"
@@ -1421,16 +1469,16 @@ function exportTopics(conn: Connection): void {
               />
             </div>
 
-            <div v-if="col.key === 'topics'" class="topic-toolbar">
-              <button class="tool-btn" type="button" data-test="select-mode-toggle" @click="toggleSelectMode(conn)">
+            <div v-if="col.key === 'topics'" class="topic-toolbar mt-0.5 flex items-center gap-1.5">
+              <button class="tool-btn rounded-md border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" type="button" data-test="select-mode-toggle" @click="toggleSelectMode(conn)">
                 {{ isSelectMode(conn.id) ? '退出多选' : '多选' }}
               </button>
               <template v-if="isSelectMode(conn.id)">
-                <button class="tool-btn" type="button" data-test="select-all-topics" @click="toggleSelectAll(conn.id)">
+                <button class="tool-btn rounded-md border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" type="button" data-test="select-all-topics" @click="toggleSelectAll(conn.id)">
                   {{ isAllSelected(conn.id) ? '取消全选' : '全选' }}
                 </button>
                 <button
-                  class="tool-btn danger"
+                  class="tool-btn rounded-md border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-destructive/60 hover:bg-destructive/10 hover:text-destructive"
                   type="button"
                   data-test="batch-delete-topics"
                   :disabled="selectedOf(conn.id).length === 0"
@@ -1438,32 +1486,34 @@ function exportTopics(conn: Connection): void {
                   @click="askBatchDelete(conn.id)"
                 >删除({{ selectedOf(conn.id).length }})</button>
               </template>
-              <button class="tool-btn" type="button" data-test="export-topics" title="导出 Topic 列表为 CSV" @click="exportTopics(conn)">导出列表</button>
+              <button class="tool-btn rounded-md border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" type="button" data-test="export-topics" title="导出 Topic 列表为 CSV" @click="exportTopics(conn)">导出列表</button>
               <button
-                class="tool-btn"
+                class="tool-btn flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 type="button"
                 data-test="btn-refresh-counts"
                 title="重新统计各 Topic 的消息数（一次批量 offset 查询）"
                 @click="loadCounts(conn.id)"
-              >↻ 消息数</button>
+              ><RefreshCw class="size-3" aria-hidden="true" /> 消息数</button>
             </div>
 
-            <div v-if="col.key === 'topics' && batchFeedback(conn.id)" class="batch-result">
-              <div class="batch-summary" data-test="batch-delete-summary">
+            <div v-if="col.key === 'topics' && batchFeedback(conn.id)" class="batch-result my-1 rounded-lg border border-border bg-muted/50 px-2 py-1.5">
+              <div class="batch-summary text-xs text-foreground" data-test="batch-delete-summary">
                 删除完成：成功 {{ batchFeedback(conn.id)?.deleted ?? 0 }} / 失败 {{ batchFeedback(conn.id)?.failed ?? 0 }}
               </div>
-              <div v-if="(batchFeedback(conn.id)?.failures.length ?? 0) > 0" class="batch-failures" data-test="batch-delete-failures">
-                <div v-for="f in batchFeedback(conn.id)?.failures" :key="f.name" class="batch-failure">{{ f.name }}：{{ f.error }}</div>
+              <div v-if="(batchFeedback(conn.id)?.failures.length ?? 0) > 0" class="batch-failures mt-1 flex flex-col gap-0.5" data-test="batch-delete-failures">
+                <div v-for="f in batchFeedback(conn.id)?.failures" :key="f.name" class="batch-failure truncate text-[11px] text-destructive">{{ f.name }}：{{ f.error }}</div>
               </div>
             </div>
 
-            <div v-if="col.key === 'consumers'" class="topic-search">
-              <input
-                v-model="groupSearchByConn[conn.id]"
-                class="search-input"
+            <div v-if="col.key === 'consumers'" class="topic-search relative my-1.5">
+              <Search class="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+              <Input
+                :value="groupSearchByConn[conn.id]"
+                @input="groupSearchByConn[conn.id] = ($event.target as HTMLInputElement).value"
+                class="h-7 pl-7 text-xs"
                 type="search"
                 data-test="group-search"
-                placeholder="🔍 模糊搜索 Consumer…"
+                placeholder="模糊搜索 Consumer…"
                 autocapitalize="off"
                 autocorrect="off"
                 autocomplete="off"
@@ -1475,7 +1525,7 @@ function exportTopics(conn: Connection): void {
               <div
                 v-for="t in filteredTopics(conn.id)"
                 :key="t.name"
-                class="leaf"
+                class="leaf group flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-1.5 transition-colors hover:bg-accent"
                 data-test="topic-node"
                 :title="`${t.name} (${t.partitions.length} 分区)`"
                 @dblclick="emit('open-topic', conn.id, t.name, t.partitions.map((p) => p.id))"
@@ -1484,42 +1534,39 @@ function exportTopics(conn: Connection): void {
                 <input
                   v-if="isSelectMode(conn.id)"
                   type="checkbox"
-                  class="leaf-check"
+                  class="leaf-check size-3.5 shrink-0 accent-primary"
                   :data-test="`topic-check-${t.name}`"
                   :checked="isTopicSelected(conn.id, t.name)"
                   @click.stop="toggleTopicSelected(conn.id, t.name)"
                   @dblclick.stop
                 />
-                <span class="leaf-name" data-test="topic-name">{{ t.name }}</span>
+                <Hash class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span class="leaf-name min-w-0 flex-1 truncate" data-test="topic-name">{{ t.name }}</span>
                 <span
                   v-if="retainedOf(conn.id, t.name) !== null"
-                  class="leaf-count"
+                  class="leaf-count shrink-0 rounded-full bg-muted px-1.5 font-mono text-[11px] leading-4 text-muted-foreground"
                   data-test="topic-count"
                   :title="`保留期内 ${retainedOf(conn.id, t.name)!.toLocaleString()} 条`"
                 >{{ formatCount(retainedOf(conn.id, t.name)!) }}</span>
                 <button
-                  class="leaf-info"
+                  class="leaf-info flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-info/10 hover:text-info"
                   type="button"
                   data-test="btn-topic-info"
                   title="Topic 详情"
                   aria-label="Topic 详情"
                   @click.stop="detailMeta = { connId: conn.id, topic: t.name, edit: false }"
                 >
-                  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-                    <circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.5" />
-                    <circle cx="8" cy="5.2" r="1" fill="currentColor" />
-                    <path d="M8 7.4v3.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-                  </svg>
+                  <Info class="size-3.5" aria-hidden="true" />
                 </button>
                 <button
-                  class="leaf-del"
+                  class="leaf-del flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-colors hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
                   type="button"
                   data-test="btn-delete-topic"
                   title="删除 Topic"
                   @click.stop="askDelete(conn, 'topic', t.name)"
-                >🗑</button>
+                ><Trash2 class="size-3.5" aria-hidden="true" /></button>
               </div>
-              <div v-if="filteredTopics(conn.id).length === 0" class="leaf muted" data-test="topic-empty">
+              <div v-if="filteredTopics(conn.id).length === 0" class="leaf muted px-1.5 py-1 text-muted-foreground" data-test="topic-empty">
                 {{ hasSearch(conn.id) ? '无匹配 Topic' : col.emptyText }}
               </div>
             </template>
@@ -1528,15 +1575,16 @@ function exportTopics(conn: Connection): void {
               <div
                 v-for="d in redisDBs[conn.id] ?? []"
                 :key="d.index"
-                class="leaf"
+                class="leaf flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-1.5 transition-colors hover:bg-accent"
                 data-test="redis-db-node"
                 :title="`DB${d.index}(${d.keys} 个键)`"
                 @dblclick="emit('open-redis-keys', conn.id, d.index)"
               >
-                <span class="leaf-name" data-test="redis-db-name">DB{{ d.index }}</span>
-                <span class="leaf-count" data-test="redis-db-keys">{{ d.keys }}</span>
+                <Database class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span class="leaf-name min-w-0 flex-1 truncate" data-test="redis-db-name">DB{{ d.index }}</span>
+                <span class="leaf-count shrink-0 rounded-full bg-muted px-1.5 font-mono text-[11px] leading-4 text-muted-foreground" data-test="redis-db-keys">{{ d.keys }}</span>
               </div>
-              <div v-if="(redisDBs[conn.id] ?? []).length === 0" class="leaf muted" data-test="redis-db-empty">
+              <div v-if="(redisDBs[conn.id] ?? []).length === 0" class="leaf muted px-1.5 py-1 text-muted-foreground" data-test="redis-db-empty">
                 {{ loadingByConn[conn.id] ? '加载中…' : '（无数据库）' }}
               </div>
             </template>
@@ -1544,21 +1592,22 @@ function exportTopics(conn: Connection): void {
               <div
                 v-for="g in filteredGroups(conn.id)"
                 :key="g.name"
-                class="leaf"
+                class="leaf group flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-1.5 transition-colors hover:bg-accent"
                 data-test="group-node"
                 @dblclick="emit('open-group', conn.id, g.name)"
                 @contextmenu.prevent.stop="openGroupMenu($event, conn.id, g.name)"
               >
-                <span class="leaf-name">{{ g.name }}</span>
+                <Users class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span class="leaf-name min-w-0 flex-1 truncate">{{ g.name }}</span>
                 <button
-                  class="leaf-del"
+                  class="leaf-del flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-colors hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
                   type="button"
                   data-test="btn-delete-group"
                   title="删除 Consumer Group"
                   @click.stop="askDelete(conn, 'group', g.name)"
-                >🗑</button>
+                ><Trash2 class="size-3.5" aria-hidden="true" /></button>
               </div>
-              <div v-if="filteredGroups(conn.id).length === 0" class="leaf muted" data-test="group-empty">
+              <div v-if="filteredGroups(conn.id).length === 0" class="leaf muted px-1.5 py-1 text-muted-foreground" data-test="group-empty">
                 {{ hasGroupSearch(conn.id) ? '无匹配 Consumer' : col.emptyText }}
               </div>
             </template>
@@ -1566,32 +1615,33 @@ function exportTopics(conn: Connection): void {
           </template>
         </template>
       </div>
-      <div v-else-if="isExpanded(conn.id) && conn.type === 'clickhouse'" class="conn-children">
-        <div v-if="loadingByConn[conn.id]" class="conn-loading" data-test="tree-loading">加载中…</div>
-        <div v-else-if="errorByConn[conn.id]" class="conn-error" data-test="tree-error">{{ errorByConn[conn.id] }}</div>
+      <div v-else-if="isExpanded(conn.id) && conn.type === 'clickhouse'" class="ml-4 border-l border-border pl-2">
+        <div v-if="loadingByConn[conn.id]" class="px-1 py-1 text-muted-foreground" data-test="tree-loading">加载中…</div>
+        <div v-else-if="errorByConn[conn.id]" class="px-1 py-1 text-destructive" data-test="tree-error">{{ errorByConn[conn.id] }}</div>
         <template v-else>
           <template v-for="db in chSub.dbsOf(conn.id) ?? []" :key="db">
-            <div class="leaf ch-db-node" data-test="ch-db-node" :title="`数据库 ${db}`" @click="chSub.toggleDb(conn.id, db)">
-              <span class="caret" :class="{ open: chSub.isDbExpanded(conn.id, db) }" data-test="ch-db-caret">
-                <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-                  <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
+            <div class="leaf flex h-7 cursor-pointer items-center gap-1 rounded-md px-1.5 transition-colors hover:bg-accent" data-test="ch-db-node" :title="`数据库 ${db}`" @click="chSub.toggleDb(conn.id, db)">
+              <span class="flex size-4 shrink-0 items-center justify-center text-muted-foreground transition-transform" :class="chSub.isDbExpanded(conn.id, db) ? 'open rotate-90' : ''" data-test="ch-db-caret">
+                <ChevronRight class="size-3.5" aria-hidden="true" />
               </span>
-              <span class="leaf-name" data-test="ch-db-name">{{ db }}</span>
+              <Database class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span class="leaf-name min-w-0 flex-1 truncate" data-test="ch-db-name">{{ db }}</span>
               <span
                 v-if="chSub.isLoaded(conn.id, db)"
-                class="leaf-badge"
+                class="leaf-badge shrink-0 rounded-full bg-muted px-1.5 font-mono text-[10px] leading-4 text-muted-foreground"
                 data-test="ch-db-count"
               >{{ chSub.countLabel(conn.id, db) }}</span>
             </div>
             <template v-if="chSub.isDbExpanded(conn.id, db)">
-              <div class="ch-table-filter">
-                <input
-                  v-model="chTableFilterByDb[chSub.keyOf(conn.id, db)]"
-                  class="search-input ch-filter-input"
+              <div class="ch-table-filter relative my-1 w-[90%]">
+                <Search class="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                <Input
+                  :value="chTableFilterByDb[chSub.keyOf(conn.id, db)]"
+                  @input="chTableFilterByDb[chSub.keyOf(conn.id, db)] = ($event.target as HTMLInputElement).value"
+                  class="h-6.5 pl-7 text-xs"
                   type="search"
                   data-test="ch-table-filter"
-                  placeholder="🔍 模糊搜索表…"
+                  placeholder="模糊搜索表…"
                   autocapitalize="off"
                   autocorrect="off"
                   autocomplete="off"
@@ -1600,59 +1650,61 @@ function exportTopics(conn: Connection): void {
               </div>
               <div
                 v-if="chSub.isLoading(conn.id, db)"
-                class="leaf muted"
+                class="leaf muted px-1.5 py-1 text-muted-foreground"
                 data-test="ch-tables-loading"
               >加载中…</div>
               <template v-else>
                 <div
                   v-for="t in chSub.filtered(conn.id, db)"
                   :key="t.name"
-                  class="leaf ch-table"
+                  class="leaf ch-table flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-1.5 pl-6 transition-colors hover:bg-accent"
                   data-test="ch-table-node"
                   :title="`${t.name}(${t.engine})`"
                   @dblclick="emit('open-ch-table', conn.id, db, t.name)"
                 >
-                  <span class="leaf-name" data-test="ch-table-name">{{ t.name }}</span>
-                  <span class="leaf-badge engine" data-test="ch-table-engine">{{ t.engine }}</span>
-                  <span class="leaf-badge" data-test="ch-table-rows">{{ formatBytes(t.total_rows) }}</span>
+                  <Table2 class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <span class="leaf-name min-w-0 flex-1 truncate" data-test="ch-table-name">{{ t.name }}</span>
+                  <span class="leaf-badge shrink-0 rounded-full bg-primary/10 px-1.5 font-mono text-[10px] leading-4 text-primary" data-test="ch-table-engine">{{ t.engine }}</span>
+                  <span class="leaf-badge shrink-0 rounded-full bg-muted px-1.5 font-mono text-[10px] leading-4 text-muted-foreground" data-test="ch-table-rows">{{ formatBytes(t.total_rows) }}</span>
                 </div>
                 <div
                   v-if="chSub.filtered(conn.id, db).length === 0"
-                  class="leaf muted"
+                  class="leaf muted px-1.5 py-1 pl-6 text-muted-foreground"
                   data-test="ch-table-empty"
                 >{{ chSub.isEmpty(conn.id, db) ? '（无表）' : '无匹配表' }}</div>
               </template>
             </template>
           </template>
-          <div v-if="(chSub.dbsOf(conn.id) ?? []).length === 0" class="leaf muted" data-test="ch-db-empty">（无数据库）</div>
+          <div v-if="(chSub.dbsOf(conn.id) ?? []).length === 0" class="leaf muted px-1.5 py-1 text-muted-foreground" data-test="ch-db-empty">（无数据库）</div>
         </template>
       </div>
-      <div v-else-if="isExpanded(conn.id) && (conn.type === 'mysql' || conn.type === 'tidb')" class="conn-children">
-        <div v-if="loadingByConn[conn.id]" class="conn-loading" data-test="tree-loading">加载中…</div>
-        <div v-else-if="errorByConn[conn.id]" class="conn-error" data-test="tree-error">{{ errorByConn[conn.id] }}</div>
+      <div v-else-if="isExpanded(conn.id) && (conn.type === 'mysql' || conn.type === 'tidb')" class="ml-4 border-l border-border pl-2">
+        <div v-if="loadingByConn[conn.id]" class="px-1 py-1 text-muted-foreground" data-test="tree-loading">加载中…</div>
+        <div v-else-if="errorByConn[conn.id]" class="px-1 py-1 text-destructive" data-test="tree-error">{{ errorByConn[conn.id] }}</div>
         <template v-else>
           <template v-for="db in mysqlSub.dbsOf(conn.id) ?? []" :key="db">
-            <div class="leaf ch-db-node" data-test="mysql-db-node" :title="`数据库 ${db}`" @click="mysqlSub.toggleDb(conn.id, db)">
-              <span class="caret" :class="{ open: mysqlSub.isDbExpanded(conn.id, db) }" data-test="mysql-db-caret">
-                <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-                  <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
+            <div class="leaf flex h-7 cursor-pointer items-center gap-1 rounded-md px-1.5 transition-colors hover:bg-accent" data-test="mysql-db-node" :title="`数据库 ${db}`" @click="mysqlSub.toggleDb(conn.id, db)">
+              <span class="flex size-4 shrink-0 items-center justify-center text-muted-foreground transition-transform" :class="mysqlSub.isDbExpanded(conn.id, db) ? 'open rotate-90' : ''" data-test="mysql-db-caret">
+                <ChevronRight class="size-3.5" aria-hidden="true" />
               </span>
-              <span class="leaf-name" data-test="mysql-db-name">{{ db }}</span>
+              <Database class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span class="leaf-name min-w-0 flex-1 truncate" data-test="mysql-db-name">{{ db }}</span>
               <span
                 v-if="mysqlSub.isLoaded(conn.id, db)"
-                class="leaf-badge"
+                class="leaf-badge shrink-0 rounded-full bg-muted px-1.5 font-mono text-[10px] leading-4 text-muted-foreground"
                 data-test="mysql-db-count"
               >{{ mysqlSub.countLabel(conn.id, db) }}</span>
             </div>
             <template v-if="mysqlSub.isDbExpanded(conn.id, db)">
-              <div class="ch-table-filter">
-                <input
-                  v-model="mysqlTableFilterByDb[mysqlSub.keyOf(conn.id, db)]"
-                  class="search-input ch-filter-input"
+              <div class="ch-table-filter relative my-1 w-[90%]">
+                <Search class="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                <Input
+                  :value="mysqlTableFilterByDb[mysqlSub.keyOf(conn.id, db)]"
+                  @input="mysqlTableFilterByDb[mysqlSub.keyOf(conn.id, db)] = ($event.target as HTMLInputElement).value"
+                  class="h-6.5 pl-7 text-xs"
                   type="search"
                   data-test="mysql-table-filter"
-                  placeholder="🔍 模糊搜索表…"
+                  placeholder="模糊搜索表…"
                   autocapitalize="off"
                   autocorrect="off"
                   autocomplete="off"
@@ -1661,60 +1713,62 @@ function exportTopics(conn: Connection): void {
               </div>
               <div
                 v-if="mysqlSub.isLoading(conn.id, db)"
-                class="leaf muted"
+                class="leaf muted px-1.5 py-1 text-muted-foreground"
                 data-test="mysql-tables-loading"
               >加载中…</div>
               <template v-else>
                 <div
                   v-for="t in mysqlSub.filtered(conn.id, db)"
                   :key="t.name"
-                  class="leaf ch-table"
+                  class="leaf ch-table group flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-1.5 pl-6 transition-colors hover:bg-accent"
                   data-test="mysql-table-node"
                   :title="`${t.name}(${t.engine})`"
                   @dblclick="emit('open-mysql-table', conn.id, db, t.name)"
                   @contextmenu.prevent.stop="openMysqlTableMenu($event, conn.id, db, t.name)"
                 >
-                  <span class="leaf-name" data-test="mysql-table-name">{{ t.name }}</span>
-                  <span class="leaf-badge engine" data-test="mysql-table-engine">{{ t.engine }}</span>
-                  <span v-if="t.table_rows !== null" class="leaf-badge" data-test="mysql-table-rows">{{ formatBytes(t.table_rows) }}</span>
+                  <Table2 class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <span class="leaf-name min-w-0 flex-1 truncate" data-test="mysql-table-name">{{ t.name }}</span>
+                  <span class="leaf-badge shrink-0 rounded-full bg-primary/10 px-1.5 font-mono text-[10px] leading-4 text-primary" data-test="mysql-table-engine">{{ t.engine }}</span>
+                  <span v-if="t.table_rows !== null" class="leaf-badge shrink-0 rounded-full bg-muted px-1.5 font-mono text-[10px] leading-4 text-muted-foreground" data-test="mysql-table-rows">{{ formatBytes(t.table_rows) }}</span>
                 </div>
                 <div
                   v-if="mysqlSub.filtered(conn.id, db).length === 0"
-                  class="leaf muted"
+                  class="leaf muted px-1.5 py-1 pl-6 text-muted-foreground"
                   data-test="mysql-table-empty"
                 >{{ mysqlSub.isEmpty(conn.id, db) ? '（无表）' : '无匹配表' }}</div>
               </template>
             </template>
           </template>
-          <div v-if="(mysqlSub.dbsOf(conn.id) ?? []).length === 0" class="leaf muted" data-test="mysql-db-empty">（无数据库）</div>
+          <div v-if="(mysqlSub.dbsOf(conn.id) ?? []).length === 0" class="leaf muted px-1.5 py-1 text-muted-foreground" data-test="mysql-db-empty">（无数据库）</div>
         </template>
       </div>
-      <div v-else-if="isExpanded(conn.id) && conn.type === 'hive'" class="conn-children">
-        <div v-if="loadingByConn[conn.id]" class="conn-loading" data-test="tree-loading">加载中…</div>
-        <div v-else-if="errorByConn[conn.id]" class="conn-error" data-test="tree-error">{{ errorByConn[conn.id] }}</div>
+      <div v-else-if="isExpanded(conn.id) && conn.type === 'hive'" class="ml-4 border-l border-border pl-2">
+        <div v-if="loadingByConn[conn.id]" class="px-1 py-1 text-muted-foreground" data-test="tree-loading">加载中…</div>
+        <div v-else-if="errorByConn[conn.id]" class="px-1 py-1 text-destructive" data-test="tree-error">{{ errorByConn[conn.id] }}</div>
         <template v-else>
           <template v-for="db in hiveSub.dbsOf(conn.id) ?? []" :key="db">
-            <div class="leaf ch-db-node" data-test="hive-db-node" :title="`数据库 ${db}`" @click="hiveSub.toggleDb(conn.id, db)">
-              <span class="caret" :class="{ open: hiveSub.isDbExpanded(conn.id, db) }" data-test="hive-db-caret">
-                <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-                  <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
+            <div class="leaf flex h-7 cursor-pointer items-center gap-1 rounded-md px-1.5 transition-colors hover:bg-accent" data-test="hive-db-node" :title="`数据库 ${db}`" @click="hiveSub.toggleDb(conn.id, db)">
+              <span class="flex size-4 shrink-0 items-center justify-center text-muted-foreground transition-transform" :class="hiveSub.isDbExpanded(conn.id, db) ? 'open rotate-90' : ''" data-test="hive-db-caret">
+                <ChevronRight class="size-3.5" aria-hidden="true" />
               </span>
-              <span class="leaf-name" data-test="hive-db-name">{{ db }}</span>
+              <Database class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span class="leaf-name min-w-0 flex-1 truncate" data-test="hive-db-name">{{ db }}</span>
               <span
                 v-if="hiveSub.isLoaded(conn.id, db)"
-                class="leaf-badge"
+                class="leaf-badge shrink-0 rounded-full bg-muted px-1.5 font-mono text-[10px] leading-4 text-muted-foreground"
                 data-test="hive-db-count"
               >{{ hiveSub.countLabel(conn.id, db) }}</span>
             </div>
             <template v-if="hiveSub.isDbExpanded(conn.id, db)">
-              <div class="ch-table-filter">
-                <input
-                  v-model="hiveTableFilterByDb[hiveSub.keyOf(conn.id, db)]"
-                  class="search-input ch-filter-input"
+              <div class="ch-table-filter relative my-1 w-[90%]">
+                <Search class="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                <Input
+                  :value="hiveTableFilterByDb[hiveSub.keyOf(conn.id, db)]"
+                  @input="hiveTableFilterByDb[hiveSub.keyOf(conn.id, db)] = ($event.target as HTMLInputElement).value"
+                  class="h-6.5 pl-7 text-xs"
                   type="search"
                   data-test="hive-table-filter"
-                  placeholder="🔍 模糊搜索表…"
+                  placeholder="模糊搜索表…"
                   autocapitalize="off"
                   autocorrect="off"
                   autocomplete="off"
@@ -1723,79 +1777,80 @@ function exportTopics(conn: Connection): void {
               </div>
               <div
                 v-if="hiveSub.isLoading(conn.id, db)"
-                class="leaf muted"
+                class="leaf muted px-1.5 py-1 text-muted-foreground"
                 data-test="hive-tables-loading"
               >加载中…</div>
               <template v-else>
                 <div
                   v-for="t in hiveSub.filtered(conn.id, db)"
                   :key="t.name"
-                  class="leaf ch-table"
+                  class="leaf ch-table flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-1.5 pl-6 transition-colors hover:bg-accent"
                   data-test="hive-table-node"
                   :title="t.name"
                   @dblclick="emit('open-hive-table', conn.id, db, t.name)"
                   @contextmenu.prevent.stop="openHiveTableMenu($event, conn.id, db, t.name)"
                 >
-                  <span class="leaf-name" data-test="hive-table-name">{{ t.name }}</span>
+                  <Table2 class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <span class="leaf-name min-w-0 flex-1 truncate" data-test="hive-table-name">{{ t.name }}</span>
                 </div>
                 <div
                   v-if="hiveSub.filtered(conn.id, db).length === 0"
-                  class="leaf muted"
+                  class="leaf muted px-1.5 py-1 pl-6 text-muted-foreground"
                   data-test="hive-table-empty"
                 >{{ hiveSub.isEmpty(conn.id, db) ? '（无表）' : '无匹配表' }}</div>
               </template>
             </template>
           </template>
-          <div v-if="(hiveSub.dbsOf(conn.id) ?? []).length === 0" class="leaf muted" data-test="hive-db-empty">（无数据库）</div>
+          <div v-if="(hiveSub.dbsOf(conn.id) ?? []).length === 0" class="leaf muted px-1.5 py-1 text-muted-foreground" data-test="hive-db-empty">（无数据库）</div>
         </template>
       </div>
-      <div v-else-if="isExpanded(conn.id) && conn.type === 'postgres'" class="conn-children">
-        <div v-if="loadingByConn[conn.id]" class="conn-loading" data-test="tree-loading">加载中…</div>
-        <div v-else-if="errorByConn[conn.id]" class="conn-error" data-test="tree-error">{{ errorByConn[conn.id] }}</div>
+      <div v-else-if="isExpanded(conn.id) && conn.type === 'postgres'" class="ml-4 border-l border-border pl-2">
+        <div v-if="loadingByConn[conn.id]" class="px-1 py-1 text-muted-foreground" data-test="tree-loading">加载中…</div>
+        <div v-else-if="errorByConn[conn.id]" class="px-1 py-1 text-destructive" data-test="tree-error">{{ errorByConn[conn.id] }}</div>
         <template v-else>
           <template v-for="db in pgDBs[conn.id] ?? []" :key="db">
-            <div class="leaf ch-db-node" data-test="pg-db-node" :title="`数据库 ${db}`" @click="togglePgDb(conn.id, db)">
-              <span class="caret" :class="{ open: isPgDbExpanded(conn.id, db) }" data-test="pg-db-caret">
-                <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-                  <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
+            <div class="leaf flex h-7 cursor-pointer items-center gap-1 rounded-md px-1.5 transition-colors hover:bg-accent" data-test="pg-db-node" :title="`数据库 ${db}`" @click="togglePgDb(conn.id, db)">
+              <span class="flex size-4 shrink-0 items-center justify-center text-muted-foreground transition-transform" :class="isPgDbExpanded(conn.id, db) ? 'open rotate-90' : ''" data-test="pg-db-caret">
+                <ChevronRight class="size-3.5" aria-hidden="true" />
               </span>
-              <span class="leaf-name" data-test="pg-db-name">{{ db }}</span>
+              <Database class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span class="leaf-name min-w-0 flex-1 truncate" data-test="pg-db-name">{{ db }}</span>
               <span
                 v-if="pgSchemasByDb[pgDbKey(conn.id, db)]"
-                class="leaf-badge"
+                class="leaf-badge shrink-0 rounded-full bg-muted px-1.5 font-mono text-[10px] leading-4 text-muted-foreground"
                 data-test="pg-db-count"
               >{{ (pgSchemasByDb[pgDbKey(conn.id, db)] ?? []).length }}</span>
             </div>
             <template v-if="isPgDbExpanded(conn.id, db)">
               <div
                 v-if="pgSchemaLoadingByDb[pgDbKey(conn.id, db)]"
-                class="leaf muted"
+                class="leaf muted px-1.5 py-1 text-muted-foreground"
                 data-test="pg-schemas-loading"
               >加载中…</div>
               <template v-else>
                 <template v-for="schema in pgSchemasByDb[pgDbKey(conn.id, db)] ?? []" :key="schema">
-                  <div class="leaf ch-db-node pg-schema-node-inner" data-test="pg-schema-node" :title="`Schema ${schema}`" @click="togglePgSchema(conn.id, db, schema)">
-                    <span class="caret" :class="{ open: isPgSchemaExpanded(conn.id, db, schema) }" data-test="pg-schema-caret">
-                      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-                        <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                      </svg>
+                  <div class="leaf pg-schema-node-inner flex h-7 cursor-pointer items-center gap-1 rounded-md px-1.5 pl-6 transition-colors hover:bg-accent" data-test="pg-schema-node" :title="`Schema ${schema}`" @click="togglePgSchema(conn.id, db, schema)">
+                    <span class="flex size-4 shrink-0 items-center justify-center text-muted-foreground transition-transform" :class="isPgSchemaExpanded(conn.id, db, schema) ? 'open rotate-90' : ''" data-test="pg-schema-caret">
+                      <ChevronRight class="size-3.5" aria-hidden="true" />
                     </span>
-                    <span class="leaf-name" data-test="pg-schema-name">{{ schema }}</span>
+                    <Folder class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span class="leaf-name min-w-0 flex-1 truncate" data-test="pg-schema-name">{{ schema }}</span>
                     <span
                       v-if="pgRelationsBySchema[pgSchemaKey(conn.id, db, schema)]"
-                      class="leaf-badge"
+                      class="leaf-badge shrink-0 rounded-full bg-muted px-1.5 font-mono text-[10px] leading-4 text-muted-foreground"
                       data-test="pg-schema-count"
                     >{{ pgSchemaCountLabel(conn.id, db, schema) }}</span>
                   </div>
                   <template v-if="isPgSchemaExpanded(conn.id, db, schema)">
-                    <div class="ch-table-filter">
-                      <input
-                        v-model="pgRelationFilterBySchema[pgSchemaKey(conn.id, db, schema)]"
-                        class="search-input ch-filter-input"
+                    <div class="ch-table-filter relative my-1 ml-6 w-[85%]">
+                      <Search class="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                      <Input
+                        :value="pgRelationFilterBySchema[pgSchemaKey(conn.id, db, schema)]"
+                        @input="pgRelationFilterBySchema[pgSchemaKey(conn.id, db, schema)] = ($event.target as HTMLInputElement).value"
+                        class="h-6.5 pl-7 text-xs"
                         type="search"
                         data-test="pg-relation-filter"
-                        placeholder="🔍 模糊搜索表…"
+                        placeholder="模糊搜索表…"
                         autocapitalize="off"
                         autocorrect="off"
                         autocomplete="off"
@@ -1804,14 +1859,14 @@ function exportTopics(conn: Connection): void {
                     </div>
                     <div
                       v-if="pgRelationLoadingBySchema[pgSchemaKey(conn.id, db, schema)]"
-                      class="leaf muted"
+                      class="leaf muted px-1.5 py-1 pl-10 text-muted-foreground"
                       data-test="pg-relations-loading"
                     >加载中…</div>
                     <template v-else>
                       <div
                         v-for="r in filteredPgRelations(conn.id, db, schema)"
                         :key="`${r.relation_type}:${r.relation}`"
-                        class="leaf ch-table"
+                        class="leaf ch-table flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-1.5 pl-10 transition-colors hover:bg-accent"
                         data-test="pg-relation-node"
                         role="button"
                         tabindex="0"
@@ -1820,12 +1875,13 @@ function exportTopics(conn: Connection): void {
                         @keydown.enter.prevent="openPgRelation(conn.id, db, r)"
                         @keydown.space.prevent="openPgRelation(conn.id, db, r)"
                       >
-                        <span class="leaf-name" data-test="pg-relation-name">{{ r.relation }}</span>
-                        <span class="leaf-badge engine" data-test="pg-relation-type">{{ r.relation_type }}</span>
+                        <Table2 class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                        <span class="leaf-name min-w-0 flex-1 truncate" data-test="pg-relation-name">{{ r.relation }}</span>
+                        <span class="leaf-badge shrink-0 rounded-full bg-primary/10 px-1.5 font-mono text-[10px] leading-4 text-primary" data-test="pg-relation-type">{{ r.relation_type }}</span>
                       </div>
                       <div
                         v-if="filteredPgRelations(conn.id, db, schema).length === 0"
-                        class="leaf muted"
+                        class="leaf muted px-1.5 py-1 pl-10 text-muted-foreground"
                         data-test="pg-relation-empty"
                       >{{ (pgRelationsBySchema[pgSchemaKey(conn.id, db, schema)] ?? []).length === 0 ? '（无表）' : '无匹配表' }}</div>
                     </template>
@@ -1833,65 +1889,71 @@ function exportTopics(conn: Connection): void {
                 </template>
                 <div
                   v-if="(pgSchemasByDb[pgDbKey(conn.id, db)] ?? []).length === 0"
-                  class="leaf muted"
+                  class="leaf muted px-1.5 py-1 pl-6 text-muted-foreground"
                   data-test="pg-schema-empty"
                 >（无 schema）</div>
               </template>
             </template>
           </template>
-          <div v-if="(pgDBs[conn.id] ?? []).length === 0" class="leaf muted" data-test="pg-db-empty">（无数据库）</div>
+          <div v-if="(pgDBs[conn.id] ?? []).length === 0" class="leaf muted px-1.5 py-1 text-muted-foreground" data-test="pg-db-empty">（无数据库）</div>
         </template>
       </div>
-      <div v-else-if="isExpanded(conn.id) && conn.type === 'es'" class="conn-children">
-        <div v-if="loadingByConn[conn.id]" class="conn-loading" data-test="tree-loading">加载中…</div>
-        <div v-else-if="errorByConn[conn.id]" class="conn-error" data-test="tree-error">{{ errorByConn[conn.id] }}</div>
+      <div v-else-if="isExpanded(conn.id) && conn.type === 'es'" class="ml-4 border-l border-border pl-2">
+        <div v-if="loadingByConn[conn.id]" class="px-1 py-1 text-muted-foreground" data-test="tree-loading">加载中…</div>
+        <div v-else-if="errorByConn[conn.id]" class="px-1 py-1 text-destructive" data-test="tree-error">{{ errorByConn[conn.id] }}</div>
         <template v-else>
           <!-- 分段按钮:索引 / 索引模板,互斥切换,同一时刻只渲染一个列表区。 -->
-          <div class="segmented" data-test="section-tabs" role="tablist">
+          <div class="segmented my-1.5 mb-2 flex gap-0.5 rounded-lg border border-border bg-muted p-0.5" data-test="section-tabs" role="tablist">
             <button
               type="button"
-              class="segmented-btn"
-              :class="{ active: esSectionOf(conn.id) === 'es-indices' }"
+              class="segmented-btn flex min-w-0 flex-1 items-center justify-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+              :class="esSectionOf(conn.id) === 'es-indices' ? 'active bg-background text-foreground shadow-sm' : ''"
               data-test="section-tab-es-indices"
               role="tab"
               :aria-selected="esSectionOf(conn.id) === 'es-indices'"
               @click="switchEsSection(conn.id, 'es-indices')"
             >
-              <span class="segmented-icon">📄</span>
-              <span class="segmented-label">索引</span>
-              <span class="segmented-count">{{ (esIndices[conn.id] ?? []).length }}</span>
+              <FileText class="size-3.5 shrink-0" aria-hidden="true" />
+              <span class="segmented-label min-w-0 flex-1 truncate text-left">索引</span>
+              <span class="segmented-count shrink-0 rounded-full bg-background/80 px-1.5 text-[11px] leading-4 text-muted-foreground">{{ (esIndices[conn.id] ?? []).length }}</span>
             </button>
             <button
               type="button"
-              class="segmented-btn"
-              :class="{ active: esSectionOf(conn.id) === 'es-templates' }"
+              class="segmented-btn flex min-w-0 flex-1 items-center justify-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+              :class="esSectionOf(conn.id) === 'es-templates' ? 'active bg-background text-foreground shadow-sm' : ''"
               data-test="section-tab-es-templates"
               role="tab"
               :aria-selected="esSectionOf(conn.id) === 'es-templates'"
               @click="switchEsSection(conn.id, 'es-templates')"
             >
-              <span class="segmented-icon">⚙</span>
-              <span class="segmented-label">索引模板</span>
-              <span v-if="esTemplatesByConn[conn.id]" class="segmented-count">{{ esTemplatesByConn[conn.id]?.length }}</span>
+              <FileCog class="size-3.5 shrink-0" aria-hidden="true" />
+              <span class="segmented-label min-w-0 flex-1 truncate text-left">索引模板</span>
+              <span v-if="esTemplatesByConn[conn.id]" class="segmented-count shrink-0 rounded-full bg-background/80 px-1.5 text-[11px] leading-4 text-muted-foreground">{{ esTemplatesByConn[conn.id]?.length }}</span>
             </button>
           </div>
 
           <template v-if="esSectionOf(conn.id) === 'es-indices'">
             <!-- 分区标题行:照抄 kafka group-label creatable,点击展开内联新建表单。 -->
             <button
-              class="group-label clickable"
+              class="group-label clickable mt-2 mb-0.5 flex w-full cursor-pointer items-center justify-between rounded-md px-1.5 py-1 text-left text-[11px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               type="button"
               data-test="es-indices-header"
               title="新建索引"
               @click="toggleEsCreate(conn)"
             >
-              <span class="group-title">📄 索引</span>
-              <span class="group-add" aria-hidden="true">＋</span>
+              <span class="group-title flex min-w-0 flex-1 items-center gap-1">
+                <FileText class="size-3.5 shrink-0" aria-hidden="true" />
+                索引
+              </span>
+              <span class="group-add flex size-5 items-center justify-center rounded-md text-primary transition-colors" aria-hidden="true">
+                <Plus class="size-3.5" />
+              </span>
             </button>
-            <div v-if="isEsCreatingFor(conn.id)" class="create-form" data-test="es-create-form">
-              <input
-                v-model="esCreateForm.name"
-                class="input"
+            <div v-if="isEsCreatingFor(conn.id)" class="create-form my-1 flex flex-col gap-1.5 rounded-lg border border-border bg-muted/50 p-2" data-test="es-create-form">
+              <Input
+                :value="esCreateForm.name"
+                @input="esCreateForm.name = ($event.target as HTMLInputElement).value"
+                class="h-7 text-xs"
                 type="text"
                 data-test="es-create-index"
                 placeholder="索引名称"
@@ -1900,64 +1962,69 @@ function exportTopics(conn: Connection): void {
                 autocomplete="off"
                 spellcheck="false"
               />
-              <div class="create-row">
-                <label class="create-field">
+              <div class="flex gap-2">
+                <Label class="flex-1 flex-col items-stretch gap-1 text-xs font-normal text-muted-foreground">
                   分片
-                  <input v-model.number="esCreateForm.shards" class="input num" type="number" min="1" data-test="es-create-shards" />
-                </label>
-                <label class="create-field">
+                  <Input :value="esCreateForm.shards" @input="esCreateForm.shards = Number(($event.target as HTMLInputElement).value)" class="h-7 text-xs" type="number" min="1" data-test="es-create-shards" />
+                </Label>
+                <Label class="flex-1 flex-col items-stretch gap-1 text-xs font-normal text-muted-foreground">
                   副本
-                  <input v-model.number="esCreateForm.replicas" class="input num" type="number" min="1" data-test="es-create-replicas" />
-                </label>
+                  <Input :value="esCreateForm.replicas" @input="esCreateForm.replicas = Number(($event.target as HTMLInputElement).value)" class="h-7 text-xs" type="number" min="1" data-test="es-create-replicas" />
+                </Label>
               </div>
-              <div v-if="esCreateError" class="create-error" data-test="es-create-error">{{ esCreateError }}</div>
-              <div class="create-actions">
-                <button
-                  class="btn primary"
+              <div v-if="esCreateError" class="create-error text-xs text-destructive" data-test="es-create-error">{{ esCreateError }}</div>
+              <div class="create-actions flex gap-2">
+                <Button
+                  size="sm"
                   type="button"
                   data-test="btn-es-create-submit"
                   :disabled="esCreating || esCreateForm.name.trim().length === 0"
                   @click="submitEsCreate(conn)"
                 >
                   {{ esCreating ? '创建中…' : '创建' }}
-                </button>
-                <button class="btn ghost" type="button" data-test="btn-es-create-cancel" @click="closeEsCreate">取消</button>
+                </Button>
+                <Button size="sm" variant="outline" type="button" data-test="btn-es-create-cancel" @click="closeEsCreate">取消</Button>
               </div>
             </div>
             <!-- ES 无库层级:连接展开直接列索引(系统索引由后端过滤),双击打开索引浏览。 -->
-            <div class="ch-table-filter">
-              <div class="es-filter-row">
-                <input
-                  v-model="esIndexFilterByConn[conn.id]"
-                  class="search-input ch-filter-input"
-                  type="search"
-                  data-test="es-index-filter"
-                  placeholder="筛选索引"
-                  autocapitalize="off"
-                  autocorrect="off"
-                  autocomplete="off"
-                  spellcheck="false"
-                />
-                <span class="leaf-badge" data-test="es-index-count">{{ esIndexCountLabel(conn.id) }}</span>
+            <div class="ch-table-filter my-1">
+              <div class="es-filter-row flex items-center gap-1.5">
+                <div class="relative min-w-0 flex-1">
+                  <Search class="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                  <Input
+                    :value="esIndexFilterByConn[conn.id]"
+                    @input="esIndexFilterByConn[conn.id] = ($event.target as HTMLInputElement).value"
+                    class="h-6.5 pl-7 text-xs"
+                    type="search"
+                    data-test="es-index-filter"
+                    placeholder="筛选索引"
+                    autocapitalize="off"
+                    autocorrect="off"
+                    autocomplete="off"
+                    spellcheck="false"
+                  />
+                </div>
+                <span class="leaf-badge shrink-0 rounded-full bg-muted px-1.5 font-mono text-[10px] leading-4 text-muted-foreground" data-test="es-index-count">{{ esIndexCountLabel(conn.id) }}</span>
               </div>
             </div>
             <div
               v-for="esIdx in filteredEsIndices(conn.id)"
               :key="esIdx.name"
-              class="leaf"
+              class="leaf flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-1.5 transition-colors hover:bg-accent"
               data-test="es-index-node"
               :title="`${esIdx.name}(${formatBytes(esIdx.store_size_bytes)})`"
               @dblclick="emit('open-es-index', conn.id, esIdx.name)"
               @contextmenu.prevent.stop="openEsIndexMenu($event, conn.id, esIdx.name)"
             >
-              <span class="leaf-name" data-test="es-index-name">{{ esIdx.name }}</span>
+              <FileText class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span class="leaf-name min-w-0 flex-1 truncate" data-test="es-index-name">{{ esIdx.name }}</span>
               <span
-                class="leaf-badge"
+                class="leaf-badge shrink-0 rounded-full bg-muted px-1.5 font-mono text-[10px] leading-4 text-muted-foreground"
                 data-test="es-index-docs"
                 :title="`约 ${esIdx.docs_count.toLocaleString()} 条文档`"
               >{{ formatCount(esIdx.docs_count) }}</span>
             </div>
-            <div v-if="filteredEsIndices(conn.id).length === 0" class="leaf muted" data-test="es-index-empty">
+            <div v-if="filteredEsIndices(conn.id).length === 0" class="leaf muted px-1.5 py-1 text-muted-foreground" data-test="es-index-empty">
               {{ (esIndices[conn.id] ?? []).length === 0 ? '（无索引）' : '无匹配索引' }}
             </div>
           </template>
@@ -1965,37 +2032,43 @@ function exportTopics(conn: Connection): void {
           <template v-else>
             <!-- 分区标题行:整行可点击,打开模板面板新建态。 -->
             <button
-              class="group-label clickable"
+              class="group-label clickable mt-2 mb-0.5 flex w-full cursor-pointer items-center justify-between rounded-md px-1.5 py-1 text-left text-[11px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               type="button"
               data-test="es-templates-header"
               title="新建索引模板"
               @click="emit('open-es-template-create', conn.id)"
             >
-              <span class="group-title">⚙ 索引模板</span>
-              <span class="group-add" aria-hidden="true">＋</span>
+              <span class="group-title flex min-w-0 flex-1 items-center gap-1">
+                <FileCog class="size-3.5 shrink-0" aria-hidden="true" />
+                索引模板
+              </span>
+              <span class="group-add flex size-5 items-center justify-center rounded-md text-primary transition-colors" aria-hidden="true">
+                <Plus class="size-3.5" />
+              </span>
             </button>
-            <div v-if="esTemplatesLoadingByConn[conn.id]" class="conn-loading" data-test="es-templates-loading">加载中…</div>
-            <div v-else-if="esTemplatesErrorByConn[conn.id]" class="conn-error" data-test="es-templates-error">{{ esTemplatesErrorByConn[conn.id] }}</div>
+            <div v-if="esTemplatesLoadingByConn[conn.id]" class="px-1 py-1 text-muted-foreground" data-test="es-templates-loading">加载中…</div>
+            <div v-else-if="esTemplatesErrorByConn[conn.id]" class="px-1 py-1 text-destructive" data-test="es-templates-error">{{ esTemplatesErrorByConn[conn.id] }}</div>
             <template v-else>
               <div
                 v-for="tpl in esTemplatesByConn[conn.id] ?? []"
                 :key="tpl.name"
-                class="leaf"
+                class="leaf flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-1.5 transition-colors hover:bg-accent"
                 :data-test="`es-template-item-${tpl.name}`"
                 :title="`${tpl.name}(order ${tpl.order})`"
                 @click="emit('open-es-template', conn.id, tpl.name)"
                 @contextmenu.prevent.stop="openEsTemplateMenu($event, conn.id, tpl.name)"
               >
-                <span class="leaf-name">{{ tpl.name }}</span>
-                <span class="leaf-badge" data-test="es-template-order" title="模板合并顺序(order 越大优先级越高)">{{ tpl.order }}</span>
+                <FileCog class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span class="leaf-name min-w-0 flex-1 truncate">{{ tpl.name }}</span>
+                <span class="leaf-badge shrink-0 rounded-full bg-muted px-1.5 font-mono text-[10px] leading-4 text-muted-foreground" data-test="es-template-order" title="模板合并顺序(order 越大优先级越高)">{{ tpl.order }}</span>
               </div>
-              <div v-if="(esTemplatesByConn[conn.id] ?? []).length === 0" class="leaf muted" data-test="es-templates-empty">（无模板）</div>
+              <div v-if="(esTemplatesByConn[conn.id] ?? []).length === 0" class="leaf muted px-1.5 py-1 text-muted-foreground" data-test="es-templates-empty">（无模板）</div>
             </template>
           </template>
         </template>
       </div>
-      <div v-else-if="isExpanded(conn.id)" class="conn-children">
-        <div class="leaf muted" data-test="type-unsupported">{{ typeMeta(conn).label }} 类型暂未支持</div>
+      <div v-else-if="isExpanded(conn.id)" class="ml-4 border-l border-border pl-2">
+        <div class="leaf muted px-1.5 py-1 text-muted-foreground" data-test="type-unsupported">{{ typeMeta(conn).label }} 类型暂未支持</div>
       </div>
     </div>
     <TopicDetailDrawer
@@ -2062,31 +2135,32 @@ function exportTopics(conn: Connection): void {
     <!-- 修改索引设置弹窗:与 ConfirmDialog 同样 Teleport 到 body(侧栏的
          backdrop-filter 会把 position:fixed 限制在侧栏盒内)。 -->
     <Teleport to="body">
-      <div v-if="esSettingsMeta" class="es-settings-backdrop" data-test="es-settings-dialog" @click.self="esSettingsMeta = null">
-        <div class="es-settings-modal">
-          <div class="es-settings-title">修改索引设置</div>
-          <div class="es-settings-index" :title="esSettingsMeta.index">{{ esSettingsMeta.index }}</div>
-          <label class="create-field">
+      <div v-if="esSettingsMeta" class="es-settings-backdrop fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-[2px]" data-test="es-settings-dialog" @click.self="esSettingsMeta = null">
+        <div class="es-settings-modal flex w-80 max-w-[calc(100vw-48px)] flex-col gap-2.5 rounded-xl border border-border bg-background p-4 shadow-lg">
+          <div class="es-settings-title text-sm font-semibold">修改索引设置</div>
+          <div class="es-settings-index truncate text-xs text-muted-foreground" :title="esSettingsMeta.index">{{ esSettingsMeta.index }}</div>
+          <Label class="create-field flex-col items-start gap-1 text-xs font-normal text-muted-foreground">
             副本数
-            <input
-              v-model.number="esSettingsReplicas"
-              class="input num"
+            <Input
+              :value="esSettingsReplicas"
+              @input="esSettingsReplicas = Number(($event.target as HTMLInputElement).value)"
+              class="h-7 text-xs"
               type="number"
               min="0"
               step="1"
               data-test="es-settings-replicas"
             />
-          </label>
-          <div v-if="esSettingsError" class="create-error" data-test="es-settings-error">{{ esSettingsError }}</div>
-          <div class="es-settings-actions">
-            <button class="btn ghost" type="button" data-test="es-settings-cancel" @click="esSettingsMeta = null">取消</button>
-            <button
-              class="btn primary"
+          </Label>
+          <div v-if="esSettingsError" class="create-error text-xs text-destructive" data-test="es-settings-error">{{ esSettingsError }}</div>
+          <div class="es-settings-actions flex justify-end gap-2">
+            <Button variant="outline" size="sm" type="button" data-test="es-settings-cancel" @click="esSettingsMeta = null">取消</Button>
+            <Button
+              size="sm"
               type="button"
               data-test="es-settings-submit"
               :disabled="esSettingsSaving"
               @click="submitEsSettings"
-            >{{ esSettingsSaving ? '保存中…' : '保存' }}</button>
+            >{{ esSettingsSaving ? '保存中…' : '保存' }}</Button>
           </div>
         </div>
       </div>
@@ -2095,48 +2169,66 @@ function exportTopics(conn: Connection): void {
 </template>
 
 <style scoped>
-.tree { padding: 10px 8px 12px; font-size: 13px; color: var(--text); font-family: var(--font); }
-.tree-new {
-  width: 100%; box-sizing: border-box;
-  background: var(--primary-gradient); color: var(--on-primary); border: none;
-  border-radius: 9px; padding: 8px 10px; cursor: pointer; margin-bottom: 10px; font-size: 13px; font-weight: 500;
-  /* 层次:强调投影(token)+ 顶部内高光;按下轻微缩放反馈。 */
-  box-shadow: var(--shadow-accent), inset 0 1px 0 rgba(255, 255, 255, 0.14);
-  transition: filter 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease;
+/*
+ * UI 对齐 DBX 后本组件仅保留 Tailwind 难以表达的少量规则:
+ * 1) 状态点语义色:连接状态 → success/destructive/muted 的映射与脉冲动画;
+ * 2) 数据源品牌色徽标:--type-* 局部色表(styles.css 退役后收编为组件内
+ *    const 色表,亮暗两套),以 .type-badge-<type>/.conn-type-<type> class 关联;
+ * 3) 拖拽插入指示线:压在目标行上/下边缘的伪元素横线。
+ * 其余样式全部改为模板内的 Tailwind 工具类。
+ */
+/* 状态点:默认未连接灰;connected/connecting=success,connecting 脉冲;error=destructive。 */
+.conn-status { background: color-mix(in srgb, var(--muted-foreground) 45%, transparent); }
+.conn-status-connected, .conn-status-connecting { background: var(--success); }
+.conn-status-connecting { animation: conn-pulse 1.1s ease-in-out infinite; }
+.conn-status-error { background: var(--destructive); }
+.conn-status-disconnected, .conn-status-unknown { background: color-mix(in srgb, var(--muted-foreground) 45%, transparent); }
+@keyframes conn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* 数据源品牌色 const 表(原全局 styles.css --type-* 变量收编):
+   --type-<t> 为字母徽标实底主色,-contrast 为徽标字色,-soft 为类型文字
+   徽标的柔和底色。pink 主题浅底与浅色明度接近,沿用浅色套。 */
+.conn-tree {
+  --type-kafka: #e8710a;      --type-kafka-contrast: #ffffff;   --type-kafka-soft: rgba(232, 113, 10, 0.12);
+  --type-mysql: #0868a8;      --type-mysql-contrast: #ffffff;   --type-mysql-soft: rgba(8, 104, 168, 0.12);
+  --type-redis: #d82c20;      --type-redis-contrast: #ffffff;   --type-redis-soft: rgba(216, 44, 32, 0.12);
+  --type-es: #ddb100;         --type-es-contrast: #3d3000;      --type-es-soft: rgba(221, 177, 0, 0.16);
+  --type-tidb: #d4111e;       --type-tidb-contrast: #ffffff;    --type-tidb-soft: rgba(212, 17, 30, 0.12);
+  --type-clickhouse: #d9a400; --type-clickhouse-contrast: #3d3000; --type-clickhouse-soft: rgba(217, 164, 0, 0.16);
+  --type-postgres: #2c8c99;   --type-postgres-contrast: #ffffff; --type-postgres-soft: rgba(44, 140, 153, 0.13);
+  --type-hive: #d99a13;       --type-hive-contrast: #3a2a00;    --type-hive-soft: rgba(217, 154, 19, 0.16);
 }
-.tree-new:hover { filter: brightness(0.95); }
-.tree-new:active { transform: scale(0.98); box-shadow: var(--shadow-accent), inset 0 1px 0 rgba(255, 255, 255, 0.1); }
-.tree-new:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--shadow-accent); }
-.tree-empty {
-  color: var(--text-tertiary); font-size: 12.5px; text-align: center;
-  padding: 26px 12px; margin: 2px 2px 8px;
-  border: 1px dashed var(--border-strong); border-radius: 10px;
+/* 深色:主色整体提亮一档、字色换深色保持对比,柔和底透明度略高以在深底可辨。 */
+.dark .conn-tree {
+  --type-kafka: #f59e4c;      --type-kafka-contrast: #3a1c00;   --type-kafka-soft: rgba(245, 158, 76, 0.2);
+  --type-mysql: #58b6f0;      --type-mysql-contrast: #04263c;   --type-mysql-soft: rgba(88, 182, 240, 0.2);
+  --type-redis: #f16a5f;      --type-redis-contrast: #3a0603;   --type-redis-soft: rgba(241, 106, 95, 0.2);
+  --type-es: #f2d270;         --type-es-contrast: #4a3800;      --type-es-soft: rgba(242, 210, 112, 0.22);
+  --type-tidb: #f47c85;       --type-tidb-contrast: #3d0308;    --type-tidb-soft: rgba(244, 124, 133, 0.2);
+  --type-clickhouse: #f5cd47; --type-clickhouse-contrast: #3d3000; --type-clickhouse-soft: rgba(245, 205, 71, 0.22);
+  --type-postgres: #6cc7d2;   --type-postgres-contrast: #062e33; --type-postgres-soft: rgba(108, 199, 210, 0.2);
+  --type-hive: #edc25a;       --type-hive-contrast: #3a2a00;    --type-hive-soft: rgba(237, 194, 90, 0.22);
 }
-.conn { margin-bottom: 1px; }
-.conn-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 9px; border-radius: 8px; cursor: pointer;
-  transition: background 0.12s ease;
-  user-select: none;
-}
-.conn-row:hover { background: var(--bg-hover); }
-/* 选中(展开)态:与 hover 区分的轻底色,常驻标识当前浏览的连接。 */
-.conn-row.active { background: var(--bg-active); }
-/* ↑↓ 排序微调按钮:hover 显现(范式同 leaf-del);disabled 置灰。 */
-.conn-actions { display: inline-flex; align-items: center; gap: 1px; flex: none; margin-left: 2px; }
-.conn-move {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 18px; height: 18px; box-sizing: border-box;
-  background: none; border: none; color: var(--text-tertiary); cursor: pointer;
-  border-radius: 5px; padding: 0; flex: none; opacity: 0;
-  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
-}
-.conn-row:hover .conn-move { opacity: 1; }
-.conn-move:hover:not(:disabled) { color: var(--accent); background: var(--accent-soft); }
-.conn-move:active:not(:disabled) { transform: scale(0.92); }
-.conn-move:disabled { opacity: 0; cursor: default; }
-.conn-row:hover .conn-move:disabled { opacity: 0.35; }
-/* 拖拽插入位置指示线:accent 色 2px 横线压在目标行的上/下边缘。 */
+
+/* 数据源品牌色:字母徽标实底主色 + 类型文字徽标柔和底色(变量含 dark 覆盖)。 */
+.type-badge-kafka { background: var(--type-kafka); color: var(--type-kafka-contrast); }
+.type-badge-mysql { background: var(--type-mysql); color: var(--type-mysql-contrast); }
+.type-badge-redis { background: var(--type-redis); color: var(--type-redis-contrast); }
+.type-badge-es { background: var(--type-es); color: var(--type-es-contrast); }
+.type-badge-tidb { background: var(--type-tidb); color: var(--type-tidb-contrast); }
+.type-badge-clickhouse { background: var(--type-clickhouse); color: var(--type-clickhouse-contrast); }
+.type-badge-postgres { background: var(--type-postgres); color: var(--type-postgres-contrast); }
+.type-badge-hive { background: var(--type-hive); color: var(--type-hive-contrast); }
+.conn-type-kafka { color: var(--type-kafka); background: var(--type-kafka-soft); }
+.conn-type-mysql { color: var(--type-mysql); background: var(--type-mysql-soft); }
+.conn-type-es { color: var(--type-es); background: var(--type-es-soft); }
+.conn-type-redis { color: var(--type-redis); background: var(--type-redis-soft); }
+.conn-type-clickhouse { color: var(--type-clickhouse); background: var(--type-clickhouse-soft); }
+.conn-type-tidb { color: var(--type-tidb); background: var(--type-tidb-soft); }
+.conn-type-postgres { color: var(--type-postgres); background: var(--type-postgres-soft); }
+.conn-type-hive { color: var(--type-hive); background: var(--type-hive-soft); }
+
+/* 拖拽插入位置指示线:accent 色 2px 横线压在目标行的上/下边缘(伪元素)。 */
 .conn-row.drop-before, .conn-row.drop-after { position: relative; }
 .conn-row.drop-before::before,
 .conn-row.drop-after::after {
@@ -2146,230 +2238,13 @@ function exportTopics(conn: Connection): void {
   right: 4px;
   height: 2px;
   border-radius: 1px;
-  background: var(--accent);
+  background: var(--primary);
   pointer-events: none;
 }
 .conn-row.drop-before::before { top: -2px; }
 .conn-row.drop-after::after { bottom: -2px; }
-.caret {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 18px; height: 18px; color: var(--text-tertiary);
-  transition: transform 0.18s ease, color 0.18s ease;
-  flex: none;
-}
-.caret.open { transform: rotate(90deg); color: var(--text-secondary); }
-.conn-name { font-weight: 600; flex: 1; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conn-type { font-size: 11px; font-weight: 500; padding: 1px 7px; border-radius: 5px; flex: none; }
-/* 品牌色首字母徽标:实底主色圆角方块,字色按类型配白/深保证对比;
-   颜色变量(含 dark 覆盖)统一在 styles.css 定义。 */
-.conn-type-badge {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 18px; height: 18px; flex: none;
-  border-radius: 5px;
-  font-size: 10px; font-weight: 700; line-height: 1;
-  font-family: var(--mono);
-  background: var(--bg-active); color: var(--text-secondary);
-}
-.type-badge-kafka { background: var(--type-kafka); color: var(--type-kafka-contrast); }
-.type-badge-mysql { background: var(--type-mysql); color: var(--type-mysql-contrast); }
-.type-badge-redis { background: var(--type-redis); color: var(--type-redis-contrast); }
-.type-badge-es { background: var(--type-es); color: var(--type-es-contrast); }
-.type-badge-tidb { background: var(--type-tidb); color: var(--type-tidb-contrast); }
-.type-badge-clickhouse { background: var(--type-clickhouse); color: var(--type-clickhouse-contrast); }
-.type-badge-postgres { background: var(--type-postgres); color: var(--type-postgres-contrast); }
-.type-badge-hive { background: var(--type-hive); color: var(--type-hive-contrast); }
-/* 类型文字徽标:品牌主色文字 + 柔和底色(替代共享的语义色)。 */
-.conn-type-kafka { color: var(--type-kafka); background: var(--type-kafka-soft); }
-.conn-type-mysql { color: var(--type-mysql); background: var(--type-mysql-soft); }
-.conn-type-es { color: var(--type-es); background: var(--type-es-soft); }
-.conn-type-redis { color: var(--type-redis); background: var(--type-redis-soft); }
-.conn-type-clickhouse { color: var(--type-clickhouse); background: var(--type-clickhouse-soft); }
-.conn-type-tidb { color: var(--type-tidb); background: var(--type-tidb-soft); }
-.conn-type-hive { color: var(--type-hive); background: var(--type-hive-soft); }
-.conn-status {
-  width: 8px; height: 8px; border-radius: 50%; flex: none; margin: 0 6px;
-  background: var(--text-tertiary);
-}
-.conn-status-kafka { background: var(--ok); }
-.conn-status-mysql { background: var(--info); }
-.conn-status-es { background: var(--warn); }
-.conn-status-redis { background: var(--danger); }
-.conn-status-clickhouse { background: var(--warn); }
-.conn-status-tidb { background: var(--ok); }
-.conn-status-hive { background: var(--warn); }
-.conn-status-connecting { background: var(--ok); animation: conn-pulse 1.1s ease-in-out infinite; }
-.conn-status-error { background: var(--danger); }
-.conn-status-disconnected { background: var(--text-tertiary); }
-.conn-status-unknown { background: var(--text-tertiary); }
-@keyframes conn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-.conn-children { margin-left: 16px; border-left: 1px solid var(--border); padding-left: 8px; }
-.topic-search { margin: 6px 0 2px; }
-.topic-toolbar { display: flex; align-items: center; gap: 6px; margin: 4px 0 2px; }
-.tool-btn {
-  background: none; border: 1px solid var(--border-strong); color: var(--text-secondary);
-  font-size: 11px; font-weight: 500; border-radius: 6px; padding: 1px 8px; cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
-}
-.tool-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
-.tool-btn.danger:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
-.tool-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.tool-btn:disabled:hover { color: var(--text-secondary); border-color: var(--border-strong); background: none; }
-.leaf-check { margin: 0; flex: none; accent-color: var(--accent); cursor: pointer; }
-.batch-result { margin: 4px 0 2px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-subtle); }
-.batch-summary { font-size: 12px; color: var(--text); }
-.batch-failures { margin-top: 4px; display: flex; flex-direction: column; gap: 2px; }
-.batch-failure { font-size: 11px; color: var(--danger); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.search-input {
-  width: 100%; box-sizing: border-box;
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 5px 9px; font-size: 12px;
-  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
-}
-.search-input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--accent-soft); }
-.search-input::placeholder { color: var(--text-tertiary); }
-.group-label {
-  display: flex; align-items: center; justify-content: space-between;
-  font-size: 11px; color: var(--text-tertiary); text-transform: uppercase;
-  letter-spacing: 0.05em; margin: 8px 0 3px;
-  position: relative; z-index: 1; isolation: isolate;
-  width: 100%; box-sizing: border-box;
-  appearance: none; background: none; border: none; padding: 4px 6px;
-  margin: 8px -6px 3px;
-  font-family: inherit; text-align: left; line-height: inherit;
-}
-.group-label.clickable { cursor: pointer; border-radius: 6px; transition: background 0.12s ease, color 0.12s ease; }
-.group-label.clickable:hover { background: var(--bg-hover); color: var(--text); }
-.group-label.clickable:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
-.group-label .group-title { flex: 1; min-width: 0; }
-.group-label .group-add { margin-right: -2px; }
-.group-label.clickable:active .group-add { color: var(--accent-hover); }
-.group-add {
-  display: inline-flex; align-items: center; justify-content: center;
-  color: var(--accent);
-  font-size: 17px; font-weight: 600; line-height: 1;
-  min-width: 22px; min-height: 22px; padding: 2px 4px; border-radius: 6px;
-  transition: background 0.12s ease, transform 0.12s ease;
-}
-.group-label.clickable:hover .group-add { background: var(--accent-soft); }
-.group-label.clickable:active .group-add { transform: scale(0.92); }
-.leaf {
-  display: flex; align-items: center; gap: 6px;
-  padding: 5px 7px; border-radius: 6px; cursor: pointer;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-.leaf:hover { background: var(--bg-hover); color: var(--text); }
-.leaf.muted { color: var(--text-tertiary); cursor: default; }
-.leaf-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.leaf-del {
-  background: none; border: none; color: var(--text-tertiary); cursor: pointer;
-  border-radius: 4px; padding: 0 3px; flex: none; opacity: 0;
-  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
-}
-.leaf:hover .leaf-del { opacity: 1; }
-.leaf-del:hover { color: var(--danger); background: var(--danger-soft); }
-.leaf-info {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 20px; height: 20px; box-sizing: border-box;
-  background: none; border: none; color: var(--text-tertiary); cursor: pointer;
-  border-radius: 6px; padding: 0; flex: none;
-  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
-}
-.leaf:hover .leaf-info { opacity: 1; }
-.leaf-count {
-  flex: none; font-size: 11px; color: var(--text-tertiary);
-  background: var(--bg-hover); border-radius: 99px; padding: 0 7px; line-height: 17px;
-  font-family: var(--mono);
-}
-.leaf-badge {
-  flex: none; font-size: 10px; color: var(--text-tertiary);
-  background: var(--bg-hover); border-radius: 99px; padding: 0 6px; line-height: 15px;
-  font-family: var(--mono); max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.leaf-badge.engine { color: var(--accent); background: var(--accent-soft); }
-.ch-db-node .caret { width: 14px; height: 14px; }
-.ch-table { padding-left: 22px; }
-/* DB 节点展开后的表过滤输入框:紧凑、宽约 90%,风格与树内搜索一致。 */
-.ch-table-filter { margin: 4px 0 2px; }
-.ch-table-filter .search-input { width: 90%; padding: 4px 8px; }
-/* ES 一级树的索引过滤行:输入框 + 计数徽标(复用 .leaf-badge)。 */
-.es-filter-row { display: flex; align-items: center; gap: 6px; }
-.es-filter-row .search-input { width: auto; flex: 1; min-width: 0; }
-.leaf-info:hover { color: var(--info); background: var(--info-soft); }
-.leaf-info:active { transform: scale(0.92); }
-.leaf-info:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
-.create-form {
-  margin: 6px 0 2px; padding: 8px; border: 1px solid var(--border);
-  border-radius: 8px; background: var(--bg-subtle); display: flex; flex-direction: column; gap: 7px;
-}
-.input {
-  background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 5px 9px; font-size: 12px; width: 100%; box-sizing: border-box;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-.input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
-.create-row { display: flex; gap: 8px; }
-.create-field { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--text-secondary); flex: 1; }
-.input.num { width: 100%; }
-.create-error { color: var(--danger); font-size: 12px; }
-.create-actions { display: flex; gap: 8px; }
-/* 基座走全局 .btn;树内创建表单按钮为小号(局部修饰)。 */
-.btn { padding: 4px 12px; font-size: 12px; }
-.segmented {
-  display: flex; gap: 2px; margin: 6px 0 8px; padding: 3px;
-  background: var(--bg-subtle); border: 1px solid var(--border);
-  border-radius: 9px;
-}
-.segmented-btn {
-  flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;
-  border: none; background: transparent; color: var(--text-secondary);
-  font-size: 12px; font-weight: 500; padding: 5px 8px; border-radius: 7px;
-  cursor: pointer; transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
-  min-width: 0;
-}
-.segmented-btn:hover { color: var(--text); }
-.segmented-btn.active {
-  background: var(--bg-elevated); color: var(--text);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-.segmented-icon { flex: none; }
-.segmented-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
-.segmented-count {
-  flex: none; font-size: 11px; color: var(--text-tertiary);
-  background: var(--bg-hover); border-radius: 99px; padding: 0 6px; line-height: 16px;
-}
-.segmented-btn.active .segmented-count { color: var(--accent); }
-.lag-entry {
-  display: flex; align-items: center; gap: 6px;
-  width: 100%; box-sizing: border-box;
-  background: none; border: none; color: var(--text);
-  font-size: 13px; font-family: inherit; text-align: left; line-height: inherit;
-  padding: 4px 7px; margin-bottom: 2px; border-radius: 6px; cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-.lag-entry:hover { background: var(--bg-hover); }
-.lag-entry:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
-.lag-entry .lag-entry-icon { flex: none; }
-.conn-loading { color: var(--text-secondary); padding: 5px; }
-.conn-error { color: var(--danger); padding: 5px; }
-/* ES 修改索引设置弹窗:遮罩与卡片的风格对齐全局 ConfirmDialog。 */
-.es-settings-backdrop {
-  position: fixed; inset: 0; z-index: 100;
-  background: var(--overlay);
-  -webkit-backdrop-filter: blur(2px);
-  backdrop-filter: blur(2px);
-  display: flex; align-items: center; justify-content: center;
-}
-.es-settings-modal {
-  width: 320px; max-width: calc(100vw - 48px);
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
-  padding: 16px; display: flex; flex-direction: column; gap: 10px;
-}
-.es-settings-title { font-size: 14px; font-weight: 600; }
-.es-settings-index {
-  font-size: 12px; color: var(--text-secondary);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.es-settings-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* 分组标题 hover 显现的可点击态(动态 component 上无法用 group-hover 表达)。 */
+.group-label.clickable { cursor: pointer; transition: background 0.12s ease, color 0.12s ease; }
+.group-label.clickable:hover { background: var(--primary); color: var(--accent-foreground); }
 </style>

@@ -1,9 +1,20 @@
 <script setup lang="ts">
-import { reactive, ref, computed, watch } from 'vue'
+import { reactive, ref, computed, watch, type Component } from 'vue'
 import { getApi } from '@/api/client'
 import { useConnectionsStore, type NewConnectionInput } from '@/store/connections'
 import type { Connection, CHConfigShape, EsConfigShape, HiveConfigShape, KafkaConfig, MysqlConfigShape, PostgresConfigShape, RedisConfigShape, SASLConfig, TLSConfig } from '@/api/types'
 import PasswordInput from '@/components/common/PasswordInput.vue'
+// Dialog 原语:Root/Overlay/Content 直接取自 reka-ui(不经 ui/dialog 的
+// DialogContent——它内置 DialogPortal 会把内容 teleport 到 body,既有用例
+// 以 wrapper.find 按组件内 DOM 断言,必须原地渲染);Header/Title/Description/
+// Footer 无 portal,复用 ui 基础件。
+import { DialogContent, DialogOverlay, DialogRoot } from 'reka-ui'
+import { DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { Braces, Database, Hexagon, Layers, Leaf, Loader2, Search, Table2, X, Zap } from 'lucide-vue-next'
 
 const props = defineProps<{ show: boolean; connection?: Connection | null }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -13,17 +24,24 @@ const store = useConnectionsStore()
 const SECURITY_PROTOCOLS = ['PLAINTEXT', 'SSL', 'SASL_PLAINTEXT', 'SASL_SSL'] as const
 
 // 两段式第一段:数据库类型卡片。数据来自本地常量数组,后续可换驱动管理页数据。
+// 图标统一 lucide 线性件(emoji 字符串随 UI 对齐 DBX 退役)。
 type CardType = 'kafka' | 'redis' | 'clickhouse' | 'mysql' | 'tidb' | 'es' | 'postgres' | 'hive'
-const TYPE_CARDS: { type: CardType; label: string; icon: string }[] = [
-  { type: 'kafka', label: 'Kafka', icon: '⚡' },
-  { type: 'redis', label: 'Redis', icon: '🧱' },
-  { type: 'clickhouse', label: 'ClickHouse', icon: '🗄️' },
-  { type: 'mysql', label: 'MySQL', icon: '🐬' },
-  { type: 'tidb', label: 'TiDB', icon: '🌿' },
-  { type: 'es', label: 'Elasticsearch', icon: '🔎' },
-  { type: 'postgres', label: 'PostgreSQL', icon: '🐘' },
-  { type: 'hive', label: 'Hive', icon: '🐝' },
+const TYPE_CARDS: { type: CardType; label: string; icon: Component }[] = [
+  { type: 'kafka', label: 'Kafka', icon: Zap },
+  { type: 'redis', label: 'Redis', icon: Braces },
+  { type: 'clickhouse', label: 'ClickHouse', icon: Database },
+  { type: 'mysql', label: 'MySQL', icon: Table2 },
+  { type: 'tidb', label: 'TiDB', icon: Leaf },
+  { type: 'es', label: 'Elasticsearch', icon: Search },
+  { type: 'postgres', label: 'PostgreSQL', icon: Layers },
+  { type: 'hive', label: 'Hive', icon: Hexagon },
 ]
+
+// 原生 select/checkbox 暂不替换为 reka 原语:既有用例以 setValue/checked
+// 断言驱动,原语(button 形态)会破坏交互契约;外观按 ui Input 的 token
+// 类手工对齐(语义 token 亮暗主题自动生效)。
+const SELECT_CLS = 'h-8 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 text-[13px] shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50'
+const CHECK_CLS = 'size-3.5 shrink-0 accent-primary'
 
 // createDefaultForm 表单初始值工厂:每次「新建连接」打开都从空白开始,
 // 不残留上一次输入(编辑模式由 fillFrom 覆盖,不受影响)。
@@ -445,7 +463,7 @@ async function save(): Promise<void> {
 
 // 编辑模式的删除入口:点击后先弹应用内确认层(盖过本弹窗,z-index 与
 // PromptDialog/ResetOffsetDialog 的 1200 对齐;ConfirmDialog 组件自身只有
-// z-index 100,会被 900 的弹窗压住,故在弹窗内自建同构确认层)。确认后经
+// z-index 100,会被弹窗压住,故在弹窗内自建同构确认层)。确认后经
 // store.remove 删除(内部调 deleteConnection 并同步本地列表与状态,与
 // App.vue 的删除链路一致),成功后关闭弹窗;失败原因展示在确认层内。
 function askDeleteConnection(): void {
@@ -478,412 +496,364 @@ function close(): void {
 </script>
 
 <template>
-  <div v-if="show" class="modal-backdrop" data-test="new-connection-modal">
-    <div class="modal">
-      <div class="modal-header">
-        <span class="modal-title" data-test="modal-title">{{ editing ? '编辑连接' : '新建连接' }}</span>
-        <button class="modal-close" type="button" data-test="modal-close" @click="close">✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="field">
-          <label class="label">名称 <span class="req">*</span></label>
-          <input v-model="form.name" data-test="input-name" class="input" placeholder="例如：本地开发" autocapitalize="off" autocorrect="off" autocomplete="off" />
-          <span v-if="nameInvalid" class="err">名称不能为空</span>
-        </div>
-        <div class="field">
-          <label class="label">数据库类型</label>
-          <div class="type-grid" data-test="type-grid">
-            <button
-              v-for="c in TYPE_CARDS"
-              :key="c.type"
-              type="button"
-              class="type-card"
-              :class="{ active: form.connType === c.type }"
-              :data-test="`type-card-${c.type}`"
-              @click="pickType(c.type)"
-            >
-              <span class="type-card-icon">{{ c.icon }}</span>
-              <span class="type-card-label">{{ c.label }}</span>
-            </button>
+  <!-- Dialog 原语(无 Portal,原地渲染):遮罩 bg-black/50,面板在
+       DialogContent 的视口盒内 grid 居中,避免 transform 破坏内部 fixed
+       定位(删除确认层 absolute inset-0 依赖 DialogContent 的视口盒)。 -->
+  <DialogRoot :open="show">
+    <DialogOverlay v-if="show" class="fixed inset-0 z-50 bg-black/50" />
+    <DialogContent
+      v-if="show"
+      class="fixed inset-0 z-50 grid place-items-center overflow-hidden p-4"
+      data-test="new-connection-modal"
+    >
+      <div class="modal flex max-h-[85vh] w-[460px] max-w-[92vw] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-lg">
+        <DialogHeader class="modal-header flex-row items-center justify-between gap-2 border-b border-border px-4 py-3 text-left">
+          <DialogTitle class="modal-title text-[15px] font-semibold" data-test="modal-title">{{ editing ? '编辑连接' : '新建连接' }}</DialogTitle>
+          <DialogDescription class="sr-only">连接配置表单</DialogDescription>
+          <button class="modal-close flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" type="button" data-test="modal-close" @click="close">
+            <X class="size-4" aria-hidden="true" />
+          </button>
+        </DialogHeader>
+        <div class="modal-body grid grid-cols-2 gap-x-3 gap-y-3.5 overflow-y-auto px-4 py-4">
+          <div class="field col-span-2 flex flex-col gap-1.5">
+            <Label class="text-xs font-medium text-muted-foreground">名称 <span class="req text-destructive">*</span></Label>
+            <Input :value="form.name" @input="form.name = ($event.target as HTMLInputElement).value" data-test="input-name" class="h-8 text-[13px]" placeholder="例如：本地开发" autocapitalize="off" autocorrect="off" autocomplete="off" />
+            <span v-if="nameInvalid" class="err text-xs text-destructive">名称不能为空</span>
           </div>
-        </div>
-        <template v-if="form.connType === 'redis'">
-          <div class="field">
-            <label class="label">地址 <span class="req">*</span>(集群可填逗号分隔多个种子)</label>
-            <input v-model="form.addr" data-test="input-addr" class="input" placeholder="127.0.0.1:6379" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-          </div>
-          <div class="field">
-            <label class="label">密码(可选)</label>
-            <PasswordInput v-model="form.redisPassword" data-test="input-redis-password" toggle-testid="toggle-password-redis" :placeholder="secretPlaceholder" />
-          </div>
-          <div class="field">
-            <label class="label">DB(集群模式固定 0)</label>
-            <input v-model.number="form.redisDB" data-test="input-redis-db" class="input" type="number" min="0" />
-          </div>
-        </template>
-        <template v-else-if="form.connType === 'clickhouse'">
-          <div class="field">
-            <label class="label">节点地址 <span class="req">*</span>(多节点逗号分隔)</label>
-            <input v-model="form.chHosts" data-test="input-ch-hosts" class="input" placeholder="node1:9000,node2:9000" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-            <span class="hint" data-test="ch-port-hint">原生协议默认端口 9000;HTTP 协议默认端口 8123</span>
-            <span v-if="chHostsInvalid" class="err">至少填写一个节点</span>
-          </div>
-          <div class="field">
-            <label class="label">协议</label>
-            <select v-model="form.chProtocol" class="input" data-test="input-ch-protocol">
-              <option value="native">Native(9000)</option>
-              <option value="http">HTTP(8123)</option>
-            </select>
-          </div>
-          <div class="field">
-            <label class="label">用户名</label>
-            <input v-model="form.chUsername" data-test="input-ch-username" class="input" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-          </div>
-          <div class="field">
-            <label class="label">密码</label>
-            <PasswordInput v-model="form.chPassword" data-test="input-ch-password" toggle-testid="toggle-password-ch" :placeholder="secretPlaceholder" />
-          </div>
-          <div class="field">
-            <label class="label">数据库</label>
-            <input v-model="form.chDatabase" data-test="input-ch-database" class="input" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-          </div>
-          <div class="field">
-            <label class="checkbox-label">
-              <input v-model="form.chTLS" type="checkbox" data-test="input-ch-tls" />
-              启用 TLS
-            </label>
-          </div>
-        </template>
-        <template v-else-if="form.connType === 'mysql' || form.connType === 'tidb'">
-          <div class="field">
-            <label class="label">主机 <span class="req">*</span></label>
-            <input v-model="form.mysqlHost" data-test="input-mysql-host" class="input" placeholder="127.0.0.1" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-            <span v-if="mysqlHostInvalid" class="err">主机不能为空</span>
-          </div>
-          <div class="field">
-            <label class="label">端口 <span class="req">*</span></label>
-            <input v-model.number="form.mysqlPort" data-test="input-mysql-port" class="input" type="number" min="1" max="65535" />
-            <span v-if="mysqlPortInvalid" class="err">端口需为 1-65535</span>
-            <span class="hint" data-test="mysql-port-hint">MySQL 默认 3306;TiDB 默认 4000</span>
-          </div>
-          <div class="field">
-            <label class="label">用户名</label>
-            <input v-model="form.mysqlUsername" data-test="input-mysql-username" class="input" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-          </div>
-          <div class="field">
-            <label class="label">密码</label>
-            <PasswordInput v-model="form.mysqlPassword" data-test="input-mysql-password" toggle-testid="toggle-password-mysql" :placeholder="secretPlaceholder" />
-          </div>
-          <div class="field">
-            <label class="label">数据库</label>
-            <input v-model="form.mysqlDatabase" data-test="input-mysql-database" class="input" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-          </div>
-          <div class="field">
-            <label class="label">TLS</label>
-            <select v-model="form.mysqlTlsMode" class="input" data-test="input-mysql-tls-mode">
-              <option value="disabled">禁用</option>
-              <option value="skip-verify">启用（跳过证书校验）</option>
-              <option value="verify-full">启用（校验证书）</option>
-            </select>
-            <p class="hint" data-test="mysql-tls-hint">自建 MySQL/TiDB 默认禁用即可;TiDB Cloud 等托管服务需选择启用</p>
-          </div>
-        </template>
-        <template v-else-if="form.connType === 'postgres'">
-          <div class="field">
-            <label class="label">主机 <span class="req">*</span></label>
-            <input v-model="form.pgHost" data-test="input-postgres-host" class="input" placeholder="127.0.0.1" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-            <span v-if="pgHostInvalid" class="err">主机不能为空</span>
-          </div>
-          <div class="field">
-            <label class="label">端口</label>
-            <input v-model.number="form.pgPort" data-test="input-postgres-port" class="input" type="number" min="1" max="65535" />
-            <span v-if="pgPortInvalid" class="err">端口需为 1-65535</span>
-            <span class="hint" data-test="postgres-port-hint">PostgreSQL 默认 5432</span>
-          </div>
-          <div class="field">
-            <label class="label">用户名</label>
-            <input v-model="form.pgUsername" data-test="input-postgres-username" class="input" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-          </div>
-          <div class="field">
-            <label class="label">密码</label>
-            <PasswordInput v-model="form.pgPassword" data-test="input-postgres-password" toggle-testid="toggle-password-postgres" :placeholder="secretPlaceholder" />
-          </div>
-          <div class="field">
-            <label class="label">数据库 <span class="req">*</span></label>
-            <input v-model="form.pgDatabase" data-test="input-postgres-database" class="input" placeholder="postgres" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-            <span v-if="pgDatabaseInvalid" class="err" data-test="postgres-database-err">数据库不能为空</span>
-          </div>
-          <div class="field">
-            <label class="label">search_path(可选)</label>
-            <input v-model="form.pgSearchPath" data-test="input-postgres-search-path" class="input" placeholder="public" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-            <span class="hint">留空时使用 PostgreSQL 默认搜索路径</span>
-          </div>
-          <div class="field">
-            <label class="label">连接超时(ms)</label>
-            <input v-model.number="form.pgConnectTimeoutMs" data-test="input-postgres-timeout" class="input" type="number" min="1000" />
-          </div>
-          <div class="field">
-            <label class="label">TLS</label>
-            <select v-model="form.pgTlsMode" class="input" data-test="input-postgres-tls-mode">
-              <option value="disable">禁用</option>
-              <option value="require">启用（不校验证书）</option>
-              <option value="verify-ca">启用（校验证书颁发方）</option>
-              <option value="verify-full">启用（校验证书与主机名）</option>
-            </select>
-            <p class="hint" data-test="postgres-tls-hint">自建 PostgreSQL 默认禁用即可;托管服务通常需选择启用</p>
-          </div>
-        </template>
-        <template v-else-if="form.connType === 'hive'">
-          <div class="field">
-            <label class="label">主机 <span class="req">*</span></label>
-            <input v-model="form.hiveHost" data-test="input-hive-host" class="input" placeholder="127.0.0.1" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-            <span v-if="hiveHostInvalid" class="err">主机不能为空</span>
-          </div>
-          <div class="field">
-            <label class="label">端口</label>
-            <input v-model.number="form.hivePort" data-test="input-hive-port" class="input" type="number" min="1" max="65535" />
-            <span v-if="hivePortInvalid" class="err">端口需为 1-65535</span>
-            <span class="hint" data-test="hive-port-hint">HiveServer2 默认 10000</span>
-          </div>
-          <div class="field">
-            <label class="label">认证方式</label>
-            <select v-model="form.hiveAuthMode" class="input" data-test="hive-auth-mode">
-              <option value="nosasl">无认证</option>
-              <option value="ldap">LDAP</option>
-              <option value="kerberos">Kerberos</option>
-            </select>
-          </div>
-          <template v-if="form.hiveAuthMode === 'ldap'">
-            <div class="field">
-              <label class="label">用户名 <span class="req">*</span></label>
-              <input v-model="form.hiveUsername" data-test="hive-username" class="input" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-              <span v-if="hiveUsernameInvalid" class="err" data-test="hive-username-err">LDAP 认证需填写用户名</span>
+          <div class="field col-span-2 flex flex-col gap-1.5">
+            <Label class="text-xs font-medium text-muted-foreground">数据库类型</Label>
+            <div class="type-grid grid grid-cols-4 gap-2" data-test="type-grid">
+              <button
+                v-for="c in TYPE_CARDS"
+                :key="c.type"
+                type="button"
+                class="type-card flex flex-col items-center gap-1 rounded-lg border px-2 py-2.5 transition-colors"
+                :class="form.connType === c.type ? 'active border-primary bg-background ring-1 ring-primary/30' : 'border-border bg-muted/40 hover:border-ring hover:bg-background'"
+                :data-test="`type-card-${c.type}`"
+                @click="pickType(c.type)"
+              >
+                <component :is="c.icon" class="size-5 shrink-0 text-foreground" aria-hidden="true" />
+                <span class="type-card-label text-xs font-medium">{{ c.label }}</span>
+              </button>
             </div>
-            <div class="field">
-              <label class="label">密码</label>
-              <PasswordInput v-model="form.hivePassword" data-test="hive-password" toggle-testid="toggle-password-hive" :placeholder="secretPlaceholder" />
+          </div>
+          <template v-if="form.connType === 'redis'">
+            <div class="field col-span-2 flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">地址 <span class="req text-destructive">*</span>(集群可填逗号分隔多个种子)</Label>
+              <Input :value="form.addr" @input="form.addr = ($event.target as HTMLInputElement).value" data-test="input-addr" class="h-8 text-[13px]" placeholder="127.0.0.1:6379" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">密码(可选)</Label>
+              <PasswordInput v-model="form.redisPassword" data-test="input-redis-password" toggle-testid="toggle-password-redis" :placeholder="secretPlaceholder" />
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">DB(集群模式固定 0)</Label>
+              <Input :value="form.redisDB" @input="form.redisDB = Number(($event.target as HTMLInputElement).value)" data-test="input-redis-db" class="h-8 text-[13px]" type="number" min="0" />
             </div>
           </template>
-          <template v-else-if="form.hiveAuthMode === 'kerberos'">
-            <div class="field">
-              <label class="label">Principal <span class="req">*</span></label>
-              <input v-model="form.hivePrincipal" data-test="hive-kerberos-principal" class="input" placeholder="hive/_HOST@EXAMPLE.COM" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-              <span v-if="hivePrincipalInvalid" class="err" data-test="hive-kerberos-principal-err">Kerberos 认证需填写 Principal</span>
+          <template v-else-if="form.connType === 'clickhouse'">
+            <div class="field col-span-2 flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">节点地址 <span class="req text-destructive">*</span>(多节点逗号分隔)</Label>
+              <Input :value="form.chHosts" @input="form.chHosts = ($event.target as HTMLInputElement).value" data-test="input-ch-hosts" class="h-8 text-[13px]" placeholder="node1:9000,node2:9000" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              <span class="hint text-xs text-muted-foreground" data-test="ch-port-hint">原生协议默认端口 9000;HTTP 协议默认端口 8123</span>
+              <span v-if="chHostsInvalid" class="err text-xs text-destructive">至少填写一个节点</span>
             </div>
-            <div class="field">
-              <label class="label">keytab 路径 <span class="req">*</span></label>
-              <input v-model="form.hiveKeytab" data-test="hive-kerberos-keytab" class="input" placeholder="/etc/security/keytabs/hive.keytab" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-              <span v-if="hiveKeytabInvalid" class="err" data-test="hive-kerberos-keytab-err">Kerberos 认证需填写 keytab 路径</span>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">协议</Label>
+              <select v-model="form.chProtocol" :class="SELECT_CLS" data-test="input-ch-protocol">
+                <option value="native">Native(9000)</option>
+                <option value="http">HTTP(8123)</option>
+              </select>
             </div>
-            <div class="field">
-              <label class="label">krb5.conf 路径(可选)</label>
-              <input v-model="form.hiveKrb5Conf" data-test="hive-kerberos-krb5-conf" class="input" placeholder="/etc/krb5.conf" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">用户名</Label>
+              <Input :value="form.chUsername" @input="form.chUsername = ($event.target as HTMLInputElement).value" data-test="input-ch-username" class="h-8 text-[13px]" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
             </div>
-          </template>
-          <div class="field">
-            <label class="label">默认库(可选)</label>
-            <input v-model="form.hiveDatabase" data-test="hive-database" class="input" placeholder="留空 = default" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-          </div>
-        </template>
-        <template v-else-if="form.connType === 'es'">
-          <div class="field">
-            <label class="label">节点地址 <span class="req">*</span>(多节点逗号分隔)</label>
-            <input v-model="form.esHosts" data-test="input-es-hosts" class="input" placeholder="127.0.0.1:9200" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-            <span class="hint">地址自带端口;无协议前缀时按 http 处理,可写 http://host:9200</span>
-            <span v-if="esHostsInvalid" class="err">至少填写一个节点</span>
-          </div>
-          <div class="field">
-            <label class="label">认证方式</label>
-            <select v-model="form.esAuthMode" class="input" data-test="input-es-auth-mode">
-              <option value="none">无认证</option>
-              <option value="basic">用户名 / 密码</option>
-              <option value="apikey">API Key</option>
-            </select>
-          </div>
-          <template v-if="form.esAuthMode === 'basic'">
-            <div class="field">
-              <label class="label">用户名</label>
-              <input v-model="form.esUsername" data-test="input-es-username" class="input" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">密码</Label>
+              <PasswordInput v-model="form.chPassword" data-test="input-ch-password" toggle-testid="toggle-password-ch" :placeholder="secretPlaceholder" />
             </div>
-            <div class="field">
-              <label class="label">密码</label>
-              <PasswordInput v-model="form.esPassword" data-test="input-es-password" toggle-testid="toggle-password-es" :placeholder="secretPlaceholder" />
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">数据库</Label>
+              <Input :value="form.chDatabase" @input="form.chDatabase = ($event.target as HTMLInputElement).value" data-test="input-ch-database" class="h-8 text-[13px]" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="field col-span-2 flex items-center">
+              <label class="checkbox-label flex items-center gap-2 text-[13px]">
+                <input v-model="form.chTLS" type="checkbox" :class="CHECK_CLS" data-test="input-ch-tls" />
+                启用 TLS
+              </label>
             </div>
           </template>
-          <template v-else-if="form.esAuthMode === 'apikey'">
-            <div class="field">
-              <label class="label">API Key(Base64「id:api_key」或编码凭据)</label>
-              <input v-model="form.esApiKey" data-test="input-es-api-key" class="input" :placeholder="secretPlaceholder" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+          <template v-else-if="form.connType === 'mysql' || form.connType === 'tidb'">
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">主机 <span class="req text-destructive">*</span></Label>
+              <Input :value="form.mysqlHost" @input="form.mysqlHost = ($event.target as HTMLInputElement).value" data-test="input-mysql-host" class="h-8 text-[13px]" placeholder="127.0.0.1" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              <span v-if="mysqlHostInvalid" class="err text-xs text-destructive">主机不能为空</span>
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">端口 <span class="req text-destructive">*</span></Label>
+              <Input :value="form.mysqlPort" @input="form.mysqlPort = Number(($event.target as HTMLInputElement).value)" data-test="input-mysql-port" class="h-8 text-[13px]" type="number" min="1" max="65535" />
+              <span v-if="mysqlPortInvalid" class="err text-xs text-destructive">端口需为 1-65535</span>
+              <span class="hint text-xs text-muted-foreground" data-test="mysql-port-hint">MySQL 默认 3306;TiDB 默认 4000</span>
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">用户名</Label>
+              <Input :value="form.mysqlUsername" @input="form.mysqlUsername = ($event.target as HTMLInputElement).value" data-test="input-mysql-username" class="h-8 text-[13px]" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">密码</Label>
+              <PasswordInput v-model="form.mysqlPassword" data-test="input-mysql-password" toggle-testid="toggle-password-mysql" :placeholder="secretPlaceholder" />
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">数据库</Label>
+              <Input :value="form.mysqlDatabase" @input="form.mysqlDatabase = ($event.target as HTMLInputElement).value" data-test="input-mysql-database" class="h-8 text-[13px]" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">TLS</Label>
+              <select v-model="form.mysqlTlsMode" :class="SELECT_CLS" data-test="input-mysql-tls-mode">
+                <option value="disabled">禁用</option>
+                <option value="skip-verify">启用（跳过证书校验）</option>
+                <option value="verify-full">启用（校验证书）</option>
+              </select>
+              <p class="hint text-xs text-muted-foreground" data-test="mysql-tls-hint">自建 MySQL/TiDB 默认禁用即可;TiDB Cloud 等托管服务需选择启用</p>
             </div>
           </template>
-          <div class="field">
-            <label class="label">TLS</label>
-            <select v-model="form.esTlsMode" class="input" data-test="input-es-tls-mode">
-              <option value="disabled">禁用</option>
-              <option value="skip-verify">启用（跳过证书校验）</option>
-              <option value="verify-full">启用（校验证书）</option>
-            </select>
-            <p class="hint" data-test="es-tls-hint">自建 ES 默认禁用即可;启用后按 https 访问上方地址</p>
-          </div>
-        </template>
-        <template v-else>
-        <div class="field">
-          <label class="label">bootstrap.servers <span class="req">*</span></label>
-          <input v-model="form.brokers" data-test="input-brokers" class="input" placeholder="localhost:9092,broker2:9092" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-          <span v-if="brokersInvalid" class="err">至少填写一个 broker</span>
-        </div>
-        <div class="field">
-          <label class="label">安全协议</label>
-          <select v-model="form.securityProtocol" class="input" data-test="input-security-protocol">
-            <option v-for="p in SECURITY_PROTOCOLS" :key="p" :value="p">{{ p }}</option>
-          </select>
-        </div>
-        <template v-if="isSasl">
-          <div class="field">
-            <label class="label">认证方式</label>
-            <select v-model="form.mechanism" class="input" data-test="input-mechanism">
-              <option value="PLAIN">PLAIN</option>
-              <option value="SCRAM-SHA-256">SCRAM-SHA-256</option>
-              <option value="SCRAM-SHA-512">SCRAM-SHA-512</option>
-              <option value="GSSAPI">GSSAPI（Kerberos）</option>
-            </select>
-          </div>
-          <template v-if="!isGssapi">
-            <div class="field">
-              <label class="label">用户名</label>
-              <input v-model="form.username" data-test="input-username" class="input" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+          <template v-else-if="form.connType === 'postgres'">
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">主机 <span class="req text-destructive">*</span></Label>
+              <Input :value="form.pgHost" @input="form.pgHost = ($event.target as HTMLInputElement).value" data-test="input-postgres-host" class="h-8 text-[13px]" placeholder="127.0.0.1" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              <span v-if="pgHostInvalid" class="err text-xs text-destructive">主机不能为空</span>
             </div>
-            <div class="field">
-              <label class="label">密码</label>
-              <PasswordInput v-model="form.password" data-test="input-password" toggle-testid="toggle-password-kafka" :placeholder="secretPlaceholder" />
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">端口</Label>
+              <Input :value="form.pgPort" @input="form.pgPort = Number(($event.target as HTMLInputElement).value)" data-test="input-postgres-port" class="h-8 text-[13px]" type="number" min="1" max="65535" />
+              <span v-if="pgPortInvalid" class="err text-xs text-destructive">端口需为 1-65535</span>
+              <span class="hint text-xs text-muted-foreground" data-test="postgres-port-hint">PostgreSQL 默认 5432</span>
             </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">用户名</Label>
+              <Input :value="form.pgUsername" @input="form.pgUsername = ($event.target as HTMLInputElement).value" data-test="input-postgres-username" class="h-8 text-[13px]" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">密码</Label>
+              <PasswordInput v-model="form.pgPassword" data-test="input-postgres-password" toggle-testid="toggle-password-postgres" :placeholder="secretPlaceholder" />
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">数据库 <span class="req text-destructive">*</span></Label>
+              <Input :value="form.pgDatabase" @input="form.pgDatabase = ($event.target as HTMLInputElement).value" data-test="input-postgres-database" class="h-8 text-[13px]" placeholder="postgres" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              <span v-if="pgDatabaseInvalid" class="err text-xs text-destructive" data-test="postgres-database-err">数据库不能为空</span>
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">search_path(可选)</Label>
+              <Input :value="form.pgSearchPath" @input="form.pgSearchPath = ($event.target as HTMLInputElement).value" data-test="input-postgres-search-path" class="h-8 text-[13px]" placeholder="public" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              <span class="hint text-xs text-muted-foreground">留空时使用 PostgreSQL 默认搜索路径</span>
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">连接超时(ms)</Label>
+              <Input :value="form.pgConnectTimeoutMs" @input="form.pgConnectTimeoutMs = Number(($event.target as HTMLInputElement).value)" data-test="input-postgres-timeout" class="h-8 text-[13px]" type="number" min="1000" />
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">TLS</Label>
+              <select v-model="form.pgTlsMode" :class="SELECT_CLS" data-test="input-postgres-tls-mode">
+                <option value="disable">禁用</option>
+                <option value="require">启用（不校验证书）</option>
+                <option value="verify-ca">启用（校验证书颁发方）</option>
+                <option value="verify-full">启用（校验证书与主机名）</option>
+              </select>
+              <p class="hint text-xs text-muted-foreground" data-test="postgres-tls-hint">自建 PostgreSQL 默认禁用即可;托管服务通常需选择启用</p>
+            </div>
+          </template>
+          <template v-else-if="form.connType === 'hive'">
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">主机 <span class="req text-destructive">*</span></Label>
+              <Input :value="form.hiveHost" @input="form.hiveHost = ($event.target as HTMLInputElement).value" data-test="input-hive-host" class="h-8 text-[13px]" placeholder="127.0.0.1" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              <span v-if="hiveHostInvalid" class="err text-xs text-destructive">主机不能为空</span>
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">端口</Label>
+              <Input :value="form.hivePort" @input="form.hivePort = Number(($event.target as HTMLInputElement).value)" data-test="input-hive-port" class="h-8 text-[13px]" type="number" min="1" max="65535" />
+              <span v-if="hivePortInvalid" class="err text-xs text-destructive">端口需为 1-65535</span>
+              <span class="hint text-xs text-muted-foreground" data-test="hive-port-hint">HiveServer2 默认 10000</span>
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">认证方式</Label>
+              <select v-model="form.hiveAuthMode" :class="SELECT_CLS" data-test="hive-auth-mode">
+                <option value="nosasl">无认证</option>
+                <option value="ldap">LDAP</option>
+                <option value="kerberos">Kerberos</option>
+              </select>
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">默认库(可选)</Label>
+              <Input :value="form.hiveDatabase" @input="form.hiveDatabase = ($event.target as HTMLInputElement).value" data-test="hive-database" class="h-8 text-[13px]" placeholder="留空 = default" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+            </div>
+            <template v-if="form.hiveAuthMode === 'ldap'">
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">用户名 <span class="req text-destructive">*</span></Label>
+                <Input :value="form.hiveUsername" @input="form.hiveUsername = ($event.target as HTMLInputElement).value" data-test="hive-username" class="h-8 text-[13px]" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+                <span v-if="hiveUsernameInvalid" class="err text-xs text-destructive" data-test="hive-username-err">LDAP 认证需填写用户名</span>
+              </div>
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">密码</Label>
+                <PasswordInput v-model="form.hivePassword" data-test="hive-password" toggle-testid="toggle-password-hive" :placeholder="secretPlaceholder" />
+              </div>
+            </template>
+            <template v-else-if="form.hiveAuthMode === 'kerberos'">
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">Principal <span class="req text-destructive">*</span></Label>
+                <Input :value="form.hivePrincipal" @input="form.hivePrincipal = ($event.target as HTMLInputElement).value" data-test="hive-kerberos-principal" class="h-8 text-[13px]" placeholder="hive/_HOST@EXAMPLE.COM" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+                <span v-if="hivePrincipalInvalid" class="err text-xs text-destructive" data-test="hive-kerberos-principal-err">Kerberos 认证需填写 Principal</span>
+              </div>
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">keytab 路径 <span class="req text-destructive">*</span></Label>
+                <Input :value="form.hiveKeytab" @input="form.hiveKeytab = ($event.target as HTMLInputElement).value" data-test="hive-kerberos-keytab" class="h-8 text-[13px]" placeholder="/etc/security/keytabs/hive.keytab" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+                <span v-if="hiveKeytabInvalid" class="err text-xs text-destructive" data-test="hive-kerberos-keytab-err">Kerberos 认证需填写 keytab 路径</span>
+              </div>
+              <div class="field col-span-2 flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">krb5.conf 路径(可选)</Label>
+                <Input :value="form.hiveKrb5Conf" @input="form.hiveKrb5Conf = ($event.target as HTMLInputElement).value" data-test="hive-kerberos-krb5-conf" class="h-8 text-[13px]" placeholder="/etc/krb5.conf" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              </div>
+            </template>
+          </template>
+          <template v-else-if="form.connType === 'es'">
+            <div class="field col-span-2 flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">节点地址 <span class="req text-destructive">*</span>(多节点逗号分隔)</Label>
+              <Input :value="form.esHosts" @input="form.esHosts = ($event.target as HTMLInputElement).value" data-test="input-es-hosts" class="h-8 text-[13px]" placeholder="127.0.0.1:9200" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              <span class="hint text-xs text-muted-foreground">地址自带端口;无协议前缀时按 http 处理,可写 http://host:9200</span>
+              <span v-if="esHostsInvalid" class="err text-xs text-destructive">至少填写一个节点</span>
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">认证方式</Label>
+              <select v-model="form.esAuthMode" :class="SELECT_CLS" data-test="input-es-auth-mode">
+                <option value="none">无认证</option>
+                <option value="basic">用户名 / 密码</option>
+                <option value="apikey">API Key</option>
+              </select>
+            </div>
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">TLS</Label>
+              <select v-model="form.esTlsMode" :class="SELECT_CLS" data-test="input-es-tls-mode">
+                <option value="disabled">禁用</option>
+                <option value="skip-verify">启用（跳过证书校验）</option>
+                <option value="verify-full">启用（校验证书）</option>
+              </select>
+              <p class="hint text-xs text-muted-foreground" data-test="es-tls-hint">自建 ES 默认禁用即可;启用后按 https 访问上方地址</p>
+            </div>
+            <template v-if="form.esAuthMode === 'basic'">
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">用户名</Label>
+                <Input :value="form.esUsername" @input="form.esUsername = ($event.target as HTMLInputElement).value" data-test="input-es-username" class="h-8 text-[13px]" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">密码</Label>
+                <PasswordInput v-model="form.esPassword" data-test="input-es-password" toggle-testid="toggle-password-es" :placeholder="secretPlaceholder" />
+              </div>
+            </template>
+            <template v-else-if="form.esAuthMode === 'apikey'">
+              <div class="field col-span-2 flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">API Key(Base64「id:api_key」或编码凭据)</Label>
+                <Input :value="form.esApiKey" @input="form.esApiKey = ($event.target as HTMLInputElement).value" data-test="input-es-api-key" class="h-8 text-[13px]" :placeholder="secretPlaceholder" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              </div>
+            </template>
           </template>
           <template v-else>
-            <div class="field">
-              <label class="label">Kerberos Principal（须含 @REALM）</label>
-              <input v-model="form.principal" data-test="input-principal" class="input" placeholder="admin/admin@YHSJ.COM" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+          <div class="field col-span-2 flex flex-col gap-1.5">
+            <Label class="text-xs font-medium text-muted-foreground">bootstrap.servers <span class="req text-destructive">*</span></Label>
+            <Input :value="form.brokers" @input="form.brokers = ($event.target as HTMLInputElement).value" data-test="input-brokers" class="h-8 text-[13px]" placeholder="localhost:9092,broker2:9092" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+            <span v-if="brokersInvalid" class="err text-xs text-destructive">至少填写一个 broker</span>
+          </div>
+          <div class="field flex flex-col gap-1.5" :class="isSasl ? 'col-span-1' : 'col-span-2'">
+            <Label class="text-xs font-medium text-muted-foreground">安全协议</Label>
+            <select v-model="form.securityProtocol" :class="SELECT_CLS" data-test="input-security-protocol">
+              <option v-for="p in SECURITY_PROTOCOLS" :key="p" :value="p">{{ p }}</option>
+            </select>
+          </div>
+          <template v-if="isSasl">
+            <div class="field flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">认证方式</Label>
+              <select v-model="form.mechanism" :class="SELECT_CLS" data-test="input-mechanism">
+                <option value="PLAIN">PLAIN</option>
+                <option value="SCRAM-SHA-256">SCRAM-SHA-256</option>
+                <option value="SCRAM-SHA-512">SCRAM-SHA-512</option>
+                <option value="GSSAPI">GSSAPI（Kerberos）</option>
+              </select>
             </div>
-            <div class="field">
-              <label class="label">keytab 路径</label>
-              <input v-model="form.keytabPath" data-test="input-keytab" class="input" placeholder="/etc/security/keytabs/admin.keytab" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+            <template v-if="!isGssapi">
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">用户名</Label>
+                <Input :value="form.username" @input="form.username = ($event.target as HTMLInputElement).value" data-test="input-username" class="h-8 text-[13px]" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">密码</Label>
+                <PasswordInput v-model="form.password" data-test="input-password" toggle-testid="toggle-password-kafka" :placeholder="secretPlaceholder" />
+              </div>
+            </template>
+            <template v-else>
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">Kerberos Principal（须含 @REALM）</Label>
+                <Input :value="form.principal" @input="form.principal = ($event.target as HTMLInputElement).value" data-test="input-principal" class="h-8 text-[13px]" placeholder="admin/admin@YHSJ.COM" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">keytab 路径</Label>
+                <Input :value="form.keytabPath" @input="form.keytabPath = ($event.target as HTMLInputElement).value" data-test="input-keytab" class="h-8 text-[13px]" placeholder="/etc/security/keytabs/admin.keytab" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">krb5.conf 路径</Label>
+                <Input :value="form.krb5ConfPath" @input="form.krb5ConfPath = ($event.target as HTMLInputElement).value" data-test="input-krb5" class="h-8 text-[13px]" placeholder="/etc/krb5.conf" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">服务名（service principal 首段）</Label>
+                <Input :value="form.serviceName" @input="form.serviceName = ($event.target as HTMLInputElement).value" data-test="input-service-name" class="h-8 text-[13px]" placeholder="kafka" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+              </div>
+            </template>
+          </template>
+          <template v-if="isTLS">
+            <div class="field col-span-2 flex flex-col gap-1.5">
+              <Label class="text-xs font-medium text-muted-foreground">CA 证书（可选）</Label>
+              <Textarea :value="form.caCert" @input="form.caCert = ($event.target as HTMLTextAreaElement).value" data-test="input-ca" class="min-h-16 resize-y text-[13px]" rows="3" />
             </div>
-            <div class="field">
-              <label class="label">krb5.conf 路径</label>
-              <input v-model="form.krb5ConfPath" data-test="input-krb5" class="input" placeholder="/etc/krb5.conf" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-            </div>
-            <div class="field">
-              <label class="label">服务名（service principal 首段）</label>
-              <input v-model="form.serviceName" data-test="input-service-name" class="input" placeholder="kafka" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+            <div class="field col-span-2 flex items-center">
+              <label class="checkbox-label flex items-center gap-2 text-[13px]">
+                <input v-model="form.insecureSkipVerify" type="checkbox" :class="CHECK_CLS" data-test="input-insecure" />
+                跳过证书校验
+              </label>
             </div>
           </template>
-        </template>
-        <template v-if="isTLS">
-          <div class="field">
-            <label class="label">CA 证书（可选）</label>
-            <textarea v-model="form.caCert" data-test="input-ca" class="input textarea" rows="3"></textarea>
-          </div>
-          <div class="field">
-            <label class="checkbox-label">
-              <input v-model="form.insecureSkipVerify" type="checkbox" data-test="input-insecure" />
-              跳过证书校验
-            </label>
-          </div>
-        </template>
-        </template>
+          </template>
 
-        <div v-if="tested" class="msg ok" data-test="test-ok">连接测试成功</div>
-        <div v-if="testError" class="msg err" data-test="test-error">{{ testError }}</div>
-        <div v-if="saveError" class="msg err" data-test="save-error">{{ saveError }}</div>
+          <div v-if="tested" class="msg ok col-span-2 rounded-md bg-success/10 px-2.5 py-2 text-[13px] text-success" data-test="test-ok">连接测试成功</div>
+          <div v-if="testError" class="msg err col-span-2 rounded-md bg-destructive/10 px-2.5 py-2 text-[13px] text-destructive" data-test="test-error">{{ testError }}</div>
+          <div v-if="saveError" class="msg err col-span-2 rounded-md bg-destructive/10 px-2.5 py-2 text-[13px] text-destructive" data-test="save-error">{{ saveError }}</div>
+        </div>
+        <DialogFooter class="modal-footer flex-row items-center justify-end gap-2 border-t border-border px-4 py-3">
+          <Button v-if="editing" variant="ghost" size="sm" class="delete-entry mr-auto text-destructive hover:bg-destructive/10 hover:text-destructive" type="button" data-test="btn-delete-connection" @click="askDeleteConnection">
+            删除连接
+          </Button>
+          <Button variant="outline" size="sm" type="button" data-test="btn-test" :disabled="testing || targetInvalid" @click="runTest">
+            <Loader2 v-if="testing" class="size-4 animate-spin" aria-hidden="true" />
+            {{ testing ? '测试中…' : '测试连接' }}
+          </Button>
+          <Button variant="ghost" size="sm" type="button" @click="close">取消</Button>
+          <Button size="sm" type="button" data-test="btn-save" :disabled="nameInvalid || saveInvalid" @click="save">
+            保存
+          </Button>
+        </DialogFooter>
       </div>
-      <div class="modal-footer">
-        <button v-if="editing" class="btn ghost danger delete-entry" type="button" data-test="btn-delete-connection" @click="askDeleteConnection">
-          删除连接
-        </button>
-        <button class="btn ghost" type="button" data-test="btn-test" :disabled="testing || targetInvalid" @click="runTest">
-          {{ testing ? '测试中…' : '测试连接' }}
-        </button>
-        <button class="btn ghost" type="button" @click="close">取消</button>
-        <button class="btn primary" type="button" data-test="btn-save" :disabled="nameInvalid || saveInvalid" @click="save">
-          保存
-        </button>
-      </div>
-      <!-- 删除确认层:结构与 ConfirmDialog 同构,自建以叠在弹窗之上(z-index 1200)。 -->
-      <div v-if="deleteConfirmOpen" class="delete-confirm-backdrop" data-test="delete-confirm-dialog" @click.self="cancelDeleteConnection">
-        <div class="delete-confirm">
-          <div class="delete-confirm-title">确认操作</div>
-          <p class="delete-confirm-message" data-test="delete-confirm-message">
+      <!-- 删除确认层:结构与 ConfirmDialog 同构,absolute 覆盖 DialogContent
+           的视口盒(面板无 transform,定位不受影响),自建以叠在弹窗之上。 -->
+      <div v-if="deleteConfirmOpen" class="delete-confirm-backdrop absolute inset-0 z-[1200] grid place-items-center bg-black/50 p-4" data-test="delete-confirm-dialog" @click.self="cancelDeleteConnection">
+        <div class="delete-confirm w-[380px] max-w-[calc(100vw-48px)] rounded-xl border border-border bg-background p-4.5 shadow-lg">
+          <div class="delete-confirm-title mb-3 text-sm font-semibold">确认操作</div>
+          <p class="delete-confirm-message m-0 text-[13px] leading-relaxed" data-test="delete-confirm-message">
             确认删除连接「{{ props.connection?.name ?? '' }}」？连接配置将被移除，此操作不可恢复。
           </p>
-          <div v-if="deleteError" class="msg err" data-test="delete-error">{{ deleteError }}</div>
-          <div class="delete-confirm-footer">
-            <button class="btn ghost" type="button" data-test="delete-confirm-cancel" @click="cancelDeleteConnection">取消</button>
-            <button class="btn danger" type="button" data-test="delete-confirm-ok" :disabled="deleting" @click="confirmDeleteConnection">删除</button>
+          <div v-if="deleteError" class="msg err mt-2 rounded-md bg-destructive/10 px-2.5 py-2 text-xs text-destructive" data-test="delete-error">{{ deleteError }}</div>
+          <div class="delete-confirm-footer mt-4 flex justify-end gap-2">
+            <Button variant="outline" size="sm" type="button" data-test="delete-confirm-cancel" @click="cancelDeleteConnection">取消</Button>
+            <Button variant="destructive" size="sm" type="button" data-test="delete-confirm-ok" :disabled="deleting" @click="confirmDeleteConnection">删除</Button>
           </div>
         </div>
       </div>
-    </div>
-  </div>
+    </DialogContent>
+  </DialogRoot>
 </template>
-
-<style scoped>
-/* 遮罩/容器/按钮基座走全局 .modal-backdrop/.modal/.btn;这里只留尺寸与覆盖。 */
-.modal {
-  width: 460px; max-width: 92vw; max-height: 88vh; overflow: auto;
-}
-.modal-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--border); }
-.modal-title { font-weight: 600; font-size: 15px; }
-.modal-close { background: none; border: none; color: var(--text-tertiary); font-size: 16px; cursor: pointer; border-radius: 6px; padding: 1px 6px; }
-.modal-close:hover { background: var(--bg-hover); color: var(--text); }
-.modal-body { padding: 16px 18px; }
-.field { margin-bottom: 12px; }
-.label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
-.type-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.type-card {
-  display: flex; flex-direction: column; align-items: center; gap: 4px;
-  padding: 10px 6px; cursor: pointer;
-  background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 10px;
-  color: var(--text); font-family: inherit;
-  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
-}
-.type-card:hover { border-color: var(--accent); background: var(--bg-elevated); }
-.type-card.active {
-  border-color: var(--accent); background: var(--bg-elevated);
-  box-shadow: var(--focus-ring);
-}
-.type-card-icon { font-size: 20px; line-height: 1; }
-.type-card-label { font-size: 12px; font-weight: 500; }
-.req { color: var(--danger); }
-.input {
-  width: 100%; box-sizing: border-box;
-  background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 7px;
-  color: var(--text); padding: 8px 10px; font-size: 13px;
-  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
-}
-.input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: var(--focus-ring); }
-.textarea { resize: vertical; }
-.checkbox-label { font-size: 13px; color: var(--text); display: flex; gap: 6px; align-items: center; }
-.hint { display: block; font-size: 12px; color: var(--text-tertiary); margin-top: 4px; }
-.err { color: var(--danger); font-size: 12px; }
-.msg { margin-top: 8px; font-size: 13px; border-radius: 7px; padding: 8px 10px; }
-.msg.ok { background: var(--ok-soft); color: var(--ok); }
-.msg.err { background: var(--danger-soft); color: var(--danger); }
-.modal-footer { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 18px; border-top: 1px solid var(--border); }
-/* 编辑模式的删除入口:推到 footer 最左,与右侧的测试/取消/保存保持距离
-   (红边幽灵样式走全局 .btn.ghost.danger)。 */
-.delete-entry { margin-right: auto; }
-/* 删除确认层:盖过 z-index 900 的弹窗本体,样式对齐 ConfirmDialog。 */
-.delete-confirm-backdrop {
-  position: fixed; inset: 0; z-index: 1200;
-  background: var(--overlay);
-  display: flex; align-items: center; justify-content: center;
-}
-.delete-confirm {
-  width: 380px; max-width: calc(100vw - 48px);
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
-  padding: 18px;
-}
-.delete-confirm-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
-.delete-confirm-message { font-size: 13px; color: var(--text); line-height: 1.6; margin: 0; }
-.delete-confirm-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-</style>
