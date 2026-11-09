@@ -21,6 +21,24 @@ Object.defineProperty(window, 'matchMedia', {
   }),
 })
 
+// jsdom 没有 ResizeObserver;reka-ui 浮层定位(PopperContent/useSize/Presence)
+// 挂载时会创建它,缺桩会让 portal 内容渲染中断。与上方 matchMedia 同理。
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver
+}
+
+// jsdom 未实现 pointer capture API;reka-ui 触发器(如 SelectTrigger)在
+// pointerdown 中会调用 element.hasPointerCapture(...)。
+if (typeof Element !== 'undefined' && !Element.prototype.hasPointerCapture) {
+  Element.prototype.hasPointerCapture = () => false
+  Element.prototype.releasePointerCapture = () => {}
+  Element.prototype.setPointerCapture = () => {}
+}
+
 // jsdom does not implement Range.getClientRects. CodeMirror measures text
 // asynchronously after unmount/teardown; without this stub those late
 // measurements surface as Vitest unhandled errors even when assertions pass.

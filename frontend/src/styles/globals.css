@@ -1,0 +1,120 @@
+/*
+ * Tailwind 4 入口(对齐 DBX apps/desktop 的实现风格)。
+ *
+ * 层次:@import tailwindcss → tw-animate-css(动画工具类) → 设计令牌
+ * (tokens.css,逐字取自 DBX) → 基础层。旧手写令牌(styles.css)在迁移期
+ * 与本文件共存:本文件后导入,同名变量(--border/--primary/--accent 等)
+ * 以 shadcn 值为准;迁移完成后 styles.css 整体退役。
+ */
+@import "tailwindcss";
+@source "../**/*.{vue,ts,js,html}";
+@import "tw-animate-css";
+@import "./tokens.css";
+@import "./legacy.css";
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #app {
+    height: 100%;
+  }
+
+  body {
+    /* 旧 styles.css 的页面光晕与背景合并(legacy.css 的 --body-glow-*):
+       光晕叠加在 shadcn --background 之上,文字/字体走 Geist。 */
+    background:
+      radial-gradient(1100px 520px at 8% -10%, var(--body-glow-a), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, var(--body-glow-b), transparent 55%),
+      var(--background);
+    @apply text-foreground;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    transition: background-color 0.25s ease, color 0.25s ease;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font-family: inherit;
+  }
+
+  /* legacy 公共基类桥(.btn/.data-table/.modal/.input focus):仍被未迁移
+     组件引用,逐文件换 <Button>/<Input> 后随 legacy.css 一并删除。 */
+  .btn {
+    border-radius: 7px;
+    padding: 6px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    color: var(--foreground);
+    background: transparent;
+    transition: background 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, filter 0.15s ease;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn.primary {
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+  .btn.primary:hover:not(:disabled) { filter: brightness(0.95); }
+  .btn.ghost { border-color: var(--border-strong); }
+  .btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
+  .btn.small { padding: 4px 12px; font-size: 12px; }
+  .btn.danger { background: var(--danger); color: #fff; }
+  .btn.danger:hover:not(:disabled) { background: var(--danger-hover); filter: none; }
+  .btn.ghost.danger { background: transparent; color: var(--danger); border-color: var(--danger); box-shadow: none; }
+  .btn.ghost.danger:hover:not(:disabled) { background: var(--danger-soft); }
+  .btn.primary.danger { background: var(--danger); }
+  .btn.primary.danger:hover:not(:disabled) { background: var(--danger-hover); filter: none; }
+  .btn.warn { background: var(--warn-soft); color: var(--warn); }
+
+  .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .data-table th {
+    text-align: left; font-weight: 600; color: var(--muted-foreground);
+    background: var(--muted); padding: 8px 12px;
+    border-bottom: 1px solid var(--border); white-space: nowrap;
+  }
+  .data-table td { padding: 6px 12px; border-bottom: 1px solid var(--border); }
+  .data-table tbody tr:hover td { background: var(--accent); }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; background: var(--dbx-overlay, rgb(0 0 0 / 0.35));
+    display: flex; align-items: center; justify-content: center; z-index: 900;
+  }
+  .modal {
+    display: flex; flex-direction: column; overflow: hidden;
+    background: var(--background); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    box-shadow: 0 2px 8px rgb(0 0 0 / 0.08), 0 14px 40px rgb(0 0 0 / 0.1);
+    color: var(--foreground);
+  }
+
+  .sidebar, .files-sidebar {
+    scrollbar-width: thin;
+    scrollbar-color: var(--dbx-scrollbar, var(--muted-foreground)) transparent;
+  }
+  .sidebar::-webkit-scrollbar, .files-sidebar::-webkit-scrollbar { width: 9px; }
+  .sidebar::-webkit-scrollbar-thumb, .files-sidebar::-webkit-scrollbar-thumb {
+    background: var(--dbx-scrollbar, var(--muted-foreground));
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .sidebar::-webkit-scrollbar-track, .files-sidebar::-webkit-scrollbar-track { background: transparent; }
+
+  /* 等宽字体统一走 DBX 的 --font-mono(Fira Code 优先)。 */
+  code,
+  pre,
+  .mono {
+    font-family: var(--font-mono);
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--primary) 22%, transparent);
+  }
+}
