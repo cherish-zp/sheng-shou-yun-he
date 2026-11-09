@@ -15,6 +15,8 @@ import SqlResultCard from '@/components/common/SqlResultCard.vue'
 import SqlResultTabs, { type ResultTabItem } from '@/components/common/SqlResultTabs.vue'
 import PromptDialog from '@/components/common/PromptDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { Button } from '@/components/ui/button'
+import { Loader2, X } from 'lucide-vue-next'
 import * as App from '../../../wailsjs/go/backend/App'
 
 // tabId 必填:控制台据此把 tabs store 中自己的 tab 重命名为当前关联文件名。
@@ -729,21 +731,38 @@ onMounted(() => {
 </script>
 
 <template>
-  <div ref="rootRef" class="es-sql" data-test="es-sql-console">
-    <div class="editor-pane">
-      <div class="command-bar">
-        <button class="btn primary" type="button" data-test="btn-es-run" :disabled="running || !sql.trim()" @click="onRunClick">
+  <div ref="rootRef" class="flex h-full flex-col px-4 py-3.5 text-foreground" data-test="es-sql-console">
+    <div class="flex min-h-0 flex-1 flex-col">
+      <div class="command-bar flex flex-none items-center gap-2.5 pb-2">
+        <Button size="sm" data-test="btn-es-run" :disabled="running || !sql.trim()" @click="onRunClick">
+          <Loader2 v-if="running" class="animate-spin" />
           {{ running ? '运行中…' : '运行全部' }}
-        </button>
+        </Button>
         <!-- SQL/DSL 分段切换:DSL(Kibana Dev Tools 风格)为所有 ES 版本通用的
-             执行方式;SQL 模式保持默认且完整保留。 -->
-        <div class="mode-switch">
-          <button type="button" data-test="es-mode-sql" :class="{ active: mode === 'sql' }" @click="setMode('sql')">SQL</button>
-          <button type="button" data-test="es-mode-dsl" :class="{ active: mode === 'dsl' }" @click="setMode('dsl')">DSL</button>
+             执行方式;SQL 模式保持默认且完整保留。active 类为既有用例断言契约,保留。 -->
+        <div class="flex items-center gap-0.5 rounded-md border border-border p-0.5">
+          <button
+            type="button"
+            data-test="es-mode-sql"
+            class="rounded-[4px] px-2.5 py-1 text-xs font-medium transition-colors"
+            :class="mode === 'sql' ? 'active bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'"
+            @click="setMode('sql')"
+          >
+            SQL
+          </button>
+          <button
+            type="button"
+            data-test="es-mode-dsl"
+            class="rounded-[4px] px-2.5 py-1 text-xs font-medium transition-colors"
+            :class="mode === 'dsl' ? 'active bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'"
+            @click="setMode('dsl')"
+          >
+            DSL
+          </button>
         </div>
-        <span class="toolbar-hint">⌘Enter 执行当前语句 · ⌘Shift+Enter 运行全部 · ⌘S 保存</span>
+        <span class="text-xs text-muted-foreground">⌘Enter 执行当前语句 · ⌘Shift+Enter 运行全部 · ⌘S 保存</span>
       </div>
-      <div class="editor-wrap" @keydown="onEditorKeydown">
+      <div class="flex min-h-0 flex-1" @keydown="onEditorKeydown">
         <SqlEditor
           ref="editor"
           v-model="sql"
@@ -753,6 +772,7 @@ onMounted(() => {
           :statement-marks="activeStatementMarks"
           highlight-cursor-statement
           enable-run-menu
+          class="min-w-0 flex-1"
           data-test="es-sql-input"
           placeholder='SELECT * FROM "my-index" LIMIT 10'
           @run-statement="onRunStatement"
@@ -765,25 +785,44 @@ onMounted(() => {
 
       <!-- 控制台级错误条:运行/保存链路抛错(如后端报告 ES 服务端版本过低、
            端点不可用)在此展示;语句级错误由 SqlResultCard 的错误卡渲染。 -->
-      <div v-if="error" class="msg err" data-test="es-sql-error">{{ error }}</div>
+      <div
+        v-if="error"
+        class="mt-2.5 rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive"
+        data-test="es-sql-error"
+      >
+        {{ error }}
+      </div>
     </div>
 
     <!-- 结果区:仅打开时渲染,高度可拖拽(160..窗口 80%),双击分隔条恢复 50/50。 -->
     <template v-if="resultsOpen">
       <div
-        class="splitter"
-        :class="{ active: resultsResizing }"
+        class="-mx-4 my-1 flex h-[7px] flex-none cursor-row-resize transition-colors"
+        :class="resultsResizing ? 'bg-foreground/15' : 'hover:bg-foreground/10'"
         data-test="console-splitter"
         title="拖拽调整结果区高度,双击恢复 50/50"
         @mousedown.prevent="startResultsResize"
         @dblclick="resetResultsHeight"
       ></div>
-      <div class="results-pane" data-test="results-pane" :style="{ height: `${resultsHeight}px` }">
-        <div class="results-head">
-          <span class="results-title">结果</span>
-          <button class="results-close" type="button" data-test="results-close" title="关闭结果区" @click="resultsOpen = false">×</button>
+      <div
+        class="flex flex-none flex-col overflow-hidden rounded-lg border border-border bg-background"
+        data-test="results-pane"
+        :style="{ height: `${resultsHeight}px` }"
+      >
+        <div class="flex items-center gap-2 border-b border-border px-2.5 py-1.5">
+          <span class="text-xs font-semibold text-muted-foreground">结果</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            class="ml-auto h-6 w-6 p-0"
+            data-test="results-close"
+            title="关闭结果区"
+            @click="resultsOpen = false"
+          >
+            <X class="size-3.5" />
+          </Button>
         </div>
-        <div class="results-body" data-test="results-body">
+        <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-2.5" data-test="results-body">
           <!-- 结果 Tab 条:每条语句(请求)一个 tab,SQL/DSL 各持一组,点击切换下方唯一结果卡。 -->
           <SqlResultTabs
             :tabs="mode === 'sql' ? sqlResultTabs : dslResultTabs"
@@ -791,12 +830,21 @@ onMounted(() => {
             @select="onTabSelect"
           />
           <!-- 分页条:SQL 模式服务端分页(500 条/页),翻页按上次成功请求重放;仅只读脚本可翻。 -->
-          <div v-if="pagerVisible" class="result-pager" data-test="result-pager" title="跨页分页由数据库 ORDER BY 保证顺序;无排序查询顺序以数据库返回为准">
-            <button type="button" class="pager-btn" data-test="pager-prev" :disabled="!canPrev" @click="prevPage">上一页</button>
-            <span class="pager-info" data-test="pager-info">{{ pagerInfo }}</span>
-            <button type="button" class="pager-btn" data-test="pager-next" :disabled="!canNext" @click="nextPage">下一页</button>
+          <div
+            v-if="pagerVisible"
+            class="flex flex-none items-center justify-center gap-3"
+            data-test="result-pager"
+            title="跨页分页由数据库 ORDER BY 保证顺序;无排序查询顺序以数据库返回为准"
+          >
+            <Button variant="ghost" size="sm" class="h-7 px-2.5 text-xs" data-test="pager-prev" :disabled="!canPrev" @click="prevPage">
+              上一页
+            </Button>
+            <span class="font-mono text-xs tabular-nums text-muted-foreground" data-test="pager-info">{{ pagerInfo }}</span>
+            <Button variant="ghost" size="sm" class="h-7 px-2.5 text-xs" data-test="pager-next" :disabled="!canNext" @click="nextPage">
+              下一页
+            </Button>
           </div>
-          <div v-if="(mode === 'sql' ? results : dslResults).length === 0" class="empty" data-test="results-empty">
+          <div v-if="(mode === 'sql' ? results : dslResults).length === 0" class="py-6 text-center text-[13px] text-muted-foreground" data-test="results-empty">
             {{ mode === 'dsl' ? 'GET /索引/_search ⏎ JSON body · ⌘Enter 执行当前请求' : '⌘Enter 执行当前语句 · ⌘Shift+Enter 运行全部' }}
           </div>
           <!-- SQL 模式:仅渲染 active tab 对应的只读结果卡(逻辑不变)。 -->
@@ -814,30 +862,42 @@ onMounted(() => {
           />
           <!-- DSL 模式:仅渲染 active tab 对应的请求卡:头部 METHOD /path · HTTP 状态 ·
                耗时(2xx 绿 / 4xx 5xx 红),正文 pretty JSON 等宽滚动区,复制按钮复制原始
-               body;解析错误渲染错误卡(statement=失败块原文)。 -->
+               body;解析错误渲染错误卡(statement=失败块原文)。ok/fail 类为既有用例
+               断言契约,保留;着色经语义 token 动态类承担。 -->
           <div
             v-else-if="activeDslCard"
             :key="`dsl-${dslActive}`"
-            class="dsl-card"
-            :class="dslTone(activeDslCard)"
+            class="dsl-card overflow-hidden rounded-md border bg-background"
+            :class="[dslTone(activeDslCard), activeDslCard.error ? 'border-destructive/30' : 'border-success/30']"
             data-test="es-dsl-card"
           >
-            <div class="dsl-head">
-              <span class="dsl-dot" :class="dslTone(activeDslCard)"></span>
-              <span class="dsl-title" data-test="es-dsl-card-title">{{ activeDslCard.method ? `${activeDslCard.method} ${activeDslCard.path}` : '解析失败' }}</span>
-              <span class="dsl-meta" data-test="es-dsl-card-meta">{{ dslMeta(activeDslCard) }}</span>
-              <button v-if="activeDslCard.method" type="button" class="dsl-copy" data-test="es-dsl-copy" title="复制原始响应" @click="copyDslBody(activeDslCard)">
+            <div class="flex items-center gap-2 border-b border-border bg-muted/40 px-2.5 py-1.5">
+              <span
+                class="dsl-dot size-2 flex-none rounded-full"
+                :class="[dslTone(activeDslCard), activeDslCard.error ? 'bg-destructive' : 'bg-success']"
+              ></span>
+              <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-foreground" data-test="es-dsl-card-title">{{ activeDslCard.method ? `${activeDslCard.method} ${activeDslCard.path}` : '解析失败' }}</span>
+              <span class="ml-auto flex-none whitespace-nowrap font-mono text-xs text-muted-foreground" data-test="es-dsl-card-meta">{{ dslMeta(activeDslCard) }}</span>
+              <Button
+                v-if="activeDslCard.method"
+                variant="outline"
+                size="sm"
+                class="h-6 px-2 text-xs"
+                data-test="es-dsl-copy"
+                title="复制原始响应"
+                @click="copyDslBody(activeDslCard)"
+              >
                 复制
-              </button>
+              </Button>
             </div>
-            <pre class="dsl-body" data-test="es-dsl-result">{{ dslBodyText(activeDslCard) }}</pre>
+            <pre class="m-0 max-h-80 overflow-auto select-text whitespace-pre px-3 py-2.5 font-mono text-xs leading-[1.55] text-foreground" data-test="es-dsl-result">{{ dslBodyText(activeDslCard) }}</pre>
           </div>
         </div>
       </div>
     </template>
 
     <!-- 状态栏:光标行列 / 语句(请求)条数 / 最近耗时。 -->
-    <div class="statusbar" data-test="console-statusbar">
+    <div class="mt-2 flex flex-none gap-3.5 font-mono text-[11px] text-muted-foreground" data-test="console-statusbar">
       <span data-test="statusbar-cursor">行 {{ cursorPos.line }} : 列 {{ cursorPos.col }}</span>
       <span data-test="statusbar-statements">{{ mode === 'dsl' ? '请求' : '语句' }} {{ statementCount }} 条</span>
       <span data-test="statusbar-duration">最近耗时 {{ lastDurationMs }} ms</span>
@@ -880,88 +940,3 @@ onMounted(() => {
   </div>
 </template>
 
-<style scoped>
-.es-sql {
-  height: 100%;
-  display: flex; flex-direction: column;
-  padding: 14px 16px; box-sizing: border-box;
-  color: var(--text); font-family: var(--font);
-}
-
-/* 编辑器区:占据结果区之外的剩余空间。 */
-.editor-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.command-bar { flex: none; display: flex; align-items: center; gap: 10px; padding-bottom: 8px; }
-.toolbar-hint { font-size: 12px; color: var(--text-tertiary); }
-.editor-wrap { flex: 1; min-height: 0; display: flex; }
-.editor-wrap :deep(.sql-editor) { flex: 1; min-width: 0; }
-.msg { font-size: 13px; border-radius: 9px; padding: 8px 12px; }
-.msg.err { background: var(--danger-soft); color: var(--danger); }
-.editor-wrap + .msg { margin-top: 10px; }
-
-/* 可拖拽分隔条与结果区。 */
-.splitter { flex: none; height: 7px; margin: 4px -16px; cursor: row-resize; }
-.splitter:hover, .splitter.active { background: var(--accent-soft); }
-.results-pane {
-  flex: none; display: flex; flex-direction: column;
-  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); overflow: hidden;
-}
-.results-head { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--border); }
-.results-title { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
-.results-close {
-  margin-left: auto; border: none; background: transparent; color: var(--text-secondary);
-  font-size: 14px; line-height: 1; cursor: pointer; padding: 2px 7px; border-radius: 5px;
-}
-.results-close:hover { background: var(--bg-hover); color: var(--text); }
-.results-body { flex: 1; min-height: 0; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 12px; }
-.empty { text-align: center; color: var(--text-tertiary); padding: 24px; font-size: 13px; }
-
-/* 结果分页条:上一页 / 页码信息 / 下一页。 */
-.result-pager { flex: none; display: flex; align-items: center; justify-content: center; gap: 12px; }
-.pager-btn {
-  border: 1px solid var(--border); background: var(--bg-subtle); color: var(--text);
-  border-radius: 7px; padding: 3px 12px; font-size: 12px; cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
-}
-.pager-btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--accent); }
-.pager-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.pager-info { font-size: 12px; color: var(--text-secondary); font-family: var(--mono); }
-
-/* 状态栏:光标行列 / 语句条数 / 最近耗时。 */
-.statusbar {
-  flex: none; display: flex; gap: 14px; margin-top: 8px;
-  font-size: 11px; color: var(--text-tertiary); font-family: var(--mono);
-}
-
-/* SQL/DSL 分段按钮。 */
-.mode-switch { display: flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
-.mode-switch button {
-  border: none; background: transparent; color: var(--text-secondary);
-  font-size: 12px; padding: 6px 12px; cursor: pointer; transition: background 0.15s ease, color 0.15s ease;
-}
-.mode-switch button + button { border-left: 1px solid var(--border); }
-.mode-switch button:hover { color: var(--text); background: var(--bg-hover); }
-.mode-switch button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-
-/* DSL 结果卡:头部状态行 + 等宽正文滚动区。 */
-.dsl-card {
-  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elevated); overflow: hidden;
-}
-.dsl-card.ok { border-color: var(--ok-soft); }
-.dsl-card.fail { border-color: var(--danger-soft); }
-.dsl-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--bg-subtle); }
-.dsl-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
-.dsl-dot.ok { background: var(--ok); }
-.dsl-dot.fail { background: var(--danger); }
-.dsl-title { font-family: var(--mono); font-size: 12px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dsl-meta { flex: none; margin-left: auto; font-size: 12px; font-family: var(--mono); color: var(--text-tertiary); white-space: nowrap; }
-.dsl-copy {
-  flex: none; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated);
-  color: var(--text); font-size: 12px; padding: 2px 8px; cursor: pointer; transition: border-color 0.15s ease, color 0.15s ease;
-}
-.dsl-copy:hover { border-color: var(--accent); color: var(--accent); }
-.dsl-body {
-  margin: 0; padding: 10px 12px; overflow: auto; max-height: 320px;
-  font-family: var(--mono); font-size: 12px; line-height: 1.55; color: var(--text);
-  white-space: pre; user-select: text;
-}
-</style>

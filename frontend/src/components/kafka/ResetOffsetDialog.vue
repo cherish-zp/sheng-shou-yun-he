@@ -2,6 +2,14 @@
 import { computed, ref, watch } from 'vue'
 import { getApi } from '@/api/client'
 import type { ConsumerGroup, ResetOffsetMode } from '@/api/types'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+
+// 原生 select 保留(spec 以 value+change 事件驱动);ui Input 以 :value/@input
+// 接线(不透传 v-model);Teleport to body 保留(既有用例按 document.body 查询)。
+const SELECT_CLS =
+  'h-8 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 text-[13px] shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50'
 
 const props = withDefaults(
   defineProps<{ show: boolean; connectionId: string; topic?: string | null; group?: string | null }>(),
@@ -214,22 +222,25 @@ async function confirmReset(): Promise<void> {
 
 <template>
   <Teleport to="body">
-    <div v-if="show" class="overlay" @click.self="emit('close')">
-      <div class="dialog" data-test="reset-offset-dialog">
-        <div class="head">
-          <span class="title">重置消费位点</span>
-          <button class="close" type="button" data-test="btn-reset-x" @click="emit('close')">✕</button>
+    <div v-if="show" class="fixed inset-0 z-[1200] flex items-center justify-center bg-black/50" @click.self="emit('close')">
+      <div
+        class="dialog flex max-h-[calc(100vh-64px)] w-[560px] max-w-[calc(100vw-48px)] flex-col gap-3 overflow-auto rounded-lg border border-border bg-background p-4 text-foreground shadow-lg"
+        data-test="reset-offset-dialog"
+      >
+        <div class="flex items-center justify-between">
+          <span class="text-[15px] font-semibold">重置消费位点</span>
+          <Button variant="ghost" size="sm" class="h-6 w-6 p-0" data-test="btn-reset-x" @click="emit('close')">✕</Button>
         </div>
 
-        <div v-if="loadError" class="msg err" data-test="reset-load-error">{{ loadError }}</div>
-        <div v-else-if="loading" class="msg" data-test="reset-loading">加载消费组…</div>
+        <div v-if="loadError" class="rounded-md bg-destructive/10 px-2.5 py-2 text-[13px] text-destructive" data-test="reset-load-error">{{ loadError }}</div>
+        <div v-else-if="loading" class="text-[13px] text-muted-foreground" data-test="reset-loading">加载消费组…</div>
 
         <template v-else>
-          <div class="form">
-            <label class="field">
-              <span class="label">Topic</span>
+          <div class="flex flex-wrap items-end gap-2.5">
+            <div class="field flex min-w-[150px] flex-1 flex-col gap-1">
+              <Label class="text-xs font-normal text-muted-foreground">Topic</Label>
               <select
-                class="input"
+                :class="SELECT_CLS"
                 data-test="select-reset-topic"
                 :disabled="!!props.topic"
                 :value="selectedTopic ?? ''"
@@ -237,11 +248,11 @@ async function confirmReset(): Promise<void> {
               >
                 <option v-for="t in topicOptions" :key="t" :value="t">{{ t }}</option>
               </select>
-            </label>
-            <label class="field">
-              <span class="label">消费组</span>
+            </div>
+            <div class="field flex min-w-[150px] flex-1 flex-col gap-1">
+              <Label class="text-xs font-normal text-muted-foreground">消费组</Label>
               <select
-                class="input"
+                :class="SELECT_CLS"
                 data-test="select-reset-group"
                 :value="selectedGroup ?? ''"
                 @change="pickGroup(($event.target as HTMLSelectElement).value)"
@@ -250,83 +261,97 @@ async function confirmReset(): Promise<void> {
                   {{ g.name }}（{{ g.state }}）
                 </option>
               </select>
-            </label>
+            </div>
           </div>
 
-          <div v-if="isStable" class="msg warn" data-test="reset-stable-warning">
+          <div v-if="isStable" class="rounded-md bg-warning/15 px-2.5 py-2 text-[13px] text-warning" data-test="reset-stable-warning">
             ⚠ 该消费组仍在运行（Stable），broker 将拒绝提交。请先停止消费者，再执行重置。
           </div>
 
-          <div class="form">
-            <label class="field">
-              <span class="label">目标位置</span>
-              <select v-model="mode" class="input" data-test="select-reset-mode">
+          <div class="flex flex-wrap items-end gap-2.5">
+            <div class="field flex min-w-[150px] flex-1 flex-col gap-1">
+              <Label class="text-xs font-normal text-muted-foreground">目标位置</Label>
+              <select v-model="mode" :class="SELECT_CLS" data-test="select-reset-mode">
                 <option value="earliest">Earliest（最早）</option>
                 <option value="latest">Latest（最新）</option>
                 <option value="timestamp">指定时间戳</option>
                 <option value="offset">指定 Offset</option>
                 <option value="rewind">回退 N 条</option>
               </select>
-            </label>
-            <label v-if="mode === 'timestamp'" class="field">
-              <span class="label">时间戳 (unix ms)</span>
-              <input v-model.number="timestampMs" class="input" type="number" data-test="input-reset-timestamp" />
-            </label>
-            <label v-if="mode === 'rewind'" class="field">
-              <span class="label">回退条数 N</span>
-              <input v-model.number="rewindN" class="input" type="number" min="1" data-test="input-rewind-n" />
-            </label>
-            <button class="btn ghost" type="button" data-test="btn-reset-dry-run" :disabled="!selectedGroup || !selectedTopic" @click="previewReset">
+            </div>
+            <div v-if="mode === 'timestamp'" class="field flex min-w-[150px] flex-1 flex-col gap-1">
+              <Label class="text-xs font-normal text-muted-foreground">时间戳 (unix ms)</Label>
+              <Input
+                type="number"
+                :value="timestampMs"
+                data-test="input-reset-timestamp"
+                @input="timestampMs = Number(($event.target as HTMLInputElement).value)"
+              />
+            </div>
+            <div v-if="mode === 'rewind'" class="field flex min-w-[150px] flex-1 flex-col gap-1">
+              <Label class="text-xs font-normal text-muted-foreground">回退条数 N</Label>
+              <Input
+                type="number"
+                min="1"
+                :value="rewindN"
+                data-test="input-rewind-n"
+                @input="rewindN = Number(($event.target as HTMLInputElement).value)"
+              />
+            </div>
+            <Button variant="outline" size="sm" data-test="btn-reset-dry-run" :disabled="!selectedGroup || !selectedTopic" @click="previewReset">
               预览 (Dry-run)
-            </button>
+            </Button>
           </div>
 
-          <table v-if="previewRows" class="table data-table" data-test="reset-preview-table">
-            <thead>
-              <tr>
-                <th>Partition</th>
-                <th>当前 Offset</th>
-                <th>目标 Offset</th>
-                <th>变化</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in previewRows" :key="row.partition" data-test="reset-row">
-                <td class="mono">{{ row.partition }}</td>
-                <td class="mono">{{ row.current }}</td>
-                <td v-if="mode === 'offset'" class="mono">
-                  <input
-                    v-model.number="editTargets[row.partition]"
-                    class="input num"
-                    type="number"
-                    :data-test="`reset-row-input-${row.partition}`"
-                  />
-                </td>
-                <td v-else class="mono" data-test="reset-row-target">{{ row.target ?? '—' }}</td>
-                <td class="mono delta">{{ row.target == null ? '—' : row.target - row.current }}</td>
-              </tr>
-              <tr v-if="previewRows.length === 0">
-                <td colspan="4" class="empty">该消费组在此 Topic 上没有已提交的位点</td>
-              </tr>
-            </tbody>
-          </table>
+          <div v-if="previewRows" class="overflow-hidden rounded-md border border-border bg-muted/30">
+            <table class="data-table" data-test="reset-preview-table">
+              <thead>
+                <tr>
+                  <th>Partition</th>
+                  <th>当前 Offset</th>
+                  <th>目标 Offset</th>
+                  <th>变化</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in previewRows" :key="row.partition" data-test="reset-row">
+                  <td class="font-mono">{{ row.partition }}</td>
+                  <td class="font-mono">{{ row.current }}</td>
+                  <td v-if="mode === 'offset'" class="font-mono">
+                    <Input
+                      :value="editTargets[row.partition]"
+                      class="h-7 px-1.5"
+                      type="number"
+                      :data-test="`reset-row-input-${row.partition}`"
+                      @input="editTargets[row.partition] = Number(($event.target as HTMLInputElement).value)"
+                    />
+                  </td>
+                  <td v-else class="font-mono" data-test="reset-row-target">{{ row.target ?? '—' }}</td>
+                  <td class="font-mono text-muted-foreground">{{ row.target == null ? '—' : row.target - row.current }}</td>
+                </tr>
+                <tr v-if="previewRows.length === 0">
+                  <td colspan="4" class="py-3 text-center text-[13px] text-muted-foreground">该消费组在此 Topic 上没有已提交的位点</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
 
-          <div v-if="resetError" class="msg err" data-test="reset-error">{{ resetError }}</div>
+          <div v-if="resetError" class="rounded-md bg-destructive/10 px-2.5 py-2 text-[13px] text-destructive" data-test="reset-error">{{ resetError }}</div>
 
-          <div class="actions">
-            <button class="btn ghost" type="button" data-test="btn-reset-cancel" :disabled="resetting" @click="emit('close')">
+          <div class="flex justify-end gap-2">
+            <Button variant="outline" size="sm" data-test="btn-reset-cancel" :disabled="resetting" @click="emit('close')">
               取消
-            </button>
-            <button
-              class="btn danger"
-              type="button"
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
               data-test="btn-reset-confirm"
               :disabled="!canConfirm || resetting"
               :title="isStable ? '消费组 Stable 时 broker 将拒绝提交' : ''"
               @click="confirmReset"
             >
               {{ resetting ? '提交中…' : '确认重置' }}
-            </button>
+            </Button>
           </div>
         </template>
       </div>
@@ -334,57 +359,3 @@ async function confirmReset(): Promise<void> {
   </Teleport>
 </template>
 
-<style scoped>
-.overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--overlay);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1200;
-  font-family: var(--font);
-  color: var(--text);
-}
-.dialog {
-  width: 560px;
-  max-width: calc(100vw - 48px);
-  max-height: calc(100vh - 64px);
-  overflow: auto;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.head { display: flex; align-items: center; justify-content: space-between; }
-.title { font-weight: 600; font-size: 15px; }
-.close { background: none; border: none; color: var(--text-tertiary); cursor: pointer; border-radius: 5px; padding: 1px 6px; }
-.close:hover { background: var(--bg-hover); color: var(--text); }
-.form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
-.field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 150px; }
-.label { font-size: 12px; color: var(--text-secondary); }
-.input {
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 6px 9px; font-size: 13px; width: 100%; box-sizing: border-box;
-}
-.input.num { padding: 3px 6px; }
-.input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
-.msg { font-size: 13px; padding: 8px 10px; border-radius: 7px; }
-.msg.err { background: var(--danger-soft); color: var(--danger); }
-.msg.warn { background: var(--warn-soft); color: var(--warn); }
-/* 表基座走全局 .data-table;这里留容器与紧凑 padding 差异。 */
-.table {
-  background: var(--bg-subtle); border: 1px solid var(--border);
-  border-radius: 9px; overflow: hidden;
-}
-.table th { padding: 6px 10px; background: var(--bg-hover); }
-.table td { padding: 4px 10px; }
-.mono { font-family: var(--mono); }
-.delta { color: var(--text-secondary); }
-.empty { text-align: center; color: var(--text-tertiary); padding: 12px; }
-.actions { display: flex; justify-content: flex-end; gap: 8px; }
-</style>

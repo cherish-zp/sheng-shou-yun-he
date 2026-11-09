@@ -166,36 +166,38 @@ const extraKeywordCompletion = EditorState.languageData.of(() => [
   { autocomplete: extraKeywordCompletionSource() },
 ])
 
-// 主题色全部走 CSS 变量,自动跟随 [data-theme] 深浅色/少女粉切换。
+// 主题色全部走 CSS 变量,自动跟随语义 token 深浅色(.dark)切换(对齐 DBX)。
 const editorTheme = EditorView.theme({
   '&': { height: '100%', fontSize: '13px', backgroundColor: 'transparent' },
   // 行高取整(13×1.5=19.5px 的亚像素舍入会在选区上留下逐行细缝)。
-  '.cm-scroller': { fontFamily: 'var(--mono)', lineHeight: '20px', overflow: 'auto' },
+  // 等宽字体走 DBX 的 --font-mono(Fira Code 优先,App 级可覆盖)。
+  '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '20px', overflow: 'auto' },
   '.cm-content': { padding: '8px 10px 10px 0' },
   '&.cm-focused': { outline: 'none' },
-  // 选区层提到行背景之上:当前语句底色(accent-soft)与光标行底色
-  // (bg-hover,不透明)原先盖在选区矩形上,长语句选区被切成深浅
+  // 选区层提到行背景之上:当前语句底色(primary-alpha)与光标行底色
+  // (muted,不透明)原先盖在选区矩形上,长语句选区被切成深浅
   // 相间的条纹;选区色本身低透明度,置顶不影响文字可读性。
   '.cm-selectionLayer': { zIndex: '1' },
-  '.cm-gutters': { backgroundColor: 'var(--cm-gutter-bg)', border: 'none', color: 'var(--text-tertiary)' },
-  '.cm-activeLine': { backgroundColor: 'var(--bg-hover)' },
-  '.cm-activeLineGutter': { backgroundColor: 'var(--bg-hover)', color: 'var(--text-secondary)' },
-  '.cm-placeholder': { color: 'var(--text-tertiary)' },
+  '.cm-gutters': { backgroundColor: 'var(--cm-gutter-bg)', border: 'none', color: 'var(--muted-foreground)' },
+  '.cm-activeLine': { backgroundColor: 'var(--cm-active-line)' },
+  '.cm-activeLineGutter': { backgroundColor: 'var(--cm-active-line)', color: 'var(--secondary-foreground)' },
+  '.cm-placeholder': { color: 'var(--muted-foreground)' },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--cm-cursor)' },
   '.cm-selectionBackground': { backgroundColor: 'var(--cm-selection)' },
   '.cm-tooltip': {
-    backgroundColor: 'var(--bg-elevated)',
+    backgroundColor: 'var(--popover)',
     border: '1px solid var(--border)',
     borderRadius: '8px',
-    boxShadow: 'var(--shadow-md)',
+    // 旧全局 --shadow-md 退役,取等值字面量(黑色阴影全主题通用)。
+    boxShadow: '0 2px 8px rgb(0 0 0 / 0.08), 0 14px 40px rgb(0 0 0 / 0.1)',
   },
   '.cm-tooltip-autocomplete ul li[aria-selected]': {
-    backgroundColor: 'var(--accent-soft)',
-    color: 'var(--accent)',
+    backgroundColor: 'var(--muted)',
+    color: 'var(--foreground)',
   },
-  // —— 语句 ▶ 运行按钮(主题色三角,hover 放大)——
+  // —— 语句 ▶ 运行按钮(前景色三角,hover 放大)——
   '.cm-run-statement': {
-    color: 'var(--primary)',
+    color: 'var(--muted-foreground)',
     cursor: 'pointer',
     fontSize: '13px',
     lineHeight: '19px',
@@ -205,21 +207,21 @@ const editorTheme = EditorView.theme({
     borderRadius: '4px',
     transition: 'transform .12s ease, background .12s ease',
   },
-  '.cm-run-statement:hover': { background: 'var(--primary-weak)', transform: 'scale(1.2)' },
+  '.cm-run-statement:hover': { background: 'var(--muted)', transform: 'scale(1.2)' },
   '.cm-run-statement:active': { transform: 'scale(0.95)' },
   // —— 语句执行状态标记(行号旁 ✓/✗/⟳)——
   '.cm-statement-gutter .cm-gutterElement, .cm-marks-gutter .cm-gutterElement': {
     padding: '0 2px',
   },
   '.cm-statement-mark': { fontSize: '11px', padding: '0 2px', display: 'inline-block' },
-  '.cm-statement-mark-ok': { color: 'var(--ok)' },
-  '.cm-statement-mark-fail': { color: 'var(--danger)' },
+  '.cm-statement-mark-ok': { color: 'var(--success)' },
+  '.cm-statement-mark-fail': { color: 'var(--destructive)' },
   '.cm-statement-mark-running': {
     color: 'var(--info)',
     animation: 'cm-mark-spin 0.9s linear infinite',
   },
   // —— 光标所在语句微高亮 ——
-  '.cm-current-statement': { backgroundColor: 'var(--accent-soft)' },
+  '.cm-current-statement': { backgroundColor: 'color-mix(in srgb, var(--primary) 8%, transparent)' },
   // —— Ctrl+表名探测下划线(tableProbe 开启时) ——
   '.cm-table-probe': {
     textDecoration: 'underline dotted var(--primary)',
@@ -227,13 +229,14 @@ const editorTheme = EditorView.theme({
   },
 })
 
-// 语法高亮复用现有 --json-* / --text-* 变量,深浅色主题均已定义。
+// 语法高亮:--json-* 走 tokens.css 三主题正式 token;注释/操作符用
+// muted-foreground 派生(70% 对应旧 --text-tertiary,100% 对应旧 --text-secondary)。
 const sqlHighlightStyle = HighlightStyle.define([
   { tag: t.keyword, color: 'var(--json-boolean)' },
   { tag: t.string, color: 'var(--json-string)' },
   { tag: t.number, color: 'var(--json-number)' },
-  { tag: t.comment, color: 'var(--text-tertiary)', fontStyle: 'italic' },
-  { tag: [t.operator, t.punctuation, t.separator], color: 'var(--text-secondary)' },
+  { tag: t.comment, color: 'color-mix(in srgb, var(--muted-foreground) 70%, transparent)', fontStyle: 'italic' },
+  { tag: [t.operator, t.punctuation, t.separator], color: 'var(--muted-foreground)' },
   { tag: t.typeName, color: 'var(--json-key)' },
 ])
 
@@ -801,12 +804,16 @@ defineExpose({ focus, getValue, getSelection })
 </script>
 
 <template>
-  <div ref="rootEl" class="sql-editor" data-test="sql-editor">
+  <div
+    ref="rootEl"
+    class="sql-editor relative overflow-hidden rounded-md border border-border bg-background transition-[border-color,box-shadow] duration-150 focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50"
+    data-test="sql-editor"
+  >
     <div ref="host" class="editor-host" data-test="sql-editor-content" :style="{ height }"></div>
     <div
       v-if="menuVisible"
       ref="menuEl"
-      class="run-menu"
+      class="run-menu absolute z-30 flex min-w-[148px] flex-col gap-0.5 rounded-md border border-border bg-popover p-1 shadow-md"
       data-test="editor-run-menu"
       :style="{ left: `${menuPos.x}px`, top: `${menuPos.y}px` }"
       @contextmenu.prevent
@@ -814,7 +821,7 @@ defineExpose({ focus, getValue, getSelection })
       <button
         v-if="menuHasSelection"
         type="button"
-        class="run-menu-item"
+        class="run-menu-item cursor-pointer whitespace-nowrap rounded-[5px] px-2.5 py-1.5 text-left text-[13px] text-popover-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         data-test="menu-run-selection"
         @click="onRunSelection"
       >
@@ -822,7 +829,7 @@ defineExpose({ focus, getValue, getSelection })
       </button>
       <button
         type="button"
-        class="run-menu-item"
+        class="run-menu-item cursor-pointer whitespace-nowrap rounded-[5px] px-2.5 py-1.5 text-left text-[13px] text-popover-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         data-test="menu-run-current"
         title="⌘Enter"
         @click="onRunCurrent"
@@ -831,7 +838,7 @@ defineExpose({ focus, getValue, getSelection })
       </button>
       <button
         type="button"
-        class="run-menu-item"
+        class="run-menu-item cursor-pointer whitespace-nowrap rounded-[5px] px-2.5 py-1.5 text-left text-[13px] text-popover-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         data-test="menu-run-all"
         title="⌘⇧Enter"
         @click="onRunAll"
@@ -843,51 +850,16 @@ defineExpose({ focus, getValue, getSelection })
 </template>
 
 <style scoped>
-/* 边框/圆角/聚焦描边与现有 .input 风格保持一致;relative 供右键菜单 absolute 锚定 */
+/* 容器观感(边框/圆角/聚焦描边/bg 稳定)由模板上的 DBX 工具类承担;这里只
+   保留 --cm-* token 派生与 CM 宿主高度。--cm-* 由语义 token 派生,.dark 自动
+   翻转(亮=浅底、暗=深底),主题经 CSS 变量取色的机制逐字保留。 */
 .sql-editor {
-  position: relative;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--editor-bg);
-  overflow: hidden;
-  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
-}
-.sql-editor:focus-within {
-  outline: none;
-  border-color: var(--accent);
-  background: var(--bg-elevated);
-  box-shadow: var(--focus-ring);
+  --cm-gutter-bg: var(--dbx-gutter, var(--muted));
+  --cm-cursor: var(--foreground);
+  --cm-selection: color-mix(in srgb, var(--primary) 22%, transparent);
+  --cm-active-line: var(--muted);
 }
 .editor-host :deep(.cm-editor) { height: 100%; }
-/* 右键执行菜单:自绘,主题变量跟随深浅色 */
-.run-menu {
-  position: absolute;
-  z-index: 30;
-  min-width: 148px;
-  padding: 5px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: var(--shadow-md);
-}
-.run-menu-item {
-  text-align: left;
-  background: none;
-  border: none;
-  color: var(--text);
-  font-size: 13px;
-  font-family: var(--font);
-  padding: 6px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.12s ease;
-}
-.run-menu-item:hover { background: var(--bg-hover); }
-.run-menu-item:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
 </style>
 
 <style>

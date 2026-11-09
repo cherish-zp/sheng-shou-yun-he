@@ -18,6 +18,8 @@ import SqlResultCard from '@/components/common/SqlResultCard.vue'
 import SqlResultTabs, { type ResultTabItem } from '@/components/common/SqlResultTabs.vue'
 import PromptDialog from '@/components/common/PromptDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { Button } from '@/components/ui/button'
+import { Loader2, X } from 'lucide-vue-next'
 import * as App from '../../../wailsjs/go/backend/App'
 
 // tabId 必填:控制台据此把 tabs store 中自己的 tab 重命名为当前关联文件名。
@@ -813,30 +815,48 @@ watch([() => props.database, () => props.schema], ([db, schema]) => {
 </script>
 
 <template>
-  <div ref="rootRef" class="pg-sql" data-test="pg-sql-console">
-    <div class="editor-pane">
-      <div class="command-bar">
-        <button class="btn primary" type="button" data-test="btn-pg-run" :disabled="running || !sql.trim()" @click="runAll">
+  <div ref="rootRef" class="flex h-full flex-col px-4 py-3.5 text-foreground" data-test="pg-sql-console">
+    <div class="flex min-h-0 flex-1 flex-col">
+      <div class="command-bar flex flex-none items-center gap-2.5 pb-2">
+        <Button size="sm" data-test="btn-pg-run" :disabled="running || !sql.trim()" @click="runAll">
+          <Loader2 v-if="running" class="animate-spin" />
           {{ running ? '运行中…' : '运行全部' }}
-        </button>
-        <!-- 当前库选择器:执行与保存(文件头)统一使用该库;空值 = 连接默认库。 -->
-        <label class="db-select" title="当前库:执行与保存的 SQL 都将使用该库">
-          <span class="toolbar-hint">库</span>
-          <select data-test="pg-db-select" class="input" :value="activeDb" @change="onDbChange">
+        </Button>
+        <!-- 当前库选择器:执行与保存(文件头)统一使用该库;空值 = 连接默认库。
+             原生 select(spec 以 setValue 驱动),仅按 ui Input 的 token 类对齐外观。 -->
+        <label
+          class="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
+          title="当前库:执行与保存的 SQL 都将使用该库"
+        >
+          <span>库</span>
+          <select
+            data-test="pg-db-select"
+            class="h-7 max-w-[180px] rounded-md border border-input bg-transparent px-2 text-xs shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            :value="activeDb"
+            @change="onDbChange"
+          >
             <option value="">(连接默认库)</option>
             <option v-for="d in dbOptions" :key="d" :value="d">{{ d }}</option>
           </select>
         </label>
-        <label class="db-select" title="当前 schema:执行与保存的 SQL 都将使用该 schema">
-          <span class="toolbar-hint">schema</span>
-          <select data-test="pg-schema-select" class="input" :value="activeSchema" @change="onSchemaChange">
+        <label
+          class="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
+          title="当前 schema:执行与保存的 SQL 都将使用该 schema"
+        >
+          <span>schema</span>
+          <select
+            data-test="pg-schema-select"
+            class="h-7 max-w-[180px] rounded-md border border-input bg-transparent px-2 text-xs shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            :value="activeSchema"
+            @change="onSchemaChange"
+          >
             <option value="">(默认搜索路径)</option>
             <option v-for="sc in schemaOptions" :key="sc" :value="sc">{{ sc }}</option>
           </select>
         </label>
-        <span class="toolbar-hint">⌘Enter 执行当前语句 · ⌘Shift+Enter 运行全部 · ⌘S 保存</span>
+        <span class="text-xs text-muted-foreground">⌘Enter 执行当前语句 · ⌘Shift+Enter 运行全部 · ⌘S 保存</span>
       </div>
-      <div class="editor-wrap" @keydown="onEditorKeydown">
+      <div class="flex min-h-0 flex-1" @keydown="onEditorKeydown">
         <SqlEditor
           ref="editor"
           v-model="sql"
@@ -846,6 +866,7 @@ watch([() => props.database, () => props.schema], ([db, schema]) => {
           :statement-marks="statementMarks"
           highlight-cursor-statement
           enable-run-menu
+          class="min-w-0 flex-1"
           data-test="pg-sql-input"
           placeholder="SELECT * FROM users WHERE id = 1"
           @run-statement="onRunStatement"
@@ -858,34 +879,62 @@ watch([() => props.database, () => props.schema], ([db, schema]) => {
 
       <!-- 运行错误与单元格更新失败(cuError)共用错误展示区;语句级错误由
            SqlResultCard 的错误卡渲染。 -->
-      <div v-if="error || cuError || drError" class="msg err" data-test="pg-sql-error">{{ error || cuError || drError }}</div>
+      <div
+        v-if="error || cuError || drError"
+        class="mt-2.5 rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive"
+        data-test="pg-sql-error"
+      >
+        {{ error || cuError || drError }}
+      </div>
     </div>
 
     <!-- 结果区:仅打开时渲染,高度可拖拽(160..窗口 80%),双击分隔条恢复 50/50。 -->
     <template v-if="resultsOpen">
       <div
-        class="splitter"
-        :class="{ active: resultsResizing }"
+        class="-mx-4 my-1 flex h-[7px] flex-none cursor-row-resize transition-colors"
+        :class="resultsResizing ? 'bg-foreground/15' : 'hover:bg-foreground/10'"
         data-test="console-splitter"
         title="拖拽调整结果区高度,双击恢复 50/50"
         @mousedown.prevent="startResultsResize"
         @dblclick="resetResultsHeight"
       ></div>
-      <div class="results-pane" data-test="results-pane" :style="{ height: `${resultsHeight}px` }">
-        <div class="results-head">
-          <span class="results-title">结果</span>
-          <button class="results-close" type="button" data-test="results-close" title="关闭结果区" @click="resultsOpen = false">×</button>
+      <div
+        class="flex flex-none flex-col overflow-hidden rounded-lg border border-border bg-background"
+        data-test="results-pane"
+        :style="{ height: `${resultsHeight}px` }"
+      >
+        <div class="flex items-center gap-2 border-b border-border px-2.5 py-1.5">
+          <span class="text-xs font-semibold text-muted-foreground">结果</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            class="ml-auto h-6 w-6 p-0"
+            data-test="results-close"
+            title="关闭结果区"
+            @click="resultsOpen = false"
+          >
+            <X class="size-3.5" />
+          </Button>
         </div>
-        <div class="results-body" data-test="results-body">
+        <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-2.5" data-test="results-body">
           <!-- 结果 Tab 条:每条语句一个 tab,点击切换下方唯一的结果卡。 -->
           <SqlResultTabs :tabs="resultTabs" :active="activeResult" @select="activeResult = $event" />
           <!-- 分页条:服务端分页(500 条/页),翻页按上次成功请求重放;仅只读脚本可翻。 -->
-          <div v-if="pagerVisible" class="result-pager" data-test="result-pager" title="跨页分页由数据库 ORDER BY 保证顺序;无排序查询顺序以数据库返回为准">
-            <button type="button" class="pager-btn" data-test="pager-prev" :disabled="!canPrev" @click="prevPage">上一页</button>
-            <span class="pager-info" data-test="pager-info">{{ pagerInfo }}</span>
-            <button type="button" class="pager-btn" data-test="pager-next" :disabled="!canNext" @click="nextPage">下一页</button>
+          <div
+            v-if="pagerVisible"
+            class="flex flex-none items-center justify-center gap-3"
+            data-test="result-pager"
+            title="跨页分页由数据库 ORDER BY 保证顺序;无排序查询顺序以数据库返回为准"
+          >
+            <Button variant="ghost" size="sm" class="h-7 px-2.5 text-xs" data-test="pager-prev" :disabled="!canPrev" @click="prevPage">
+              上一页
+            </Button>
+            <span class="font-mono text-xs tabular-nums text-muted-foreground" data-test="pager-info">{{ pagerInfo }}</span>
+            <Button variant="ghost" size="sm" class="h-7 px-2.5 text-xs" data-test="pager-next" :disabled="!canNext" @click="nextPage">
+              下一页
+            </Button>
           </div>
-          <div v-if="results.length === 0" class="empty" data-test="results-empty">⌘Enter 执行当前语句 · ⌘Shift+Enter 运行全部</div>
+          <div v-if="results.length === 0" class="py-6 text-center text-[13px] text-muted-foreground" data-test="results-empty">⌘Enter 执行当前语句 · ⌘Shift+Enter 运行全部</div>
           <!-- 仅渲染 active tab 对应的结果卡;PostgreSQL 结果可勾选行复制 INSERT。 -->
           <SqlResultCard
             v-else-if="activeCard"
@@ -911,7 +960,7 @@ watch([() => props.database, () => props.schema], ([db, schema]) => {
     </template>
 
     <!-- 状态栏:光标行列 / 语句条数 / 最近耗时。 -->
-    <div class="statusbar" data-test="console-statusbar">
+    <div class="mt-2 flex flex-none gap-3.5 font-mono text-[11px] text-muted-foreground" data-test="console-statusbar">
       <span data-test="statusbar-cursor">行 {{ cursorPos.line }} : 列 {{ cursorPos.col }}</span>
       <span data-test="statusbar-statements">语句 {{ statementCount }} 条</span>
       <span data-test="statusbar-duration">最近耗时 {{ lastDurationMs }} ms</span>
@@ -974,63 +1023,3 @@ watch([() => props.database, () => props.schema], ([db, schema]) => {
   </div>
 </template>
 
-<style scoped>
-.pg-sql {
-  height: 100%;
-  display: flex; flex-direction: column;
-  padding: 14px 16px; box-sizing: border-box;
-  color: var(--text); font-family: var(--font);
-}
-
-/* 编辑器区:占据结果区之外的剩余空间。 */
-.editor-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.command-bar { flex: none; display: flex; align-items: center; gap: 10px; padding-bottom: 8px; }
-.toolbar-hint { font-size: 12px; color: var(--text-tertiary); }
-/* 当前库选择器:hint 风格小标签 + 下拉,紧邻运行按钮右侧。 */
-.db-select { display: inline-flex; align-items: center; gap: 6px; }
-.db-select .input {
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 5px 8px; font-size: 12px; max-width: 180px;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-.db-select .input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); }
-.editor-wrap { flex: 1; min-height: 0; display: flex; }
-.editor-wrap :deep(.sql-editor) { flex: 1; min-width: 0; }
-.msg { font-size: 13px; border-radius: 9px; padding: 8px 12px; }
-.msg.err { background: var(--danger-soft); color: var(--danger); }
-.editor-wrap + .msg { margin-top: 10px; }
-
-/* 可拖拽分隔条与结果区。 */
-.splitter { flex: none; height: 7px; margin: 4px -16px; cursor: row-resize; }
-.splitter:hover, .splitter.active { background: var(--accent-soft); }
-.results-pane {
-  flex: none; display: flex; flex-direction: column;
-  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); overflow: hidden;
-}
-.results-head { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--border); }
-.results-title { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
-.results-close {
-  margin-left: auto; border: none; background: transparent; color: var(--text-secondary);
-  font-size: 14px; line-height: 1; cursor: pointer; padding: 2px 7px; border-radius: 5px;
-}
-.results-close:hover { background: var(--bg-hover); color: var(--text); }
-.results-body { flex: 1; min-height: 0; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 12px; }
-.empty { text-align: center; color: var(--text-tertiary); padding: 24px; font-size: 13px; }
-
-/* 结果分页条:上一页 / 页码信息 / 下一页。 */
-.result-pager { flex: none; display: flex; align-items: center; justify-content: center; gap: 12px; }
-.pager-btn {
-  border: 1px solid var(--border); background: var(--bg-subtle); color: var(--text);
-  border-radius: 7px; padding: 3px 12px; font-size: 12px; cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
-}
-.pager-btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--accent); }
-.pager-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.pager-info { font-size: 12px; color: var(--text-secondary); font-family: var(--mono); }
-
-/* 状态栏:光标行列 / 语句条数 / 最近耗时。 */
-.statusbar {
-  flex: none; display: flex; gap: 14px; margin-top: 8px;
-  font-size: 11px; color: var(--text-tertiary); font-family: var(--mono);
-}
-</style>

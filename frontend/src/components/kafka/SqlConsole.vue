@@ -10,6 +10,8 @@ import PromptDialog from '@/components/common/PromptDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import SqlEditor from '@/components/common/SqlEditor.vue'
 import SqlResultCard from '@/components/common/SqlResultCard.vue'
+import { Button } from '@/components/ui/button'
+import { Loader2, X } from 'lucide-vue-next'
 import type { SqlTableSchema } from '@/components/common/SqlEditor.vue'
 import { useQueryFiles } from '@/composables/queryFiles'
 import { useSqlHistoryStore } from '@/store/sqlhistory'
@@ -515,24 +517,29 @@ function nextPage(): void {
 </script>
 
 <template>
-  <div class="sql-console" data-test="sql-console">
-    <div class="editor-area" data-test="editor-area">
-      <div class="sql-toolbar" data-test="sql-toolbar">
-        <button class="btn primary" type="button" data-test="btn-run" :disabled="running" @click="runAll">
+  <div class="flex h-full flex-col text-foreground" data-test="sql-console">
+    <div class="flex min-h-0 flex-1 flex-col" data-test="editor-area">
+      <div class="sql-toolbar flex flex-none items-center gap-2.5 border-b border-border px-4 py-2.5" data-test="sql-toolbar">
+        <Button size="sm" data-test="btn-run" :disabled="running" @click="runAll">
+          <Loader2 v-if="running" class="animate-spin" />
           {{ running ? '执行中…' : '运行全部' }}
-        </button>
-        <span class="toolbar-hint">⌘Enter 执行当前语句 · ⌘Shift+Enter 运行全部</span>
-        <div ref="historyRoot" class="history-menu" data-test="history-menu">
-          <button class="btn ghost" type="button" data-test="history-toggle" @click="historyOpen = !historyOpen">
+        </Button>
+        <span class="text-xs text-muted-foreground">⌘Enter 执行当前语句 · ⌘Shift+Enter 运行全部</span>
+        <div ref="historyRoot" class="history-menu relative ml-auto" data-test="history-menu">
+          <Button variant="ghost" size="sm" class="h-7 px-2.5 text-xs" data-test="history-toggle" @click="historyOpen = !historyOpen">
             历史/收藏 ▾
-          </button>
-          <div v-if="historyOpen" class="history-pop" data-test="history-pop">
-            <div class="pop-section">
-              <div class="pop-title">历史</div>
+          </Button>
+          <div
+            v-if="historyOpen"
+            class="history-pop absolute right-0 top-[calc(100%+6px)] z-30 flex w-[380px] max-w-[70vw] flex-col gap-2.5 rounded-lg border border-border bg-popover p-2.5 shadow-md"
+            data-test="history-pop"
+          >
+            <div class="flex min-w-0 flex-col gap-0.5">
+              <div class="px-0.5 pb-0.5 text-[11px] font-semibold tracking-wide text-muted-foreground">历史</div>
               <button
                 v-for="q in sqlHistory.history"
                 :key="q"
-                class="pop-item"
+                class="block w-full cursor-pointer overflow-hidden text-ellipsis whitespace-nowrap rounded-md px-2.5 py-1.5 text-left font-mono text-[13px] text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                 type="button"
                 data-test="history-item"
                 :title="q"
@@ -540,36 +547,43 @@ function nextPage(): void {
               >
                 {{ q }}
               </button>
-              <div v-if="!sqlHistory.history.length" class="pop-empty" data-test="history-empty">暂无历史</div>
+              <div v-if="!sqlHistory.history.length" class="px-0.5 pt-1 text-xs text-muted-foreground" data-test="history-empty">暂无历史</div>
             </div>
-            <div class="pop-section">
-              <div class="pop-title-row">
-                <span class="pop-title">收藏</span>
-                <button class="fav-save" type="button" data-test="fav-save" :disabled="!sql.trim()" @click="openFavForm">
+            <div class="flex min-w-0 flex-col gap-0.5">
+              <div class="flex items-center justify-between gap-2 pb-0.5">
+                <span class="px-0.5 text-[11px] font-semibold tracking-wide text-muted-foreground">收藏</span>
+                <button
+                  class="cursor-pointer rounded-md px-1 py-0.5 text-xs text-primary transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                  type="button"
+                  data-test="fav-save"
+                  :disabled="!sql.trim()"
+                  @click="openFavForm"
+                >
                   保存当前查询
                 </button>
               </div>
-              <div v-if="favFormOpen" class="fav-form">
+              <div v-if="favFormOpen" class="flex gap-1.5 py-0.5">
                 <input
                   v-model="favName"
-                  class="fav-name"
+                  class="h-7 min-w-0 flex-1 rounded-md border border-input bg-transparent px-2.5 text-[13px] text-foreground shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
                   data-test="fav-name-input"
                   placeholder="收藏名称"
                   @keydown.enter.prevent="confirmSave"
                 />
-                <button
-                  class="btn primary fav-confirm"
+                <Button
+                  size="sm"
+                  class="h-7 px-3 text-xs"
                   type="button"
                   data-test="fav-confirm"
                   :disabled="!favName.trim()"
                   @click="confirmSave"
                 >
                   确认
-                </button>
+                </Button>
               </div>
-              <div v-for="f in sqlHistory.favorites" :key="f.name" class="fav-row">
+              <div v-for="f in sqlHistory.favorites" :key="f.name" class="flex items-center gap-0.5">
                 <button
-                  class="pop-item"
+                  class="block min-w-0 flex-1 cursor-pointer overflow-hidden text-ellipsis whitespace-nowrap rounded-md px-2.5 py-1.5 text-left font-mono text-[13px] text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                   type="button"
                   data-test="fav-item"
                   :title="f.sql"
@@ -578,7 +592,7 @@ function nextPage(): void {
                   {{ f.name }}
                 </button>
                 <button
-                  class="fav-remove"
+                  class="flex-none cursor-pointer rounded-md px-2 py-1.5 text-xs leading-none text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
                   type="button"
                   data-test="fav-remove"
                   title="删除收藏"
@@ -587,13 +601,13 @@ function nextPage(): void {
                   ✕
                 </button>
               </div>
-              <div v-if="!sqlHistory.favorites.length" class="pop-empty" data-test="fav-empty">暂无收藏</div>
+              <div v-if="!sqlHistory.favorites.length" class="px-0.5 pt-1 text-xs text-muted-foreground" data-test="fav-empty">暂无收藏</div>
             </div>
           </div>
         </div>
       </div>
 
-      <div class="editor-host" @keydown="onEditorKeydown">
+      <div class="editor-host flex min-h-0 flex-1" @keydown="onEditorKeydown">
         <SqlEditor
           ref="editor"
           v-model="sql"
@@ -603,17 +617,18 @@ function nextPage(): void {
           :statement-gutter="true"
           :statement-marks="statementMarks"
           :highlight-cursor-statement="true"
+          class="min-w-0 flex-1"
           data-test="input-sql"
           @run-statement="onRunStatement"
           @cursor="onCursor"
         />
       </div>
 
-      <div class="hint">支持：<code>SELECT * FROM &lt;topic&gt;</code>，<code>WHERE key='x' / value LIKE '%x%'</code>，<code>LIMIT n</code>。</div>
+      <div class="px-4 pt-1.5 text-xs text-muted-foreground">支持：<code class="rounded bg-muted px-1 py-px font-mono">SELECT * FROM &lt;topic&gt;</code>，<code class="rounded bg-muted px-1 py-px font-mono">WHERE key='x' / value LIKE '%x%'</code>，<code class="rounded bg-muted px-1 py-px font-mono">LIMIT n</code>。</div>
 
-      <div v-if="error" class="msg err" data-test="sql-error">{{ error }}</div>
+      <div v-if="error" class="mx-4 mt-2 rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive" data-test="sql-error">{{ error }}</div>
 
-      <div class="statusbar" data-test="console-statusbar">
+      <div class="flex flex-none items-center gap-4 border-t border-border px-4 py-1.5 font-mono text-[11px] text-muted-foreground" data-test="console-statusbar">
         <span data-test="statusbar-cursor">{{ cursorPos.line }}:{{ cursorPos.col }}</span>
         <span data-test="statusbar-statements">语句 {{ stmtCount }} 条</span>
         <span data-test="statusbar-duration">最近耗时 {{ lastDurationMs === null ? '—' : lastDurationMs + ' ms' }}</span>
@@ -622,22 +637,30 @@ function nextPage(): void {
 
     <template v-if="resultsOpen">
       <div
-        class="splitter"
+        class="flex h-[7px] flex-none cursor-row-resize border-t border-border transition-colors hover:bg-foreground/10"
         data-test="console-splitter"
         title="拖拽调整结果区高度,双击恢复对分"
         @pointerdown="onSplitterPointerdown"
         @dblclick="onSplitterDblclick"
       ></div>
-      <div class="results-panel" data-test="sql-results" :style="{ height: resultsHeight + 'px' }">
-        <div class="results-header">
-          <span>查询结果</span>
-          <button class="results-close" type="button" data-test="results-close" title="关闭结果区" @click="resultsOpen = false">
-            ×
-          </button>
+      <div class="results-panel flex flex-none flex-col px-4 pb-3.5" data-test="sql-results" :style="{ height: resultsHeight + 'px' }">
+        <div class="flex items-center justify-between gap-3 py-1">
+          <span class="text-[13px] font-semibold">查询结果</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            class="h-6 w-6 p-0"
+            type="button"
+            data-test="results-close"
+            title="关闭结果区"
+            @click="resultsOpen = false"
+          >
+            <X class="size-3.5" />
+          </Button>
         </div>
         <SqlResultCard
           v-if="runError || results.length"
-          class="result-host"
+          class="result-host min-h-0 flex-1 overflow-auto"
           :statement="lastStatement"
           :duration-ms="lastDurationMs"
           :columns="resultColumns"
@@ -648,14 +671,22 @@ function nextPage(): void {
           :error="runError"
         />
         <!-- 前端分页条:结果一次性拉全,翻页只切片(每页 500 条)。 -->
-        <div v-if="resultRows.length > 0" class="result-pager" data-test="result-pager">
-          <button type="button" class="pager-btn" data-test="pager-prev" :disabled="!canPrev" @click="prevPage">上一页</button>
-          <span class="pager-info" data-test="pager-info">{{ pagerInfo }}</span>
-          <button type="button" class="pager-btn" data-test="pager-next" :disabled="!canNext" @click="nextPage">下一页</button>
+        <div v-if="resultRows.length > 0" class="flex flex-none items-center justify-center gap-3 pt-1.5" data-test="result-pager">
+          <Button variant="ghost" size="sm" class="h-7 px-2.5 text-xs" data-test="pager-prev" :disabled="!canPrev" @click="prevPage">
+            上一页
+          </Button>
+          <span class="font-mono text-xs tabular-nums text-muted-foreground" data-test="pager-info">{{ pagerInfo }}</span>
+          <Button variant="ghost" size="sm" class="h-7 px-2.5 text-xs" data-test="pager-next" :disabled="!canNext" @click="nextPage">
+            下一页
+          </Button>
         </div>
-        <div v-else class="empty-card" data-test="results-empty">
-          <div class="empty-title">暂无结果</div>
-          <div class="empty-hint">⌘Enter 执行 · ⌘Shift+Enter 运行全部</div>
+        <div
+          v-else
+          class="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-border text-muted-foreground"
+          data-test="results-empty"
+        >
+          <div class="text-[13px]">暂无结果</div>
+          <div class="font-mono text-xs">⌘Enter 执行 · ⌘Shift+Enter 运行全部</div>
         </div>
       </div>
     </template>
@@ -698,145 +729,3 @@ function nextPage(): void {
   </div>
 </template>
 
-<style scoped>
-/* 结果分页条(前端切片):上一页 / 页码信息 / 下一页。 */
-.result-pager { flex: none; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 6px 10px 0; }
-.pager-btn {
-  border: 1px solid var(--border); background: var(--bg-subtle); color: var(--text);
-  border-radius: 7px; padding: 3px 12px; font-size: 12px; cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
-}
-.pager-btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--accent); }
-.pager-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.pager-info { font-size: 12px; color: var(--text-secondary); font-family: var(--mono); }
-
-.sql-console {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  font-family: var(--font);
-  color: var(--text);
-  background: var(--bg-elevated);
-}
-.editor-area {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-.sql-toolbar {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--topbar-bg);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
-}
-.toolbar-hint { font-size: 12px; color: var(--text-tertiary); }
-.editor-host {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-.editor-host :deep(.sql-editor) { flex: 1; min-width: 0; }
-.history-menu { margin-left: auto; position: relative; }
-.hint { font-size: 12px; color: var(--text-tertiary); padding: 7px 16px 0; }
-.hint code { background: var(--bg-subtle); padding: 1px 5px; border-radius: 5px; font-family: var(--mono); }
-.msg { font-size: 13px; border-radius: 9px; padding: 8px 12px; margin: 8px 16px 0; }
-.msg.err { background: var(--danger-soft); color: var(--danger); }
-.statusbar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 6px 16px;
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-  font-family: var(--mono);
-  color: var(--text-tertiary);
-  background: var(--bg-elevated);
-}
-.splitter {
-  flex: none;
-  height: 7px;
-  cursor: row-resize;
-  border-top: 1px solid var(--border);
-  touch-action: none;
-  transition: background 0.1s ease;
-}
-.splitter:hover { background: var(--accent-soft); }
-.results-panel {
-  flex: none;
-  min-height: 0;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  padding: 0 16px 14px;
-}
-.results-header { display: flex; align-items: center; gap: 12px; justify-content: space-between; font-size: 13px; font-weight: 600; padding: 4px 0 8px; }
-.results-close {
-  border: none; background: transparent; cursor: pointer; color: var(--text-tertiary);
-  font-size: 16px; line-height: 1; padding: 3px 8px; border-radius: var(--radius-sm);
-  transition: background 0.1s ease, color 0.1s ease;
-}
-.results-close:hover { background: var(--bg-hover); color: var(--text); }
-.result-host { flex: 1; min-height: 0; overflow: auto; }
-.empty-card {
-  flex: 1;
-  min-height: 0;
-  border: 1px dashed var(--border);
-  border-radius: 10px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  color: var(--text-tertiary);
-}
-.empty-title { font-size: 13px; }
-.empty-hint { font-size: 12px; font-family: var(--mono); }
-.history-menu { position: relative; }
-.history-pop {
-  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: 380px; max-width: 70vw;
-  display: flex; flex-direction: column; gap: 10px; padding: 10px;
-  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
-}
-.pop-section { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.pop-title { font-size: 11px; font-weight: 600; color: var(--text-secondary); letter-spacing: 0.02em; padding: 0 2px 3px; }
-.pop-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 3px; }
-.pop-item {
-  display: block; width: 100%; box-sizing: border-box; text-align: left; border: none; background: transparent; cursor: pointer;
-  color: var(--text); font-size: 13px; font-family: var(--mono); padding: 7px 10px; border-radius: var(--radius-sm);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  transition: background 0.1s ease;
-}
-.pop-item:hover { background: var(--bg-hover); }
-.pop-empty { font-size: 12px; color: var(--text-tertiary); padding: 4px 2px 2px; }
-.fav-save {
-  border: none; background: transparent; cursor: pointer; font-size: 12px; font-family: var(--font);
-  color: var(--accent); padding: 2px 4px; border-radius: var(--radius-sm);
-  transition: background 0.1s ease;
-}
-.fav-save:hover:not(:disabled) { background: var(--accent-soft); }
-.fav-save:disabled { opacity: 0.5; cursor: not-allowed; color: var(--text-tertiary); }
-.fav-form { display: flex; gap: 6px; padding: 2px 0 4px; }
-.fav-name {
-  flex: 1; min-width: 0; box-sizing: border-box; font-size: 13px; font-family: var(--font);
-  color: var(--text); background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
-}
-.fav-name:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.fav-confirm { padding: 6px 14px; font-size: 12px; }
-.fav-row { display: flex; align-items: center; gap: 2px; }
-.fav-row .pop-item { flex: 1; min-width: 0; }
-.fav-remove {
-  flex: none; border: none; background: transparent; cursor: pointer; color: var(--text-tertiary);
-  font-size: 12px; padding: 6px 8px; border-radius: var(--radius-sm); line-height: 1;
-  transition: background 0.1s ease, color 0.1s ease;
-}
-.fav-remove:hover { background: var(--danger-soft); color: var(--danger); }
-/* 基座走全局 .btn;控制台执行按钮为大号圆角(局部修饰)。 */
-.btn { border-radius: 9px; padding: 9px 20px; font-weight: 500; }
-</style>
