@@ -2,6 +2,9 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import TableDataGrid from '@/components/common/TableDataGrid.vue'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Plus, X } from 'lucide-vue-next'
 import { useToastStore } from '@/store/toast'
 import { buildDocSkeleton } from '@/utils/esDocSkeleton'
 import { usePagedTable } from '@/composables/usePagedTable'
@@ -442,19 +445,19 @@ async function doClear(): Promise<void> {
 </script>
 
 <template>
-  <div class="es-browser" data-test="es-table-browser">
-    <div class="summary" data-test="es-summary">
-      <span class="mono index-name" data-test="es-summary-index">{{ props.index }}</span>
-      <span class="sep">·</span>
+  <div class="p-4" data-test="es-table-browser">
+    <div class="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground" data-test="es-summary">
+      <span class="font-mono font-semibold text-foreground" data-test="es-summary-index">{{ props.index }}</span>
+      <span class="text-muted-foreground/60">·</span>
       <span data-test="es-summary-engine">{{ engine || '—' }}</span>
-      <span class="sep">·</span>
-      <span data-test="es-summary-rows">≈ {{ totalRows.toLocaleString() }} 行</span>
+      <span class="text-muted-foreground/60">·</span>
+      <span class="tabular-nums" data-test="es-summary-rows">≈ {{ totalRows.toLocaleString() }} 行</span>
     </div>
 
-    <div class="toolbar">
-      <input
-        v-model="where"
-        class="where-input"
+    <div class="mt-2.5 flex flex-wrap items-center gap-2">
+      <Input
+        :value="where"
+        class="h-8 min-w-[220px] max-w-[420px] flex-1 bg-background text-[13px]"
         type="search"
         data-test="es-where"
         placeholder="关键词,如 20260821;高级语法用 字段:值(如 level:ERROR AND app:pay)"
@@ -463,30 +466,34 @@ async function doClear(): Promise<void> {
         autocomplete="off"
         spellcheck="false"
         title="不含冒号 = 全字段关键词匹配;含冒号 = query_string 高级语法(字段:值,支持 AND/OR/通配符)"
+        @input="where = ($event.target as HTMLInputElement).value"
         @keydown.enter="applyWhere"
       />
-      <button class="btn ghost" type="button" data-test="btn-es-apply" :disabled="loading" @click="applyWhere">过滤</button>
-      <button class="btn ghost" type="button" data-test="es-refresh" :disabled="loading" @click="refresh">
+      <Button variant="ghost" size="sm" class="text-xs" data-test="btn-es-apply" :disabled="loading" @click="applyWhere">过滤</Button>
+      <Button variant="ghost" size="sm" class="text-xs" data-test="es-refresh" :disabled="loading" @click="refresh">
         {{ loading ? '加载中…' : '刷新' }}
-      </button>
-      <button class="btn ghost" type="button" data-test="es-doc-create" title="新增文档(按映射字段生成 JSON 骨架)" @click="openCreateDoc">➕ 新增文档</button>
-      <button class="btn ghost danger" type="button" data-test="btn-es-clear" @click="confirmClear = true">清空文档</button>
+      </Button>
+      <Button variant="ghost" size="sm" class="text-xs" data-test="es-doc-create" title="新增文档(按映射字段生成 JSON 骨架)" @click="openCreateDoc">
+        <Plus class="size-3.5" />
+        新增文档
+      </Button>
+      <Button variant="ghost" size="sm" class="text-xs text-destructive hover:text-destructive" data-test="btn-es-clear" @click="confirmClear = true">清空文档</Button>
     </div>
 
-    <div v-if="error || editError" class="msg err" data-test="es-error">{{ error || editError }}</div>
+    <div v-if="error || editError" class="mt-2 rounded-md bg-destructive/10 px-2.5 py-1.5 text-[13px] text-destructive" data-test="es-error">{{ error || editError }}</div>
 
     <!-- 兜底:无列信息(老后端/异常 wire 形状)时仅渲染空态。正常情况
          后端分页恒返回 _id + 映射列,走下方数据表分支;不再渲染竖排字段
          面板(映射字段已作为表头可见,与 MySQL 浏览器行为一致)。 -->
-    <div v-if="!loading && columns.length === 0" class="table-wrap">
-      <div class="empty" data-test="es-grid-empty">
-        <div class="empty-icon">◌</div>
+    <div v-if="!loading && columns.length === 0" class="mt-2.5 max-h-[calc(100vh-320px)] overflow-auto rounded-lg border border-border bg-card">
+      <div class="p-7 text-center text-muted-foreground" data-test="es-grid-empty">
+        <div class="mb-1.5 text-[26px] leading-none">◌</div>
         <div>该索引暂无文档</div>
-        <div class="empty-hint">数据写入后点击「刷新」查看</div>
+        <div class="mt-1 text-[11px] text-muted-foreground/80">数据写入后点击「刷新」查看</div>
       </div>
     </div>
 
-    <div v-else class="table-wrap">
+    <div v-else class="mt-2.5 max-h-[calc(100vh-320px)] overflow-auto rounded-lg border border-border bg-card">
       <!-- 共享表格网格:ES 特有部分——_id 首列经 leading-cell 插槽挂 JSON/删除
            按钮,textarea 编辑器随内容多行,_id 列头不可排序,空态文案用插槽。 -->
       <TableDataGrid
@@ -511,9 +518,9 @@ async function doClear(): Promise<void> {
         @cancel-edit="cancelEdit"
       >
         <template #leading-cell="{ cell, rowIndex }">
-          <div class="id-cell">
+          <div class="flex items-center gap-1.5">
             <button
-              class="mini-btn"
+              class="inline-flex h-5 shrink-0 items-center rounded-sm border border-border bg-transparent px-1 text-[10px] leading-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               type="button"
               :data-test="`es-doc-json-${rowIndex}`"
               title="编辑整文档 JSON"
@@ -522,15 +529,15 @@ async function doClear(): Promise<void> {
               JSON
             </button>
             <button
-              class="mini-btn danger"
+              class="inline-flex size-5 shrink-0 items-center justify-center rounded-sm border border-destructive/50 bg-transparent text-destructive transition-colors hover:bg-destructive/10"
               type="button"
               :data-test="`es-doc-delete-${rowIndex}`"
               title="删除文档"
               @click="askDelete(rowIndex)"
             >
-              ✕
+              <X class="size-3" />
             </button>
-            <span class="id-text" data-test="es-id-value">{{ cell ?? '' }}</span>
+            <span class="max-w-[220px] truncate whitespace-nowrap" data-test="es-id-value">{{ cell ?? '' }}</span>
           </div>
         </template>
         <template #empty>
@@ -545,10 +552,10 @@ async function doClear(): Promise<void> {
       </TableDataGrid>
     </div>
 
-    <div class="pager" data-test="es-pager">
-      <button class="btn ghost" type="button" data-test="btn-es-prev" :disabled="offset === 0 || loading" @click="prevPage">上一页</button>
-      <span class="page-label" data-test="es-page-label">第 {{ page }} 页</span>
-      <button class="btn ghost" type="button" data-test="btn-es-next" :disabled="rows.length < PAGE_SIZE || loading" @click="nextPage">下一页</button>
+    <div class="mt-2.5 flex items-center gap-2.5" data-test="es-pager">
+      <Button variant="ghost" size="sm" class="text-xs" data-test="btn-es-prev" :disabled="offset === 0 || loading" @click="prevPage">上一页</Button>
+      <span class="text-xs tabular-nums text-muted-foreground" data-test="es-page-label">第 {{ page }} 页</span>
+      <Button variant="ghost" size="sm" class="text-xs" data-test="btn-es-next" :disabled="rows.length < PAGE_SIZE || loading" @click="nextPage">下一页</Button>
     </div>
 
     <!-- 清空索引:危险操作,文案含索引名与 _delete_by_query。 -->
@@ -582,25 +589,29 @@ async function doClear(): Promise<void> {
     />
 
     <!-- 整文档 JSON 弹窗:编辑模式保存即整文档替换(PUT _doc);新增模式
-         由映射字段骨架起步,_id 留空自动生成 / 填写指定写入(覆盖)。 -->
+         由映射字段骨架起步,_id 留空自动生成 / 填写指定写入(覆盖)。
+         不用全局 .modal-backdrop/.modal 基座:那两个基座未分层,工具类压
+         不过它们,这里整体工具类化以保留 z-100/轻模糊的原有层级意图。 -->
     <Teleport to="body">
-      <div v-if="jsonOpen" class="modal-backdrop" data-test="es-doc-json-modal" @click.self="closeJson">
-        <div class="modal json-modal">
-          <div class="modal-header">
-            <span class="modal-title" data-test="es-doc-json-title">
+      <div v-if="jsonOpen" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 backdrop-blur-[2px]" data-test="es-doc-json-modal" @click.self="closeJson">
+        <div class="flex w-[640px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-xl border border-border bg-card text-foreground shadow-xl">
+          <div class="flex items-center justify-between border-b border-border px-4.5 py-3.5">
+            <span class="text-sm font-semibold" data-test="es-doc-json-title">
               <template v-if="jsonMode === 'create'">{{ jsonTitle }}</template>
-              <template v-else>{{ jsonTitle }} <span class="mono doc-id">{{ jsonId }}</span></template>
+              <template v-else>{{ jsonTitle }} <span class="mono text-xs font-normal text-muted-foreground">{{ jsonId }}</span></template>
             </span>
-            <button class="modal-close" type="button" data-test="es-doc-json-close" @click="closeJson">✕</button>
+            <Button variant="ghost" size="sm" class="size-6 p-0 text-muted-foreground hover:text-foreground" type="button" data-test="es-doc-json-close" @click="closeJson">
+              <X class="size-3.5" />
+            </Button>
           </div>
-          <div class="modal-body">
-            <div v-if="jsonError" class="msg err json-error" data-test="es-json-error">{{ jsonError }}</div>
-            <div v-if="jsonMode === 'create'" class="doc-id-row">
-              <label class="doc-id-label" for="es-doc-create-id">_id</label>
+          <div class="px-4.5 py-4">
+            <div v-if="jsonError" class="mb-2 rounded-md bg-destructive/10 px-2.5 py-1.5 text-[13px] text-destructive" data-test="es-json-error">{{ jsonError }}</div>
+            <div v-if="jsonMode === 'create'" class="mb-2 flex items-center gap-2">
+              <label class="font-mono text-xs text-muted-foreground" for="es-doc-create-id">_id</label>
               <input
                 id="es-doc-create-id"
                 v-model="jsonNewId"
-                class="doc-id-input"
+                class="h-8 min-w-0 flex-1 rounded-md border border-input bg-transparent px-2.5 text-[13px] font-mono text-foreground outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus:border-ring focus:ring-[3px] focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50"
                 type="text"
                 data-test="es-doc-create-id"
                 placeholder="留空自动生成"
@@ -613,7 +624,7 @@ async function doClear(): Promise<void> {
             </div>
             <textarea
               v-model="jsonDraft"
-              class="json-editor"
+              class="box-border block min-h-[280px] w-full resize-y rounded-md border border-input bg-muted/50 px-2.5 py-2 font-mono text-xs leading-normal text-foreground outline-none transition-[color,box-shadow] focus:border-ring focus:ring-[3px] focus:ring-ring/30"
               data-test="es-doc-json-editor"
               rows="14"
               autocapitalize="off"
@@ -621,108 +632,27 @@ async function doClear(): Promise<void> {
               autocomplete="off"
               spellcheck="false"
             ></textarea>
-            <div class="json-hint">{{ jsonHint }}</div>
+            <div class="mt-2 text-[11px] text-muted-foreground/80">{{ jsonHint }}</div>
           </div>
-          <div class="modal-footer">
-            <button
+          <div class="flex justify-end gap-2 px-4.5 pb-4">
+            <Button
               v-if="jsonMode === 'edit'"
-              class="btn ghost"
+              variant="ghost"
+              size="sm"
               type="button"
               data-test="es-doc-duplicate"
               title="以当前内容另存为新文档(_id 留空自动生成)"
               @click="duplicateDoc"
             >
               另存为新文档
-            </button>
-            <button class="btn ghost" type="button" data-test="es-doc-json-cancel" @click="closeJson">取消</button>
-            <button class="btn primary" type="button" data-test="es-doc-json-save" :disabled="jsonSaving" :title="saveBtnTitle" @click="saveJson">
+            </Button>
+            <Button variant="ghost" size="sm" type="button" data-test="es-doc-json-cancel" @click="closeJson">取消</Button>
+            <Button variant="default" size="sm" type="button" data-test="es-doc-json-save" :disabled="jsonSaving" :title="saveBtnTitle" @click="saveJson">
               {{ saveBtnText }}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
     </Teleport>
   </div>
 </template>
-
-<style scoped>
-.es-browser { padding: 16px; color: var(--text); font-family: var(--font); }
-.summary {
-  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
-  padding: 8px 12px;
-  background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 8px;
-  font-size: 12px; color: var(--text-secondary);
-}
-.index-name { font-weight: 600; color: var(--text); }
-.sep { color: var(--text-tertiary); }
-.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
-.where-input {
-  flex: 1; min-width: 220px; max-width: 420px;
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 6px 9px; font-size: 13px;
-}
-.where-input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--accent-soft); }
-.msg { padding: 8px 10px; font-size: 13px; border-radius: 7px; margin-top: 8px; }
-.msg.err { background: var(--danger-soft); color: var(--danger); }
-.table-wrap {
-  margin-top: 10px; overflow: auto; max-height: calc(100vh - 320px);
-  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated);
-}
-/* _id 单元格:行首操作按钮 + 文档标识(leading-cell 插槽内容,样式留在入口)。 */
-.id-cell { display: flex; align-items: center; gap: 5px; }
-.id-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
-.mini-btn {
-  flex: none; font-size: 10px; line-height: 1;
-  padding: 2px 5px; border-radius: 4px; cursor: pointer;
-  background: transparent; color: var(--text-secondary);
-  border: 1px solid var(--border-strong);
-}
-.mini-btn:hover { background: var(--bg-hover); color: var(--text); }
-.mini-btn.danger { color: var(--danger); border-color: var(--danger); }
-.mini-btn.danger:hover { background: var(--danger-soft); }
-.mono { font-family: var(--mono); }
-.empty { text-align: center; color: var(--text-tertiary); padding: 28px 24px; }
-.empty-icon { font-size: 26px; margin-bottom: 6px; }
-.empty-hint { font-size: 11px; margin-top: 4px; color: var(--text-tertiary); }
-.pager { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-.page-label { font-size: 12px; color: var(--text-secondary); }
-/* JSON 编辑弹窗:基座走全局 .modal-backdrop/.modal(层级/模糊对齐 ConfirmDialog)。 */
-.modal-backdrop {
-  z-index: 100;
-  -webkit-backdrop-filter: blur(2px);
-  backdrop-filter: blur(2px);
-}
-.modal {
-  width: 380px; max-width: calc(100vw - 48px);
-}
-.json-modal { width: 640px; }
-.modal-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 18px; border-bottom: 1px solid var(--border);
-}
-.modal-title { font-size: 14px; font-weight: 600; }
-.doc-id { font-size: 12px; color: var(--text-secondary); font-weight: 400; }
-.modal-close { background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 14px; padding: 2px 4px; border-radius: 6px; }
-.modal-close:hover { color: var(--text); background: var(--bg-hover); }
-.modal-body { padding: 16px 18px; }
-.modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 0 18px 16px; }
-.json-editor {
-  box-sizing: border-box; width: 100%; min-height: 280px; resize: vertical;
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 8px 10px; font-size: 12px; line-height: 1.5;
-  font-family: var(--mono);
-}
-.json-editor:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
-.json-hint { margin-top: 8px; font-size: 11px; color: var(--text-tertiary); }
-/* 弹窗内错误:与页面错误区同一视觉语言,置于弹窗体顶部(错误即点可见)。 */
-.json-error { margin: 0 0 8px; }
-/* 新增模式 _id 行:单行紧凑,等宽字体与文档标识一致。 */
-.doc-id-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.doc-id-label { font-size: 12px; font-family: var(--mono); color: var(--text-secondary); }
-.doc-id-input {
-  flex: 1; box-sizing: border-box;
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 5px 9px; font-size: 13px; font-family: var(--mono);
-}
-.doc-id-input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
-</style>

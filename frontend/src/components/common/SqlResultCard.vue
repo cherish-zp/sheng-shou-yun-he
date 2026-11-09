@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, onBeforeUnmount, onMounted, type ComponentPublicInstance } from 'vue'
+import { ChevronDown, X } from 'lucide-vue-next'
+import { Button } from '@/components/ui/button'
 import { useToastStore } from '@/store/toast'
 import { buildInsertStatement, type InsertTarget } from '@/utils/insertSql'
 import { CSV_MIME, JSONL_MIME, exportCsv, exportJsonl, saveFile } from '@/utils/export'
@@ -52,7 +54,13 @@ const toast = useToastStore()
 
 // —— 头部状态 ——
 
-const dotClass = computed(() => (props.error ? 'fail' : props.durationMs != null ? 'ok' : 'none'))
+// 状态点:ok/fail/none 保留为测试锚定类名,配色走语义 token
+// (成功 bg-success / 失败 bg-destructive / 无结果 bg-muted-foreground)。
+const dotClass = computed(() => {
+  if (props.error) return 'fail bg-destructive'
+  if (props.durationMs != null) return 'ok bg-success'
+  return 'none bg-muted-foreground/50'
+})
 
 const metaText = computed(() => {
   const parts: string[] = []
@@ -291,46 +299,51 @@ function onRowDelete(rowIndex: number): void {
 </script>
 
 <template>
-  <div class="result-card" data-test="result-card">
-    <div class="result-head">
-      <span class="status-dot" :class="dotClass" data-test="result-status-dot"></span>
+  <!-- DBX 皮肤:卡片圆角描边 bg-card,头部摘要区 bg-muted/40;操作区全部
+       Button(ghost 小号)。flex:none:结果卡内含 overflow:auto 的表格,禁
+       收缩后超出部分交给外层容器滚动(见下方注释保留)。 -->
+  <div class="flex flex-none flex-col overflow-hidden rounded-lg border border-border bg-card" data-test="result-card">
+    <div class="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-1.5">
+      <span class="size-2 shrink-0 rounded-full" :class="dotClass" data-test="result-status-dot"></span>
       <div
-        class="stmt"
+        class="stmt min-w-0 flex-1 cursor-pointer font-mono text-xs text-muted-foreground"
         data-test="result-toggle"
         :title="expanded ? '点击收起' : '点击展开全文'"
         @click="expanded = !expanded"
       >
-        <span v-if="!expanded" class="stmt-summary">{{ statement }}</span>
-        <pre v-else class="stmt-full">{{ statement }}</pre>
+        <span v-if="!expanded" class="stmt-summary block truncate">{{ statement }}</span>
+        <pre v-else class="stmt-full m-0 whitespace-pre-wrap break-all text-foreground">{{ statement }}</pre>
       </div>
-      <span class="meta" data-test="result-meta">{{ metaText }}</span>
-      <div class="actions">
-        <span v-if="selected.size > 0" class="selected-count" data-test="selected-count">
+      <span class="shrink-0 font-mono text-xs tabular-nums whitespace-nowrap text-muted-foreground" data-test="result-meta">{{ metaText }}</span>
+      <div class="actions flex shrink-0 items-center gap-1">
+        <span v-if="selected.size > 0" class="shrink-0 text-xs tabular-nums whitespace-nowrap text-primary" data-test="selected-count">
           已选 {{ selected.size }} 行
         </span>
-        <div ref="insertRoot" class="insert-group">
-          <button
-            type="button"
-            class="insert-main"
+        <div ref="insertRoot" class="insert-group relative flex">
+          <Button
+            variant="ghost"
+            size="sm"
+            class="h-7 rounded-r-none px-2 text-xs"
             data-test="result-copy-insert"
             :disabled="!insertTarget"
             :title="insertTarget ? '复制为 INSERT 语句' : '仅单表查询结果可生成'"
             @click="onCopyInsert"
           >
             复制为 INSERT
-          </button>
-          <button
-            type="button"
-            class="insert-arrow"
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            class="h-7 -ml-px rounded-l-none border-l border-border px-1 text-xs"
             data-test="insert-opts"
             :disabled="!insertTarget"
             title="INSERT 选项"
             @click="insertOptsOpen = !insertOptsOpen"
           >
-            ▾
-          </button>
-          <div v-if="insertOptsOpen" class="insert-pop" data-test="insert-pop">
-            <label class="opt-row">
+            <ChevronDown class="size-3" />
+          </Button>
+          <div v-if="insertOptsOpen" class="insert-pop absolute right-0 top-[calc(100%+6px)] z-20 flex min-w-[150px] flex-col gap-0.5 rounded-md border border-border bg-popover p-2 shadow-md" data-test="insert-pop">
+            <label class="opt-row flex cursor-pointer items-center justify-between gap-3 px-0.5 py-0.5 text-xs whitespace-nowrap text-foreground">
               <span>包含主键列</span>
               <input
                 v-model="includePK"
@@ -338,94 +351,113 @@ function onRowDelete(rowIndex: number): void {
                 data-test="insert-opt-pk"
                 :disabled="primaryKey.length === 0"
                 :title="pkToggleTitle"
+                class="accent-primary disabled:cursor-not-allowed disabled:opacity-45"
               />
             </label>
-            <label class="opt-row">
+            <label class="opt-row flex cursor-pointer items-center justify-between gap-3 px-0.5 py-0.5 text-xs whitespace-nowrap text-foreground">
               <span>每行单独 INSERT</span>
-              <input v-model="perRowOpt" type="checkbox" data-test="insert-opt-perrow" />
+              <input v-model="perRowOpt" type="checkbox" data-test="insert-opt-perrow" class="accent-primary" />
             </label>
           </div>
         </div>
-        <button type="button" data-test="result-copy-csv" title="复制为 CSV(含表头)" @click="onCopyCsv">
+        <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" data-test="result-copy-csv" title="复制为 CSV(含表头)" @click="onCopyCsv">
           复制为 CSV
-        </button>
-        <button type="button" data-test="result-export-csv" title="导出 CSV 文件" @click="onExportCsv">
+        </Button>
+        <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" data-test="result-export-csv" title="导出 CSV 文件" @click="onExportCsv">
           导出 CSV
-        </button>
-        <button
-          type="button"
-          data-test="result-export-jsonl"
-          title="导出 JSONL 文件"
-          @click="onExportJsonl"
-        >
+        </Button>
+        <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" data-test="result-export-jsonl" title="导出 JSONL 文件" @click="onExportJsonl">
           导出 JSONL
-        </button>
+        </Button>
       </div>
     </div>
 
-    <div v-if="error" class="result-error" data-test="result-error">
-      <span class="error-text">{{ error }}</span>
-      <button type="button" class="error-copy" data-test="result-error-copy" @click="onCopyError">
+    <div v-if="error" class="flex items-start gap-2.5 bg-destructive/10 px-3 py-2.5 font-mono text-xs text-destructive" data-test="result-error">
+      <span class="min-w-0 flex-1 whitespace-pre-wrap break-all">{{ error }}</span>
+      <Button
+        variant="ghost"
+        size="sm"
+        class="h-6 shrink-0 rounded-sm border border-destructive/40 px-2 text-xs text-destructive hover:text-destructive"
+        data-test="result-error-copy"
+        @click="onCopyError"
+      >
         复制
-      </button>
+      </Button>
     </div>
-    <div v-else class="table-wrap">
-      <table class="result-table" data-test="result-table">
+    <div v-else class="max-h-[420px] overflow-auto">
+      <table class="w-full border-collapse text-xs" data-test="result-table">
         <thead>
           <tr>
-            <th class="rownum">#</th>
-            <th v-if="rowDelete" class="row-action" title="删除该行(按主键定位)"></th>
-            <th v-if="selectable" class="checkcell">
+            <th class="rownum sticky top-0 z-[1] w-[34px] min-w-[34px] border-b border-border bg-muted px-2 py-1 text-right align-middle font-medium text-muted-foreground">#</th>
+            <th v-if="rowDelete" class="row-action sticky top-0 z-[1] w-[34px] min-w-[34px] border-b border-border bg-muted px-2 py-1 text-center align-middle font-medium" title="删除该行(按主键定位)"></th>
+            <th v-if="selectable" class="checkcell sticky top-0 z-[1] w-[30px] min-w-[30px] border-b border-border bg-muted px-2 py-1 text-center align-middle font-medium">
               <input
                 type="checkbox"
                 data-test="row-check-all"
                 :checked="allSelected"
                 title="全选/清空"
+                class="cursor-pointer align-middle accent-primary"
                 @change="toggleAll"
               />
             </th>
-            <th v-for="(col, ci) in columns" :key="ci" :title="col.type ? `${col.name}(${col.type})` : col.name">
-              <span class="col-name">{{ col.name }}</span>
-              <span v-if="col.type" class="col-type" data-test="col-type">{{ col.type }}</span>
+            <th
+              v-for="(col, ci) in columns"
+              :key="ci"
+              class="sticky top-0 z-[1] border-b border-border bg-muted px-2 py-1 text-left align-middle font-medium whitespace-nowrap text-muted-foreground"
+              :title="col.type ? `${col.name}(${col.type})` : col.name"
+            >
+              <!-- 字段名一行,类型小字第二行,避免类型只在悬浮提示里不可见。 -->
+              <span class="col-name block">{{ col.name }}</span>
+              <span v-if="col.type" class="col-type block max-w-[340px] truncate font-mono text-[11px] font-normal text-muted-foreground/70" data-test="col-type">{{ col.type }}</span>
             </th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(row, ri) in rows" :key="ri" data-test="result-row">
-            <td class="rownum">{{ ri + 1 }}</td>
+          <tr
+            v-for="(row, ri) in rows"
+            :key="ri"
+            class="group border-b border-border transition-colors last:border-b-0 hover:bg-accent/50"
+            :class="{ 'bg-accent/40': selected.has(ri) }"
+            data-test="result-row"
+          >
+            <td class="rownum bg-muted/40 px-2 py-1 text-right align-middle text-muted-foreground">{{ ri + 1 }}</td>
             <!-- 行首删除:危险色小按钮,悬停所在行时显现;禁用原因由调用方 hint 给出。 -->
-            <td v-if="rowDelete" class="row-action">
+            <td v-if="rowDelete" class="row-action px-2 py-1 text-center align-middle">
               <button
                 type="button"
-                class="mini-btn danger row-del"
+                class="row-del inline-flex size-5 items-center justify-center rounded-sm border border-destructive/50 bg-transparent text-destructive opacity-0 transition-opacity hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-40 group-hover:opacity-100"
                 data-test="btn-row-delete"
                 :disabled="rowDeleteDisabled(ri)"
                 :title="rowDeleteHint(ri)"
                 @click="onRowDelete(ri)"
               >
-                ✕
+                <X class="size-3" />
               </button>
             </td>
-            <td v-if="selectable" class="checkcell">
+            <td v-if="selectable" class="checkcell px-2 py-1 text-center align-middle">
               <input
                 type="checkbox"
                 data-test="row-check"
                 :checked="selected.has(ri)"
+                class="cursor-pointer align-middle accent-primary"
                 @change="toggleRow(ri)"
               />
             </td>
             <td
               v-for="(cell, ci) in row"
               :key="ci"
-              class="cell"
-              :class="{ 'cell-editing': isEditing(ri, ci) }"
+              class="cell max-w-[360px] truncate px-2 py-1 text-left align-middle whitespace-nowrap"
+              :class="{ 'cell-editing relative': isEditing(ri, ci) }"
               :title="cell == null ? 'NULL' : cell"
               @dblclick="onCellDblclick(ri, ci, $event)"
             >
+              <!-- 编辑输入框:绝对定位浮层,尺寸由双击时记录的 td 像素宽高内联
+                   锁定(见 onCellDblclick)——与原数据区域完全一致,行高列宽
+                   纹丝不动,全部内容在框内滚动查看。 -->
               <textarea
                 v-if="isEditing(ri, ci)"
                 :ref="focusEditor"
-                class="cell-editor"
+                class="cell-editor absolute left-0 top-0 m-0 box-border resize-none overflow-auto rounded-[4px] border border-primary/40 bg-popover px-2 py-1 font-mono text-xs leading-normal text-foreground outline-none ring-2 ring-primary/15"
                 data-test="result-cell-editor"
                 spellcheck="false"
                 autocapitalize="off"
@@ -441,7 +473,7 @@ function onRowDelete(rowIndex: number): void {
             </td>
           </tr>
           <tr v-if="rows.length === 0">
-            <td class="empty-cell" :colspan="columns.length + (rowDelete ? 1 : 0) + (selectable ? 2 : 1)" data-test="result-empty">0 行</td>
+            <td class="p-3 text-center text-muted-foreground" :colspan="columns.length + (rowDelete ? 1 : 0) + (selectable ? 2 : 1)" data-test="result-empty">0 行</td>
           </tr>
         </tbody>
       </table>
@@ -449,307 +481,3 @@ function onRowDelete(rowIndex: number): void {
   </div>
 </template>
 
-<style scoped>
-.result-card {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-elevated);
-  overflow: hidden;
-  /* 在 flex 列结果区里禁止收缩:结果卡内含 overflow:auto 的表格,自动最小
-     高度为 0,被压缩时卡片保持原位而表格底部被 overflow:hidden 裁掉,滚动
-     到底也看不到最后一行;禁收缩后超出部分交给外层容器滚动。 */
-  flex: none;
-}
-
-.result-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-subtle);
-}
-
-.status-dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-.status-dot.ok { background: var(--ok); }
-.status-dot.fail { background: var(--danger); }
-.status-dot.none { background: var(--text-tertiary); opacity: 0.5; }
-
-.stmt {
-  flex: 1;
-  min-width: 0;
-  cursor: pointer;
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.stmt-summary {
-  display: block;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.stmt-full {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: var(--text);
-}
-
-.meta {
-  flex: none;
-  font-size: 12px;
-  color: var(--text-tertiary);
-  white-space: nowrap;
-}
-
-.actions {
-  flex: none;
-  display: flex;
-  gap: 6px;
-}
-.actions button {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-elevated);
-  color: var(--text);
-  font-size: 12px;
-  padding: 3px 8px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: border-color 0.15s ease, color 0.15s ease;
-}
-.actions button:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.actions button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.selected-count {
-  flex: none;
-  font-size: 12px;
-  color: var(--accent);
-  white-space: nowrap;
-}
-
-/* 复制为 INSERT:主体 + 下拉箭头的连体按钮,下拉面板承载选项开关 */
-.insert-group {
-  flex: none;
-  position: relative;
-  display: flex;
-}
-.insert-main {
-  border-top-right-radius: 0 !important;
-  border-bottom-right-radius: 0 !important;
-}
-.insert-arrow {
-  margin-left: -1px;
-  padding: 3px 5px !important;
-  border-top-left-radius: 0 !important;
-  border-bottom-left-radius: 0 !important;
-  color: var(--text-tertiary);
-}
-.insert-arrow:hover:not(:disabled) {
-  color: var(--accent);
-}
-.insert-pop {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 20;
-  min-width: 150px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
-}
-.opt-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 3px 2px;
-  font-size: 12px;
-  color: var(--text);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.opt-row input {
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-.opt-row input:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-
-/* 错误卡:红色系 + 等宽字体 */
-.result-error {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
-  background: var(--danger-soft);
-  color: var(--danger);
-  font-family: var(--mono);
-  font-size: 12px;
-}
-.error-text {
-  flex: 1;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-.error-copy {
-  flex: none;
-  border: 1px solid var(--danger);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--danger);
-  font-size: 12px;
-  padding: 2px 8px;
-  cursor: pointer;
-}
-.error-copy:hover {
-  background: var(--danger-soft);
-}
-
-/* 结果表格:首列行号窄列,斑马纹 + 细网格线 */
-.table-wrap {
-  overflow: auto;
-  max-height: 420px;
-}
-.result-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-.result-table th,
-.result-table td {
-  border: 1px solid var(--border);
-  padding: 4px 8px;
-  text-align: left;
-  white-space: nowrap;
-  max-width: 360px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.result-table thead th {
-  position: sticky;
-  top: 0;
-  background: var(--bg-subtle);
-  color: var(--text-secondary);
-  font-weight: 600;
-}
-/* 字段名一行,类型小字第二行,避免类型只在悬浮提示里不可见。 */
-.result-table thead th .col-name {
-  display: block;
-}
-.result-table thead th .col-type {
-  display: block;
-  max-width: 340px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-weight: 400;
-  font-size: 11px;
-  font-family: var(--mono);
-  color: var(--text-tertiary);
-}
-.result-table tbody tr:nth-child(even) {
-  background: var(--bg-subtle);
-}
-.result-table tbody tr:hover {
-  background: var(--bg-hover);
-}
-.rownum {
-  width: 34px;
-  min-width: 34px;
-  text-align: right;
-  color: var(--text-tertiary);
-  background: var(--bg-subtle);
-}
-.checkcell {
-  width: 30px;
-  min-width: 30px;
-  text-align: center;
-}
-.checkcell input {
-  accent-color: var(--accent);
-  cursor: pointer;
-  vertical-align: middle;
-}
-.empty-cell {
-  text-align: center !important;
-  color: var(--text-tertiary);
-  padding: 12px !important;
-}
-
-/* 单元格编辑输入框 */
-/* 单元格编辑输入框:绝对定位浮层,尺寸由双击时记录的 td 像素宽高内联锁定
-   (见 onCellDblclick)——与原数据区域完全一致,行高列宽纹丝不动,全部内容
-   在框内滚动查看。 */
-.cell-editing {
-  position: relative;
-}
-.cell-editor {
-  position: absolute;
-  left: 0;
-  top: 0;
-  margin: 0;
-  box-sizing: border-box;
-  border: 1px solid var(--accent);
-  background: var(--bg-elevated);
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.5;
-  padding: 4px 8px;
-  outline: none;
-  resize: none;
-  overflow: auto;
-  box-shadow: inset 0 0 0 2px var(--accent-soft);
-}
-
-/* 行首操作列:危险色删除小按钮,悬停所在行时显现(对齐表浏览器的 row-del)。 */
-.row-action {
-  width: 34px;
-  min-width: 34px;
-  padding: 4px 6px !important;
-  text-align: center;
-}
-.mini-btn {
-  font-size: 10px;
-  line-height: 1;
-  padding: 2px 5px;
-  border-radius: 4px;
-  cursor: pointer;
-  background: transparent;
-  color: var(--danger);
-  border: 1px solid var(--danger);
-}
-.mini-btn.danger:hover:not(:disabled) {
-  background: var(--danger-soft);
-}
-.mini-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-.row-del {
-  opacity: 0;
-  transition: opacity 0.12s ease;
-}
-.result-table tbody tr:hover .row-del {
-  opacity: 1;
-}
-</style>

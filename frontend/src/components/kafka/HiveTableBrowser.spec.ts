@@ -291,14 +291,15 @@ describe('HiveTableBrowser', () => {
   })
 
   it('保持列头横向铺开:表格按内容自然宽度(th 不套弹性布局)', async () => {
-    // 视觉对齐 MysqlTableBrowser 的防挤压契约(经 vitest 静态断言源码样式)。
+    // 视觉对齐 MysqlTableBrowser 的防挤压契约(经 vitest 静态断言源码样式;
+    // M2 Tailwind 化后断言对象从 scoped CSS 改为模板工具类 w-max/min-w-full
+    // 与 col-head 的 whitespace-nowrap)。
     const { readFileSync } = await import('node:fs')
     const { join } = await import('node:path')
     const fileSrc = readFileSync(join(process.cwd(), 'src/components/common/TableDataGrid.vue'), 'utf8')
-    const tableBlock = fileSrc.match(/\.table \{[\s\S]*?\n\}/)?.[0] ?? ''
-    expect(tableBlock).toContain('width: max-content')
-    expect(tableBlock).toContain('min-width: 100%')
-    const headBlock = fileSrc.match(/\.col-head \{[\s\S]*?\n\}/)?.[0] ?? ''
-    expect(headBlock).toContain('white-space: nowrap')
+    const tableTag = fileSrc.match(/<table[^>]*>/)?.[0] ?? ''
+    expect(tableTag).toContain('w-max')
+    expect(tableTag).toContain('min-w-full')
+    expect(fileSrc).toContain('col-head flex flex-col gap-px whitespace-nowrap')
   })
 })

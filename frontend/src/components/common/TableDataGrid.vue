@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, type ComponentPublicInstance } from 'vue'
+import { ArrowDown, ArrowUp, KeyRound, X } from 'lucide-vue-next'
+import { Badge } from '@/components/ui/badge'
 
 // 表数据网格:六种数据源浏览器(MySQL/Postgres/CH/ES/Hive)共用的表格渲染
 // (列头排序/主键角标/字段注释、行首删除按钮、NULL/截断/只读样式、行内编辑
@@ -154,16 +156,26 @@ const emptyColspan = computed(() => props.columns.length + (props.rowActions ? 1
 </script>
 
 <template>
-  <table class="table data-table" :data-test="`${testPrefix}-grid`">
+  <!-- DBX 皮肤:粘性表头 bg-muted、行 hover bg-accent/50、分隔线 border-border;
+       width:max-content 列多时按内容自然宽度横向滚动,min-w-full 列少时铺满。 -->
+  <table class="w-max min-w-full border-collapse text-[13px]" :data-test="`${testPrefix}-grid`">
     <thead>
       <tr>
         <!-- 行首操作列:每行挂删除按钮(悬停行显现)。 -->
-        <th v-if="rowActions" class="row-action" aria-hidden="true"></th>
+        <th
+          v-if="rowActions"
+          class="row-action sticky top-0 z-[1] w-[34px] min-w-[34px] border-b border-border bg-muted px-2 py-1.5 text-center align-middle font-medium select-none"
+          aria-hidden="true"
+        ></th>
         <th
           v-for="(c, ci) in columns"
           :key="c.name"
           :data-test="`${testPrefix}-col`"
-          :class="{ 'th-sort': sortable, 'col-nosort': nosortFirstColumn && ci === 0 }"
+          class="sticky top-0 z-[1] border-b border-border bg-muted px-2.5 py-1.5 text-left align-middle font-medium whitespace-nowrap select-none"
+          :class="[
+            sortable ? 'th-sort cursor-pointer transition-colors hover:bg-accent/60' : '',
+            nosortFirstColumn && ci === 0 ? 'col-nosort cursor-default' : '',
+          ]"
           :tabindex="keyboardSortable ? 0 : undefined"
           :aria-sort="keyboardSortable ? (orderBy === c.name ? (asc ? 'ascending' : 'descending') : 'none') : undefined"
           :title="colTitle(c, ci)"
@@ -172,40 +184,60 @@ const emptyColspan = computed(() => props.columns.length + (props.rowActions ? 1
         >
           <!-- 弹性布局只在内层 div:th 必须保持 table-cell,否则脱离
                表格列布局,WebKit 会把整行列头堆进一个匿名单元格。 -->
-          <div class="col-head">
-            <span class="col-name">
+          <div class="col-head flex flex-col gap-px whitespace-nowrap">
+            <span class="col-name flex items-center gap-1 font-semibold text-foreground">
               <span :data-test="`${testPrefix}-col-name`">{{ c.name }}</span>
-              <!-- 主键角标:后端 is_in_primary_key 标记。 -->
-              <span v-if="showPkBadge && c.is_in_primary_key" class="pk-badge" :data-test="`${testPrefix}-pk-badge`" title="主键">🔑</span>
-              <span v-if="orderBy === c.name" class="col-arrow">{{ asc ? '↑' : '↓' }}</span>
+              <!-- 主键角标:后端 is_in_primary_key 标记,lucide 钥匙小徽章。 -->
+              <Badge
+                v-if="showPkBadge && c.is_in_primary_key"
+                variant="outline"
+                class="pk-badge border-warning/40 bg-warning/10 px-1 py-0 text-warning"
+                :data-test="`${testPrefix}-pk-badge`"
+                title="主键"
+              >
+                <KeyRound class="size-3" />
+              </Badge>
+              <span v-if="orderBy === c.name" class="col-arrow inline-flex text-primary">
+                <ArrowUp v-if="asc" class="size-3" />
+                <ArrowDown v-else class="size-3" />
+              </span>
             </span>
-            <span class="col-type" :data-test="`${testPrefix}-col-type`">{{ c.type }}</span>
-            <span v-if="showColComment && c.comment" class="col-comment" :data-test="`${testPrefix}-col-comment`">{{ c.comment }}</span>
+            <span class="col-type font-mono text-[10px] font-normal text-muted-foreground" :data-test="`${testPrefix}-col-type`">{{ c.type }}</span>
+            <span v-if="showColComment && c.comment" class="col-comment max-w-[200px] truncate text-[10px] text-muted-foreground/80" :data-test="`${testPrefix}-col-comment`">{{ c.comment }}</span>
           </div>
         </th>
       </tr>
     </thead>
     <tbody>
-      <tr v-for="(row, ri) in rows" :key="ri" :data-test="`${testPrefix}-row`">
+      <tr
+        v-for="(row, ri) in rows"
+        :key="ri"
+        :data-test="`${testPrefix}-row`"
+        class="group border-b border-border transition-colors last:border-b-0 hover:bg-accent/50 data-[state=selected]:bg-accent"
+      >
         <!-- 行首删除:危险色小按钮,不可用时禁用并以 title 说明原因。 -->
-        <td v-if="rowActions" class="row-action">
+        <td v-if="rowActions" class="row-action px-2 py-1 text-center align-middle">
           <button
             v-if="rowDeleteButton"
-            class="mini-btn danger row-del"
+            class="row-del inline-flex size-5 items-center justify-center rounded-sm border border-destructive/50 bg-transparent text-destructive opacity-0 transition-opacity hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-40 group-hover:opacity-100"
             type="button"
             data-test="btn-row-delete"
             :disabled="!rowActionEnabled"
             :title="rowActionEnabled ? '删除此行' : '结果无主键,无法定位行'"
             @click="emit('row-delete', ri)"
           >
-            ✕
+            <X class="size-3" />
           </button>
         </td>
         <td
           v-for="(cell, ci) in row"
           :key="ci"
-          class="mono cell"
-          :class="{ 'cell-null': cell === null && !isEditing(ri, ci), 'cell-trunc': isTruncated(cell), 'cell-readonly': cellReadonly?.(ci) }"
+          class="cell max-w-[420px] break-all px-2.5 py-1 align-middle font-mono"
+          :class="[
+            cell === null && !isEditing(ri, ci) ? 'cell-null italic text-muted-foreground' : '',
+            isTruncated(cell) ? 'cell-trunc text-foreground/70' : '',
+            cellReadonly?.(ci) ? 'cell-readonly cursor-default' : '',
+          ]"
           :title="cellTitle(cell, ci)"
           :tabindex="keyboardEditable && rowActionEnabled ? 0 : undefined"
           :data-test="`${testPrefix}-cell`"
@@ -223,7 +255,7 @@ const emptyColspan = computed(() => props.columns.length + (props.rowActions ? 1
             :ref="focusEditor"
             :value="editValue"
             :rows="editorRows"
-            class="cell-editor"
+            class="cell-editor block w-full min-w-[80px] resize-none overflow-y-auto rounded-[4px] border border-primary/40 bg-background px-1.5 py-0.5 font-mono text-[13px] leading-normal text-foreground outline-none ring-2 ring-primary/15"
             :data-test="`${testPrefix}-cell-editor`"
             spellcheck="false"
             autocapitalize="off"
@@ -238,7 +270,7 @@ const emptyColspan = computed(() => props.columns.length + (props.rowActions ? 1
             v-else-if="isEditing(ri, ci)"
             :ref="focusEditor"
             :value="editValue"
-            class="cell-editor"
+            class="cell-editor w-full min-w-[80px] rounded-[4px] border border-primary/40 bg-background px-1.5 py-0.5 font-mono text-[13px] text-foreground outline-none ring-2 ring-primary/15"
             :data-test="`${testPrefix}-cell-editor`"
             @blur="emit('cancel-edit')"
             @input="onEditorInput"
@@ -252,10 +284,10 @@ const emptyColspan = computed(() => props.columns.length + (props.rowActions ? 1
            loading 期间不渲染,避免首屏闪现;ES 用 #empty 插槽替换文案。 -->
       <tr v-if="rows.length === 0 && !loading">
         <slot name="empty" :colspan="emptyColspan">
-          <td :colspan="emptyColspan" class="empty" :data-test="`${testPrefix}-grid-empty`">
-            <div class="empty-icon">◌</div>
+          <td :colspan="emptyColspan" class="p-7 text-center text-muted-foreground" :data-test="`${testPrefix}-grid-empty`">
+            <div class="empty-icon mb-1.5 text-[26px] leading-none">◌</div>
             <div>该表暂无数据</div>
-            <div class="empty-hint">数据写入后点击「刷新」查看</div>
+            <div class="empty-hint mt-1 text-[11px] text-muted-foreground/80">数据写入后点击「刷新」查看</div>
           </td>
         </slot>
       </tr>
@@ -263,61 +295,3 @@ const emptyColspan = computed(() => props.columns.length + (props.rowActions ? 1
   </table>
 </template>
 
-<style scoped>
-/* 基础表样式(width/border-collapse/th·td 通用属性/hover)走全局 .data-table 基座,
-   这里只保留差异:max-content 宽度、粘性表头、紧凑 padding、斑马纹与单元格编辑。 */
-.table {
-  /* width:max-content:列数多时按内容自然宽度横向滚动,而不是把列头
-     压成竖排文字;min-width:100% 保证列少时仍铺满容器。 */
-  width: max-content; min-width: 100%; font-size: 13px;
-}
-.table th {
-  position: sticky; top: 0; z-index: 1;
-  padding: 7px 10px; user-select: none;
-}
-/* 可排序列头(除 Hive 只读外):指针 + 悬停反馈。 */
-.table th.th-sort { cursor: pointer; transition: background 0.12s ease; }
-.table th.th-sort:hover { background: var(--bg-hover); }
-/* _id 列头不可排序:去掉指针与悬停反馈(ES)。 */
-.table th.col-nosort { cursor: default; }
-.table th.col-nosort:hover { background: var(--bg-subtle); }
-.col-head { display: flex; flex-direction: column; gap: 1px; white-space: nowrap; }
-.col-name { font-weight: 600; display: flex; align-items: center; gap: 4px; }
-/* 主键角标:列名后的小钥匙,悬停提示「主键」。 */
-.pk-badge { font-size: 10px; line-height: 1; }
-.col-type { font-size: 10px; color: var(--text-tertiary); font-family: var(--mono); font-weight: 400; }
-.col-arrow { color: var(--accent); font-size: 11px; }
-/* 第三行:字段描述(comment),灰色小字;超长省略,悬停 title 已含全文。 */
-.col-comment { font-size: 10px; color: var(--text-tertiary); max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
-.table tbody tr:nth-child(even) td { background: var(--zebra); }
-.table td { padding: 5px 10px; word-break: break-all; max-width: 420px; }
-.cell-null { color: var(--text-tertiary); font-style: italic; }
-.cell-trunc { color: var(--text-secondary); }
-/* 只读单元格:不出现文本光标,提示走 title。 */
-.cell-readonly { cursor: default; }
-/* 行首操作列:危险色删除小按钮,悬停所在行时显现。 */
-.table .row-action { width: 34px; padding: 4px 8px; text-align: center; }
-.mini-btn {
-  flex: none; font-size: 10px; line-height: 1;
-  padding: 2px 5px; border-radius: 4px; cursor: pointer;
-  background: transparent; color: var(--danger); border: 1px solid var(--danger);
-}
-.mini-btn.danger:hover:not(:disabled) { background: var(--danger-soft); }
-.mini-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-.row-del { opacity: 0; transition: opacity 0.12s ease; }
-.table tbody tr:hover .row-del { opacity: 1; }
-/* 行内编辑输入框:覆盖单元格内容,细边框紧凑,与表格行高一致;
-   textarea 随内容多行(ES),细边框一致。 */
-.cell-editor {
-  box-sizing: border-box; width: 100%; min-width: 80px;
-  background: var(--bg-elevated); color: var(--text);
-  border: 1px solid var(--accent); border-radius: 4px;
-  padding: 1px 6px; font-size: 13px; font-family: var(--mono);
-}
-textarea.cell-editor { display: block; line-height: 1.5; resize: none; overflow-y: auto; }
-.cell-editor:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-soft); }
-.mono { font-family: var(--mono); }
-.empty { text-align: center; color: var(--text-tertiary); padding: 28px 24px; }
-.empty-icon { font-size: 26px; margin-bottom: 6px; }
-.empty-hint { font-size: 11px; margin-top: 4px; color: var(--text-tertiary); }
-</style>

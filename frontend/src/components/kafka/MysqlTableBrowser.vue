@@ -2,6 +2,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import TableDataGrid from '@/components/common/TableDataGrid.vue'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { usePagedTable } from '@/composables/usePagedTable'
 import { useCellEdit } from '@/composables/useCellEdit'
 import { useRowDelete } from '@/composables/useRowDelete'
@@ -322,19 +324,19 @@ async function askDeleteRow(ri: number): Promise<void> {
 </script>
 
 <template>
-  <div class="mysql-browser" data-test="mysql-table-browser">
-    <div class="summary" data-test="mysql-summary">
-      <span class="mono table-name" data-test="mysql-summary-table">{{ props.database }}.{{ props.table }}</span>
-      <span class="sep">·</span>
+  <div class="p-4" data-test="mysql-table-browser">
+    <div class="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground" data-test="mysql-summary">
+      <span class="font-mono font-semibold text-foreground" data-test="mysql-summary-table">{{ props.database }}.{{ props.table }}</span>
+      <span class="text-muted-foreground/60">·</span>
       <span data-test="mysql-summary-engine">{{ engine || '—' }}</span>
-      <span class="sep">·</span>
-      <span data-test="mysql-summary-rows">≈ {{ totalRows.toLocaleString() }} 行</span>
+      <span class="text-muted-foreground/60">·</span>
+      <span class="tabular-nums" data-test="mysql-summary-rows">≈ {{ totalRows.toLocaleString() }} 行</span>
     </div>
 
-    <div class="toolbar">
-      <input
-        v-model="where"
-        class="where-input"
+    <div class="mt-2.5 flex flex-wrap items-center gap-2">
+      <Input
+        :value="where"
+        class="h-8 min-w-[220px] max-w-[420px] flex-1 bg-background text-[13px]"
         type="search"
         data-test="mysql-where"
         placeholder="WHERE 条件,如 age > 18"
@@ -342,34 +344,35 @@ async function askDeleteRow(ri: number): Promise<void> {
         autocorrect="off"
         autocomplete="off"
         spellcheck="false"
+        @input="where = ($event.target as HTMLInputElement).value"
         @keydown.enter="applyWhere"
       />
-      <button class="btn ghost" type="button" data-test="btn-mysql-apply" :disabled="loading" @click="applyWhere">过滤</button>
-      <button class="btn ghost" type="button" data-test="btn-mysql-refresh" :disabled="loading" @click="refresh">
+      <Button variant="ghost" size="sm" class="text-xs" data-test="btn-mysql-apply" :disabled="loading" @click="applyWhere">过滤</Button>
+      <Button variant="ghost" size="sm" class="text-xs" data-test="btn-mysql-refresh" :disabled="loading" @click="refresh">
         {{ loading ? '加载中…' : '刷新' }}
-      </button>
-      <button class="btn ghost danger" type="button" data-test="btn-mysql-truncate" @click="confirmTruncate = true">清空数据</button>
+      </Button>
+      <Button variant="ghost" size="sm" class="text-xs text-destructive hover:text-destructive" data-test="btn-mysql-truncate" @click="confirmTruncate = true">清空数据</Button>
     </div>
 
-    <div v-if="error || cuError || delError" class="msg err" data-test="mysql-error">{{ error || cuError || delError }}</div>
+    <div v-if="error || cuError || delError" class="mt-2 rounded-md bg-destructive/10 px-2.5 py-1.5 text-[13px] text-destructive" data-test="mysql-error">{{ error || cuError || delError }}</div>
 
-    <div v-if="columns.length > 0 && rows.length === 0 && !loading" class="table-wrap">
-      <div class="fields-panel" data-test="mysql-fields-panel">
-        <div class="fields-title" data-test="mysql-fields-title">表结构(共 {{ columns.length }} 字段)</div>
-        <div v-for="c in columns" :key="c.name" class="fields-row" data-test="mysql-field-row">
-          <span class="field-name" data-test="mysql-field-name">{{ c.name }}</span>
-          <span class="field-type" data-test="mysql-field-type">{{ c.type }}</span>
-          <span v-if="c.comment" class="field-comment" data-test="mysql-field-comment">{{ c.comment }}</span>
+    <div v-if="columns.length > 0 && rows.length === 0 && !loading" class="mt-2.5 max-h-[calc(100vh-320px)] overflow-auto rounded-lg border border-border bg-card">
+      <div class="px-0 pb-1" data-test="mysql-fields-panel">
+        <div class="border-b border-border px-3 py-2.5 text-xs font-semibold text-muted-foreground" data-test="mysql-fields-title">表结构(共 {{ columns.length }} 字段)</div>
+        <div v-for="c in columns" :key="c.name" class="flex items-baseline gap-2.5 border-b border-border px-3 py-2 last:border-b-0" data-test="mysql-field-row">
+          <span class="font-mono text-[13px] font-semibold text-foreground" data-test="mysql-field-name">{{ c.name }}</span>
+          <span class="shrink-0 rounded-[4px] bg-muted px-1.5 py-px font-mono text-[10px] text-muted-foreground" data-test="mysql-field-type">{{ c.type }}</span>
+          <span v-if="c.comment" class="min-w-0 flex-1 truncate text-xs text-muted-foreground/80" data-test="mysql-field-comment">{{ c.comment }}</span>
         </div>
       </div>
-      <div class="empty" data-test="mysql-grid-empty">
-        <div class="empty-icon">◌</div>
+      <div class="p-7 text-center text-muted-foreground" data-test="mysql-grid-empty">
+        <div class="mb-1.5 text-[26px] leading-none">◌</div>
         <div>该表暂无数据</div>
-        <div class="empty-hint">数据写入后点击「刷新」查看</div>
+        <div class="mt-1 text-[11px] text-muted-foreground/80">数据写入后点击「刷新」查看</div>
       </div>
     </div>
 
-    <div v-else class="table-wrap">
+    <div v-else class="mt-2.5 max-h-[calc(100vh-320px)] overflow-auto rounded-lg border border-border bg-card">
       <!-- 共享表格网格:列头/主键角标/行删除/行内编辑/空态由 TableDataGrid 承担。 -->
       <TableDataGrid
         v-model:edit-value="editValue"
@@ -394,10 +397,10 @@ async function askDeleteRow(ri: number): Promise<void> {
       />
     </div>
 
-    <div class="pager" data-test="mysql-pager">
-      <button class="btn ghost" type="button" data-test="btn-mysql-prev" :disabled="offset === 0 || loading" @click="prevPage">上一页</button>
-      <span class="page-label" data-test="mysql-page-label">第 {{ page }} 页</span>
-      <button class="btn ghost" type="button" data-test="btn-mysql-next" :disabled="rows.length < PAGE_SIZE || loading" @click="nextPage">下一页</button>
+    <div class="mt-2.5 flex items-center gap-2.5" data-test="mysql-pager">
+      <Button variant="ghost" size="sm" class="text-xs" data-test="btn-mysql-prev" :disabled="offset === 0 || loading" @click="prevPage">上一页</Button>
+      <span class="text-xs tabular-nums text-muted-foreground" data-test="mysql-page-label">第 {{ page }} 页</span>
+      <Button variant="ghost" size="sm" class="text-xs" data-test="btn-mysql-next" :disabled="rows.length < PAGE_SIZE || loading" @click="nextPage">下一页</Button>
     </div>
 
     <!-- 清空数据:危险操作,文案含表名与引擎。 -->
@@ -431,54 +434,3 @@ async function askDeleteRow(ri: number): Promise<void> {
   </div>
 </template>
 
-<style scoped>
-.mysql-browser { padding: 16px; color: var(--text); font-family: var(--font); }
-.summary {
-  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
-  padding: 8px 12px;
-  background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 8px;
-  font-size: 12px; color: var(--text-secondary);
-}
-.table-name { font-weight: 600; color: var(--text); }
-.sep { color: var(--text-tertiary); }
-.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
-.where-input {
-  flex: 1; min-width: 220px; max-width: 420px;
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 6px 9px; font-size: 13px;
-}
-.where-input:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--accent-soft); }
-.msg { padding: 8px 10px; font-size: 13px; border-radius: 7px; margin-top: 8px; }
-.msg.err { background: var(--danger-soft); color: var(--danger); }
-.table-wrap {
-  margin-top: 10px; overflow: auto; max-height: calc(100vh - 320px);
-  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated);
-}
-.mono { font-family: var(--mono); }
-.empty { text-align: center; color: var(--text-tertiary); padding: 28px 24px; }
-.empty-icon { font-size: 26px; margin-bottom: 6px; }
-.empty-hint { font-size: 11px; margin-top: 4px; color: var(--text-tertiary); }
-/* 空表字段结构面板:每字段一行(名称 + 类型徽标 + 可选描述)。 */
-.fields-panel { padding: 0 0 4px; }
-.fields-title {
-  padding: 10px 12px; font-size: 12px; font-weight: 600;
-  color: var(--text-secondary); border-bottom: 1px solid var(--border);
-}
-.fields-row {
-  display: flex; align-items: baseline; gap: 10px;
-  padding: 8px 12px; border-bottom: 1px solid var(--border);
-}
-.fields-row:last-child { border-bottom: none; }
-.field-name { font-weight: 600; font-family: var(--mono); font-size: 13px; color: var(--text); }
-.field-type {
-  flex: none; font-size: 10px; font-family: var(--mono);
-  background: var(--bg-hover); border-radius: 4px; padding: 1px 5px;
-  color: var(--text-secondary);
-}
-.field-comment {
-  flex: 1; min-width: 0; font-size: 12px; color: var(--text-tertiary);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.pager { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-.page-label { font-size: 12px; color: var(--text-secondary); }
-</style>

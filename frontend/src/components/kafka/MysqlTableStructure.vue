@@ -4,8 +4,11 @@
 // 移除列」的 diff 保存;主键列只读(改主键请用 DDL)。SQL 一律由后端拼装,
 // 这里只传结构化 MysqlColumnDef。
 import { computed, ref, watch } from 'vue'
+import { KeyRound, X } from 'lucide-vue-next'
 import { getApi } from '@/api/client'
 import type { MysqlColumnDef, MysqlTableColumn } from '@/api/types'
+import { Button } from '@/components/ui/button'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 const props = defineProps<{ show: boolean; connectionId: string; database: string; table: string }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -212,182 +215,143 @@ function close(): void {
 
 <template>
   <Teleport to="body">
-    <div v-if="show" class="ms-backdrop" data-test="mysql-structure-dialog" @click.self="close">
-      <div class="ms-modal">
-        <div class="ms-header">
-          <span class="ms-title">编辑表字段</span>
-          <span class="ms-table" :title="`${database}.${table}`">{{ database }}.{{ table }}</span>
-          <button class="ms-close" type="button" data-test="btn-structure-close" @click="close">✕</button>
+    <div v-if="show" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 backdrop-blur-[2px]" data-test="mysql-structure-dialog" @click.self="close">
+      <div class="flex max-h-[calc(100vh-96px)] w-[min(880px,calc(100vw-64px))] flex-col gap-2.5 overflow-hidden rounded-xl border border-border bg-card p-4 text-foreground shadow-xl">
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-semibold">编辑表字段</span>
+          <span class="min-w-0 flex-1 truncate text-xs whitespace-nowrap text-muted-foreground" :title="`${database}.${table}`">{{ database }}.{{ table }}</span>
+          <Button variant="ghost" size="sm" class="size-6 p-0 text-muted-foreground hover:text-foreground" type="button" data-test="btn-structure-close" @click="close">
+            <X class="size-3.5" />
+          </Button>
         </div>
 
-        <div v-if="loading" class="ms-hint" data-test="structure-loading">加载中…</div>
-        <div v-else-if="loadError" class="ms-error" data-test="structure-load-error">
+        <div v-if="loading" class="py-3 text-xs text-muted-foreground" data-test="structure-loading">加载中…</div>
+        <div v-else-if="loadError" class="flex items-center gap-2 text-xs text-destructive" data-test="structure-load-error">
           <span>{{ loadError }}</span>
-          <button class="btn ghost" type="button" data-test="btn-structure-retry" @click="load">重试</button>
+          <Button variant="ghost" size="sm" class="h-7 text-xs" type="button" data-test="btn-structure-retry" @click="load">重试</Button>
         </div>
         <template v-else>
-          <div class="ms-toolbar">
-            <button class="btn ghost" type="button" data-test="btn-add-column" @click="openAddForm">＋ 新增列</button>
-            <span class="ms-note">主键列只读,主键请用 DDL 调整;修改列不支持改名。默认值留空时请按需选择:勾选 NULL = 无默认值(NULL),取消勾选后留空 = 空字符串('')。</span>
+          <div class="flex items-center gap-2.5">
+            <Button variant="ghost" size="sm" class="h-7 text-xs" type="button" data-test="btn-add-column" @click="openAddForm">＋ 新增列</Button>
+            <span class="text-[11px] text-muted-foreground/80">主键列只读,主键请用 DDL 调整;修改列不支持改名。默认值留空时请按需选择:勾选 NULL = 无默认值(NULL),取消勾选后留空 = 空字符串('')。</span>
           </div>
 
           <!-- 新增列表单:确认后作为一行未保存列进入表格。 -->
-          <div v-if="addForm" class="ms-add-form" data-test="structure-add-form">
-            <input v-model="addForm.name" class="input" type="text" placeholder="列名" data-test="add-name" />
-            <input v-model="addForm.columnType" class="input" type="text" placeholder="类型,如 varchar(64)" data-test="add-type" />
-            <input v-model="addForm.defaultValue" class="input" type="text" placeholder="默认值" :disabled="addForm.noDefault" data-test="add-default" />
-            <label class="ms-check" title="勾选 = 无默认值(NULL);取消勾选后留空 = 空字符串('')">
-              <input v-model="addForm.noDefault" type="checkbox" data-test="add-no-default" />无默认值
+          <div v-if="addForm" class="flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-muted/50 p-2" data-test="structure-add-form">
+            <input v-model="addForm.name" class="h-7 w-[130px] rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus:border-ring focus:ring-[3px] focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50" type="text" placeholder="列名" data-test="add-name" />
+            <input v-model="addForm.columnType" class="h-7 w-[130px] rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus:border-ring focus:ring-[3px] focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50" type="text" placeholder="类型,如 varchar(64)" data-test="add-type" />
+            <input v-model="addForm.defaultValue" class="h-7 w-[130px] rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus:border-ring focus:ring-[3px] focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50" type="text" placeholder="默认值" :disabled="addForm.noDefault" data-test="add-default" />
+            <label class="flex cursor-pointer items-center gap-1 text-[11px] text-muted-foreground" title="勾选 = 无默认值(NULL);取消勾选后留空 = 空字符串('')">
+              <input v-model="addForm.noDefault" type="checkbox" data-test="add-no-default" class="accent-primary" />无默认值
             </label>
-            <input v-model="addForm.comment" class="input" type="text" placeholder="注释" data-test="add-comment" />
-            <label class="ms-select">
+            <input v-model="addForm.comment" class="h-7 w-[130px] rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus:border-ring focus:ring-[3px] focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50" type="text" placeholder="注释" data-test="add-comment" />
+            <label class="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
               位置
-              <select v-model="addForm.after" class="input" data-test="add-after">
+              <select v-model="addForm.after" class="h-7 w-[150px] rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/30" data-test="add-after">
                 <option value="">(表尾)</option>
                 <option v-for="n in existingNames" :key="n" :value="n">AFTER {{ n }}</option>
               </select>
             </label>
-            <label class="ms-check"><input v-model="addForm.nullable" type="checkbox" data-test="add-nullable" />可空</label>
-            <label class="ms-check"><input v-model="addForm.autoIncrement" type="checkbox" data-test="add-auto-increment" />自增</label>
-            <button class="btn primary" type="button" data-test="btn-confirm-add-column" :disabled="!addForm.name.trim() || !addForm.columnType.trim()" @click="confirmAdd">添加</button>
-            <button class="btn ghost" type="button" data-test="btn-cancel-add-column" @click="addForm = null">取消</button>
+            <label class="flex cursor-pointer items-center gap-1 text-[11px] text-muted-foreground"><input v-model="addForm.nullable" type="checkbox" data-test="add-nullable" class="accent-primary" />可空</label>
+            <label class="flex cursor-pointer items-center gap-1 text-[11px] text-muted-foreground"><input v-model="addForm.autoIncrement" type="checkbox" data-test="add-auto-increment" class="accent-primary" />自增</label>
+            <Button variant="default" size="sm" class="h-7 text-xs" type="button" data-test="btn-confirm-add-column" :disabled="!addForm.name.trim() || !addForm.columnType.trim()" @click="confirmAdd">添加</Button>
+            <Button variant="ghost" size="sm" class="h-7 text-xs" type="button" data-test="btn-cancel-add-column" @click="addForm = null">取消</Button>
           </div>
 
-          <div class="ms-table-wrap">
-            <table class="ms-grid">
-              <thead>
-                <tr>
-                  <th>列名</th>
-                  <th>类型</th>
-                  <th>可空</th>
-                  <th>默认值</th>
-                  <th>注释</th>
-                  <th>自增</th>
-                  <th>主键</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
+          <!-- 列信息表:ui/table 系列承载(粘性表头用 bg-card 保列底不透)。 -->
+          <div class="max-h-[45vh] overflow-auto rounded-md border border-border">
+            <Table class="text-xs">
+              <TableHeader>
+                <TableRow class="hover:bg-transparent">
+                  <TableHead class="sticky top-0 z-[1] h-8 bg-card px-2 text-xs font-medium text-muted-foreground">列名</TableHead>
+                  <TableHead class="sticky top-0 z-[1] h-8 bg-card px-2 text-xs font-medium text-muted-foreground">类型</TableHead>
+                  <TableHead class="sticky top-0 z-[1] h-8 bg-card px-2 text-xs font-medium text-muted-foreground">可空</TableHead>
+                  <TableHead class="sticky top-0 z-[1] h-8 bg-card px-2 text-xs font-medium text-muted-foreground">默认值</TableHead>
+                  <TableHead class="sticky top-0 z-[1] h-8 bg-card px-2 text-xs font-medium text-muted-foreground">注释</TableHead>
+                  <TableHead class="sticky top-0 z-[1] h-8 bg-card px-2 text-xs font-medium text-muted-foreground">自增</TableHead>
+                  <TableHead class="sticky top-0 z-[1] h-8 bg-card px-2 text-xs font-medium text-muted-foreground">主键</TableHead>
+                  <TableHead class="sticky top-0 z-[1] h-8 bg-card px-2 text-xs font-medium text-muted-foreground">操作</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow
                   v-for="row in rows"
                   :key="`${row.isNew ? 'new:' : ''}${row.name}`"
-                  :class="{ 'row-drop': row.toDrop, 'row-new': row.isNew }"
+                  class="[&>td]:py-1 [&>td:first-child]:whitespace-nowrap"
+                  :class="[
+                    row.toDrop ? 'row-drop opacity-55 [&>td:first-child]:line-through' : '',
+                    row.isNew ? 'row-new bg-primary/5 hover:bg-primary/5' : '',
+                  ]"
                   data-test="structure-column-row"
                 >
-                  <td>
-                    <input v-if="row.isNew" v-model="row.name" class="input cell" type="text" data-test="column-name" />
-                    <template v-else><span data-test="column-name">{{ row.name }}</span></template>
-                  </td>
-                  <td><input v-model="row.columnType" class="input cell" type="text" :disabled="!row.isNew && row.isPrimaryKey" data-test="column-type" @input="row.dirty = true" /></td>
-                  <td><input v-model="row.nullable" type="checkbox" :disabled="(!row.isNew && row.isPrimaryKey) || row.toDrop" data-test="column-nullable" @change="row.dirty = true" /></td>
-                  <td>
-                    <div class="ms-default">
+                  <TableCell class="px-2 align-middle">
+                    <input v-if="row.isNew" v-model="row.name" class="h-7 w-full min-w-[110px] rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none transition-[color,box-shadow] focus:border-ring focus:ring-[3px] focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50" type="text" data-test="column-name" />
+                    <template v-else><span class="font-mono text-xs" data-test="column-name">{{ row.name }}</span></template>
+                  </TableCell>
+                  <TableCell class="px-2 align-middle">
+                    <input v-model="row.columnType" class="h-7 w-full min-w-[110px] rounded-md border border-input bg-transparent px-2 font-mono text-xs text-foreground outline-none transition-[color,box-shadow] focus:border-ring focus:ring-[3px] focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50" type="text" :disabled="!row.isNew && row.isPrimaryKey" data-test="column-type" @input="row.dirty = true" />
+                  </TableCell>
+                  <TableCell class="px-2 align-middle">
+                    <input v-model="row.nullable" type="checkbox" class="accent-primary disabled:cursor-not-allowed disabled:opacity-50" :disabled="(!row.isNew && row.isPrimaryKey) || row.toDrop" data-test="column-nullable" @change="row.dirty = true" />
+                  </TableCell>
+                  <TableCell class="px-2 align-middle">
+                    <div class="flex items-center gap-1.5">
                       <input
                         v-model="row.defaultValue"
-                        class="input cell"
+                        class="h-7 min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 font-mono text-xs text-foreground outline-none transition-[color,box-shadow] placeholder:text-muted-foreground/70 focus:border-ring focus:ring-[3px] focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50"
                         type="text"
                         :placeholder="row.noDefault ? 'NULL' : '(留空 = 空字符串)'"
                         :disabled="(!row.isNew && row.isPrimaryKey) || row.toDrop || row.noDefault"
                         data-test="column-default"
                         @input="row.dirty = true"
                       />
-                      <label class="ms-check ms-check-cell" title="勾选 = 无默认值(NULL);取消勾选后输入框留空 = 空字符串('')">
+                      <label class="flex cursor-pointer items-center gap-1 whitespace-nowrap text-[10px] text-muted-foreground" title="勾选 = 无默认值(NULL);取消勾选后输入框留空 = 空字符串('')">
                         <input
                           v-model="row.noDefault"
                           type="checkbox"
+                          class="accent-primary disabled:cursor-not-allowed disabled:opacity-50"
                           :disabled="(!row.isNew && row.isPrimaryKey) || row.toDrop"
                           data-test="column-no-default"
                           @change="row.dirty = true"
                         />NULL
                       </label>
                     </div>
-                  </td>
-                  <td><input v-model="row.comment" class="input cell" type="text" :disabled="(!row.isNew && row.isPrimaryKey) || row.toDrop" data-test="column-comment" @input="row.dirty = true" /></td>
-                  <td><input v-model="row.autoIncrement" type="checkbox" :disabled="!row.isNew" data-test="column-auto-increment" /></td>
-                  <td><span v-if="row.isPrimaryKey" class="ms-pk" title="主键列">🔑</span></td>
-                  <td>
-                    <button v-if="!row.isNew" class="ms-drop" type="button" data-test="btn-drop-column" :disabled="row.isPrimaryKey" :title="row.isPrimaryKey ? '主键列不支持在此删除' : undefined" @click="removeRow(row)">
+                  </TableCell>
+                  <TableCell class="px-2 align-middle">
+                    <input v-model="row.comment" class="h-7 w-full min-w-[110px] rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none transition-[color,box-shadow] focus:border-ring focus:ring-[3px] focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50" type="text" :disabled="(!row.isNew && row.isPrimaryKey) || row.toDrop" data-test="column-comment" @input="row.dirty = true" />
+                  </TableCell>
+                  <TableCell class="px-2 align-middle">
+                    <input v-model="row.autoIncrement" type="checkbox" class="accent-primary disabled:cursor-not-allowed disabled:opacity-50" :disabled="!row.isNew" data-test="column-auto-increment" />
+                  </TableCell>
+                  <TableCell class="px-2 align-middle">
+                    <KeyRound v-if="row.isPrimaryKey" class="size-3 text-warning" title="主键列" />
+                  </TableCell>
+                  <TableCell class="px-2 align-middle">
+                    <Button v-if="!row.isNew" variant="ghost" size="sm" class="h-6 rounded-sm border border-border px-2 text-[11px] text-muted-foreground hover:bg-destructive/10 hover:text-destructive" type="button" data-test="btn-drop-column" :disabled="row.isPrimaryKey" :title="row.isPrimaryKey ? '主键列不支持在此删除' : undefined" @click="removeRow(row)">
                       {{ row.toDrop ? '撤销' : '移除' }}
-                    </button>
-                    <button v-else class="ms-drop" type="button" data-test="btn-remove-new-column" @click="removeRow(row)">移除</button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+                    </Button>
+                    <Button v-else variant="ghost" size="sm" class="h-6 rounded-sm border border-border px-2 text-[11px] text-muted-foreground hover:bg-destructive/10 hover:text-destructive" type="button" data-test="btn-remove-new-column" @click="removeRow(row)">移除</Button>
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
           </div>
 
-          <div v-if="saveError" class="ms-error" data-test="structure-save-error">{{ saveError }}</div>
-          <div v-if="savedTip" class="ms-saved" data-test="structure-saved">表结构已更新</div>
+          <div v-if="saveError" class="flex items-center gap-2 text-xs text-destructive" data-test="structure-save-error">{{ saveError }}</div>
+          <div v-if="savedTip" class="text-xs text-success" data-test="structure-saved">表结构已更新</div>
 
-          <div class="ms-actions">
-            <button class="btn ghost" type="button" data-test="btn-toggle-ddl" @click="showDdl = !showDdl">查看 DDL</button>
-            <span class="ms-flex"></span>
-            <button class="btn primary" type="button" data-test="btn-structure-save" :disabled="!hasChanges || saving" @click="save">
+          <div class="flex items-center gap-2">
+            <Button variant="ghost" size="sm" class="h-7 text-xs" type="button" data-test="btn-toggle-ddl" @click="showDdl = !showDdl">查看 DDL</Button>
+            <span class="flex-1"></span>
+            <Button variant="default" size="sm" class="h-7 text-xs" type="button" data-test="btn-structure-save" :disabled="!hasChanges || saving" @click="save">
               {{ saving ? '保存中…' : '保存修改' }}
-            </button>
+            </Button>
           </div>
-          <pre v-if="showDdl" class="ms-ddl" data-test="structure-ddl">{{ ddl || '(无 DDL)' }}</pre>
+          <!-- DDL 块:bg-muted 圆角 + pre 滚动。 -->
+          <pre v-if="showDdl" class="m-0 max-h-[200px] overflow-auto whitespace-pre rounded-md bg-muted p-2.5 font-mono text-[11px] leading-normal text-foreground" data-test="structure-ddl">{{ ddl || '(无 DDL)' }}</pre>
         </template>
       </div>
     </div>
   </Teleport>
 </template>
 
-<style scoped>
-.ms-backdrop {
-  position: fixed; inset: 0; z-index: 100;
-  background: var(--overlay);
-  -webkit-backdrop-filter: blur(2px);
-  backdrop-filter: blur(2px);
-  display: flex; align-items: center; justify-content: center;
-}
-.ms-modal {
-  width: min(880px, calc(100vw - 64px));
-  max-height: calc(100vh - 96px);
-  display: flex; flex-direction: column;
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
-  padding: 16px; gap: 10px; overflow: hidden;
-}
-.ms-header { display: flex; align-items: center; gap: 8px; }
-.ms-title { font-size: 14px; font-weight: 600; }
-.ms-table { font-size: 12px; color: var(--text-secondary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ms-close { background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 14px; padding: 2px 4px; border-radius: 6px; }
-.ms-close:hover { color: var(--text); background: var(--bg-hover); }
-.ms-toolbar { display: flex; align-items: center; gap: 10px; }
-.ms-note { font-size: 11px; color: var(--text-tertiary); }
-.ms-add-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-subtle); }
-.ms-add-form .input { width: 130px; }
-.ms-select { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--text-secondary); }
-.ms-select .input { width: 150px; }
-.ms-check { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--text-secondary); }
-.ms-table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 8px; max-height: 45vh; }
-.ms-grid { width: 100%; border-collapse: collapse; font-size: 12px; }
-.ms-grid th { text-align: left; padding: 6px 8px; color: var(--text-tertiary); font-weight: 500; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg-elevated); white-space: nowrap; }
-.ms-grid td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-.ms-grid tr:last-child td { border-bottom: none; }
-.input.cell { padding: 3px 7px; font-size: 12px; }
-.input.cell:disabled { opacity: 0.55; cursor: not-allowed; }
-.ms-default { display: flex; align-items: center; gap: 5px; }
-.ms-default .input.cell { flex: 1; min-width: 0; width: auto; }
-.ms-check-cell { white-space: nowrap; font-size: 10px; color: var(--text-tertiary); }
-.row-drop { opacity: 0.55; }
-.row-drop td:first-child { text-decoration: line-through; }
-.row-new td { background: var(--accent-soft); }
-.ms-pk { cursor: default; }
-.ms-drop { background: none; border: 1px solid var(--border-strong); color: var(--text-secondary); font-size: 11px; border-radius: 6px; padding: 1px 8px; cursor: pointer; }
-.ms-drop:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
-.ms-drop:disabled { opacity: 0.5; cursor: not-allowed; }
-.ms-hint { color: var(--text-secondary); font-size: 12px; padding: 12px 0; }
-.ms-error { color: var(--danger); font-size: 12px; display: flex; align-items: center; gap: 8px; }
-.ms-saved { color: var(--ok); font-size: 12px; }
-.ms-actions { display: flex; align-items: center; gap: 8px; }
-.ms-flex { flex: 1; }
-.ms-ddl {
-  margin: 0; padding: 10px; font-family: var(--mono); font-size: 11px; line-height: 1.5;
-  background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 8px;
-  max-height: 200px; overflow: auto; white-space: pre; color: var(--text);
-}
-/* 基座走全局 .btn;结构面板按钮为小号(局部修饰)。 */
-.btn { padding: 4px 12px; font-size: 12px; }
-</style>

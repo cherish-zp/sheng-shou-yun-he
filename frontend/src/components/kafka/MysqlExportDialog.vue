@@ -4,10 +4,13 @@
 // 上限,确认后才真正调用 mysqlExportTable 并经 saveFile 存盘。
 // checkbox/radio 选择持久化到 localStorage(data_limit 不持久化)。
 import { computed, ref, watch } from 'vue'
+import { X } from 'lucide-vue-next'
 import { getApi } from '@/api/client'
 import type { MysqlExportTableRequest } from '@/api/types'
 import { saveFile } from '@/utils/export'
 import { useToastStore } from '@/store/toast'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 
 const props = defineProps<{ show: boolean; connectionId: string; database: string; table: string }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -155,85 +158,61 @@ async function doExport(): Promise<void> {
 
 <template>
   <Teleport to="body">
-    <div v-if="show" class="me-backdrop" data-test="mysql-export-dialog" @click.self="tryClose">
-      <div class="me-modal">
-        <div class="me-header">
-          <span class="me-title">导出表</span>
-          <span class="me-sub" :title="`${database}.${table}`">{{ database }}.{{ table }}</span>
-          <button class="me-close" type="button" data-test="btn-export-close" :disabled="busy" @click="tryClose">✕</button>
+    <div v-if="show" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 backdrop-blur-[2px]" data-test="mysql-export-dialog" @click.self="tryClose">
+      <div class="flex max-h-[calc(100vh-96px)] w-[min(420px,calc(100vw-64px))] flex-col gap-3 overflow-auto rounded-xl border border-border bg-card p-4 text-foreground shadow-xl">
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-semibold">导出表</span>
+          <span class="min-w-0 flex-1 truncate text-xs whitespace-nowrap text-muted-foreground" :title="`${database}.${table}`">{{ database }}.{{ table }}</span>
+          <Button variant="ghost" size="sm" class="size-6 p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50" type="button" data-test="btn-export-close" :disabled="busy" @click="tryClose">
+            <X class="size-3.5" />
+          </Button>
         </div>
 
-        <div class="me-group">
-          <div class="me-group-title">导出内容</div>
-          <label class="me-check"><input v-model="includeDdl" type="checkbox" data-test="export-opt-ddl" :disabled="busy" />表结构 (DDL)</label>
-          <label class="me-check"><input v-model="includeData" type="checkbox" data-test="export-opt-data" :disabled="busy" />表数据 (INSERT)</label>
+        <div class="flex flex-col gap-1.5">
+          <div class="text-[11px] font-semibold text-muted-foreground/80">导出内容</div>
+          <label class="flex cursor-pointer items-center gap-1.5 text-xs text-foreground"><input v-model="includeDdl" type="checkbox" class="accent-primary disabled:cursor-not-allowed" data-test="export-opt-ddl" :disabled="busy" />表结构 (DDL)</label>
+          <label class="flex cursor-pointer items-center gap-1.5 text-xs text-foreground"><input v-model="includeData" type="checkbox" class="accent-primary disabled:cursor-not-allowed" data-test="export-opt-data" :disabled="busy" />表数据 (INSERT)</label>
         </div>
 
-        <div class="me-group">
-          <div class="me-group-title">选项</div>
-          <label class="me-check"><input v-model="includeCreateDb" type="checkbox" data-test="export-opt-create-db" :disabled="busy" />导出建库语句（CREATE DATABASE / USE）</label>
-          <label class="me-check"><input v-model="dropIfExists" type="checkbox" data-test="export-opt-drop" :disabled="busy" />导出前添加 DROP TABLE IF EXISTS</label>
-          <label class="me-check"><input v-model="stripAutoIncrement" type="checkbox" data-test="export-opt-strip-auto-increment" :disabled="busy" />省略 AUTO_INCREMENT 计数</label>
+        <div class="flex flex-col gap-1.5">
+          <div class="text-[11px] font-semibold text-muted-foreground/80">选项</div>
+          <label class="flex cursor-pointer items-center gap-1.5 text-xs text-foreground"><input v-model="includeCreateDb" type="checkbox" class="accent-primary disabled:cursor-not-allowed" data-test="export-opt-create-db" :disabled="busy" />导出建库语句（CREATE DATABASE / USE）</label>
+          <label class="flex cursor-pointer items-center gap-1.5 text-xs text-foreground"><input v-model="dropIfExists" type="checkbox" class="accent-primary disabled:cursor-not-allowed" data-test="export-opt-drop" :disabled="busy" />导出前添加 DROP TABLE IF EXISTS</label>
+          <label class="flex cursor-pointer items-center gap-1.5 text-xs text-foreground"><input v-model="stripAutoIncrement" type="checkbox" class="accent-primary disabled:cursor-not-allowed" data-test="export-opt-strip-auto-increment" :disabled="busy" />省略 AUTO_INCREMENT 计数</label>
         </div>
 
-        <div class="me-group">
-          <div class="me-group-title">INSERT 格式</div>
-          <label class="me-check"><input v-model="insertPerRow" type="radio" name="mysql-insert-format" :value="false" data-test="export-opt-insert-multi" :disabled="busy" />多行合并（每 100 行一条，文件更小）</label>
-          <label class="me-check"><input v-model="insertPerRow" type="radio" name="mysql-insert-format" :value="true" data-test="export-opt-insert-per-row" :disabled="busy" />每行一条 INSERT（文件更大、可单条重放）</label>
+        <div class="flex flex-col gap-1.5">
+          <div class="text-[11px] font-semibold text-muted-foreground/80">INSERT 格式</div>
+          <label class="flex cursor-pointer items-center gap-1.5 text-xs text-foreground"><input v-model="insertPerRow" type="radio" name="mysql-insert-format" :value="false" class="accent-primary disabled:cursor-not-allowed" data-test="export-opt-insert-multi" :disabled="busy" />多行合并（每 100 行一条，文件更小）</label>
+          <label class="flex cursor-pointer items-center gap-1.5 text-xs text-foreground"><input v-model="insertPerRow" type="radio" name="mysql-insert-format" :value="true" class="accent-primary disabled:cursor-not-allowed" data-test="export-opt-insert-per-row" :disabled="busy" />每行一条 INSERT（文件更大、可单条重放）</label>
         </div>
 
-        <div class="me-group">
-          <div class="me-group-title">数据行数上限</div>
-          <input v-model="dataLimitInput" class="input me-limit" type="number" min="0" step="1" placeholder="留空 = 不限制" data-test="export-opt-data-limit" :disabled="busy" />
-          <div v-if="dataLimitInvalid" class="me-limit-error">数据行数上限需为不小于 0 的数字，或留空表示不限制</div>
+        <div class="flex flex-col gap-1.5">
+          <div class="text-[11px] font-semibold text-muted-foreground/80">数据行数上限</div>
+          <Input
+            :value="dataLimitInput"
+            class="h-8 w-40 bg-background text-[13px] tabular-nums"
+            type="number"
+            min="0"
+            step="1"
+            placeholder="留空 = 不限制"
+            data-test="export-opt-data-limit"
+            :disabled="busy"
+            @input="dataLimitInput = ($event.target as HTMLInputElement).value"
+          />
+          <div v-if="dataLimitInvalid" class="text-[11px] text-destructive">数据行数上限需为不小于 0 的数字，或留空表示不限制</div>
         </div>
 
-        <div v-if="errorMsg" class="me-error" data-test="export-error">{{ errorMsg }}</div>
+        <div v-if="errorMsg" class="text-xs text-destructive" data-test="export-error">{{ errorMsg }}</div>
 
-        <div class="me-actions">
-          <span class="me-flex"></span>
-          <button class="btn ghost" type="button" data-test="btn-export-cancel" :disabled="busy" @click="tryClose">取消</button>
-          <button class="btn primary" type="button" data-test="btn-export-confirm" :disabled="!canExport || busy" @click="doExport">
+        <div class="flex items-center gap-2">
+          <span class="flex-1"></span>
+          <Button variant="ghost" size="sm" class="h-7 text-xs" type="button" data-test="btn-export-cancel" :disabled="busy" @click="tryClose">取消</Button>
+          <Button variant="default" size="sm" class="h-7 text-xs" type="button" data-test="btn-export-confirm" :disabled="!canExport || busy" @click="doExport">
             {{ busy ? '导出中…' : '导出' }}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
   </Teleport>
 </template>
-
-<style scoped>
-.me-backdrop {
-  position: fixed; inset: 0; z-index: 100;
-  background: var(--overlay);
-  -webkit-backdrop-filter: blur(2px);
-  backdrop-filter: blur(2px);
-  display: flex; align-items: center; justify-content: center;
-}
-.me-modal {
-  width: min(420px, calc(100vw - 64px));
-  max-height: calc(100vh - 96px);
-  display: flex; flex-direction: column;
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
-  padding: 16px; gap: 12px; overflow: auto;
-}
-.me-header { display: flex; align-items: center; gap: 8px; }
-.me-title { font-size: 14px; font-weight: 600; }
-.me-sub { font-size: 12px; color: var(--text-secondary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.me-close { background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 14px; padding: 2px 4px; border-radius: 6px; }
-.me-close:hover:not(:disabled) { color: var(--text); background: var(--bg-hover); }
-.me-close:disabled { opacity: 0.5; cursor: not-allowed; }
-.me-group { display: flex; flex-direction: column; gap: 6px; }
-.me-group-title { font-size: 11px; color: var(--text-tertiary); font-weight: 600; }
-.me-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); cursor: pointer; }
-.me-check input { cursor: pointer; }
-.me-check input:disabled { cursor: not-allowed; }
-.me-limit { width: 160px; }
-.me-limit-error { font-size: 11px; color: var(--danger); }
-.me-error { color: var(--danger); font-size: 12px; }
-.me-actions { display: flex; align-items: center; gap: 8px; }
-.me-flex { flex: 1; }
-/* 基座走全局 .btn;导出弹窗按钮为小号(局部修饰)。 */
-.btn { padding: 4px 12px; font-size: 12px; }
-</style>

@@ -216,7 +216,9 @@ describe('EsTableBrowser', () => {
     await waitCols(wrapper)
     const btn = wrapper.find('[data-test="es-refresh"]')
     expect(btn.exists()).toBe(true)
-    expect(btn.classes()).toContain('ghost')
+    // M2 UI 对齐后按钮由手写 .btn.ghost 换成 ui Button 的 ghost 变体,
+    // 类名断言随之改为 ghost 变体的特征类 hover:bg-accent。
+    expect(btn.classes()).toContain('hover:bg-accent')
     expect(btn.text()).toBe('刷新')
     await btn.trigger('click')
     await vi.waitFor(() => {
@@ -854,11 +856,12 @@ describe('EsTableBrowser', () => {
   it('保持列头横向铺开:表格按内容自然宽度(th 不套弹性布局)', () => {
     // 视觉对齐 MysqlTableBrowser 的防挤压契约:列数多时横向滚动而不是把列头
     // 压成竖排文字;th 保持 table-cell,弹性布局只在内层 div。
+    // (M2 Tailwind 化后 width/nowrap 由 scoped CSS 改为模板工具类,守卫
+    //   断言更新为 table 标签的 w-max/min-w-full 与 col-head 的 nowrap。)
     const fileSrc = readFileSync(join(process.cwd(), 'src/components/common/TableDataGrid.vue'), 'utf8')
-    const tableBlock = fileSrc.match(/\.table \{[\s\S]*?\n\}/)?.[0] ?? ''
-    expect(tableBlock).toContain('width: max-content')
-    expect(tableBlock).toContain('min-width: 100%')
-    const headBlock = fileSrc.match(/\.col-head \{[\s\S]*?\n\}/)?.[0] ?? ''
-    expect(headBlock).toContain('white-space: nowrap')
+    const tableTag = fileSrc.match(/<table[^>]*>/)?.[0] ?? ''
+    expect(tableTag).toContain('w-max')
+    expect(tableTag).toContain('min-w-full')
+    expect(fileSrc).toContain('col-head flex flex-col gap-px whitespace-nowrap')
   })
 })

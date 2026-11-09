@@ -15,79 +15,43 @@ defineProps<{ tabs: ResultTabItem[]; active: number }>()
 const emit = defineEmits<{
   (e: 'select', index: number): void
 }>()
+
+// 状态点配色:status 类名(ok/fail/running/none)保留为测试锚定,配色走
+// 语义 token;running 用 animate-pulse 呼吸提示进行中。
+function dotClass(status: ResultTabItem['status']): string {
+  switch (status) {
+    case 'ok':
+      return 'bg-success'
+    case 'fail':
+      return 'bg-destructive'
+    case 'running':
+      return 'bg-info animate-pulse'
+    default:
+      return 'bg-muted-foreground/50'
+  }
+}
 </script>
 
 <template>
-  <div class="result-tabs" data-test="result-tabs">
+  <!-- DBX 皮肤:active tab bg-accent + border-b-2 border-primary,hover 反馈
+       bg-accent/50;active/状态类名保留为测试锚定。 -->
+  <div class="result-tabs flex flex-none items-stretch gap-0.5 overflow-x-auto border-b border-border px-2 pt-1 [scrollbar-width:thin]" data-test="result-tabs">
     <button
       v-for="(t, i) in tabs"
       :key="i"
       type="button"
-      class="result-tab"
-      :class="{ active: i === active }"
+      class="result-tab inline-flex flex-none items-center gap-1.5 text-xs transition-colors whitespace-nowrap"
+      :class="
+        i === active
+          ? 'active rounded-t-md border-b-2 border-primary bg-accent/60 px-2.5 py-1 font-semibold text-foreground'
+          : 'rounded-t-md border-b-2 border-transparent px-2.5 py-1 text-muted-foreground hover:bg-accent/50 hover:text-foreground'
+      "
       :data-test="`result-tab-${i}`"
       :title="t.title"
       @click="emit('select', i)"
     >
-      <span class="tab-dot" :class="t.status"></span>
-      <span class="tab-label">{{ t.label }}</span>
+      <span class="tab-dot size-[7px] shrink-0 rounded-full" :class="[t.status, dotClass(t.status)]"></span>
+      <span class="min-w-0 overflow-hidden text-ellipsis">{{ t.label }}</span>
     </button>
   </div>
 </template>
-
-<style scoped>
-.result-tabs {
-  flex: none;
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-  padding: 4px 8px 0;
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  scrollbar-width: thin;
-}
-.result-tab {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 220px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-family: var(--font);
-  padding: 5px 10px;
-  cursor: pointer;
-  border-radius: 7px 7px 0 0;
-  border-bottom: 2px solid transparent;
-  transition: background 0.12s ease, color 0.12s ease;
-  white-space: nowrap;
-}
-.result-tab:hover { background: var(--bg-hover); color: var(--text); }
-.result-tab.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-  font-weight: 600;
-}
-.tab-dot {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--text-tertiary);
-  opacity: 0.5;
-}
-.tab-dot.ok { background: var(--ok); opacity: 1; }
-.tab-dot.fail { background: var(--danger); opacity: 1; }
-.tab-dot.running { background: var(--info); opacity: 1; animation: tab-dot-pulse 0.9s ease-in-out infinite; }
-@keyframes tab-dot-pulse {
-  50% { opacity: 0.25; }
-}
-.tab-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-</style>
