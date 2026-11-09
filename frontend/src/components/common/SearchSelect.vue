@@ -100,7 +100,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onOutside))
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 .trigger:hover { background: var(--bg-elevated); }
-.trigger:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.trigger:focus-visible { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--accent-soft); }
 .value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 .caret { color: var(--text-tertiary); font-size: 11px; }
 .panel {
@@ -115,7 +115,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onOutside))
   background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
   border-radius: 6px; padding: 5px 8px; font-size: 12px; line-height: 1.4;
 }
-.search:focus { outline: none; border-color: var(--accent); }
+.search:focus { outline: none; border-color: var(--primary); }
 .options { max-height: 220px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
 .option {
   -webkit-appearance: none; appearance: none;
@@ -128,7 +128,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onOutside))
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .option:hover { background: var(--bg-hover); }
-.option.active { background: var(--accent-soft); color: var(--accent); }
-.option:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+.option.active { background: var(--accent-soft); color: var(--primary); }
+.option:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--primary); }
 .empty { padding: 8px; text-align: center; font-size: 12px; color: var(--text-tertiary); }
 </style>

@@ -117,7 +117,7 @@ const max = computed(() => (points.value.length ? Math.max(...points.value) : nu
         data-test="trend-polyline"
         :points="polylinePoints"
         fill="none"
-        stroke="var(--accent)"
+        stroke="var(--primary)"
         stroke-width="2"
         stroke-linejoin="round"
         stroke-linecap="round"
@@ -143,7 +143,7 @@ const max = computed(() => (points.value.length ? Math.max(...points.value) : nu
   background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
   border-radius: 7px; padding: 4px 8px; font-size: 12px;
 }
-.trend-select:focus { outline: none; border-color: var(--accent); }
+.trend-select:focus { outline: none; border-color: var(--primary); }
 .trend-btn {
   background: transparent; color: var(--text); border: 1px solid var(--border-strong);
   border-radius: 7px; padding: 4px 10px; font-size: 12px; cursor: pointer;

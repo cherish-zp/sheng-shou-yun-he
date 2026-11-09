@@ -49,7 +49,7 @@ watch(
 <template>
   <div
     ref="rootEl"
-    class="ddl-card"
+    class="ddl-card bg-background/95 shadow-lg backdrop-blur-md"
     data-test="ddl-card"
     :style="{ left: `${pos.left}px`, top: `${pos.top}px` }"
   >
@@ -67,6 +67,8 @@ watch(
 </template>
 
 <style scoped>
+/* 玻璃壳(bg-background/95 + backdrop-blur-md + shadow-lg)走模板 Tailwind 类;
+   其余为布局/边框与语义 token 取色。 */
 .ddl-card {
   position: fixed;
   z-index: 60;
@@ -74,15 +76,11 @@ watch(
   max-height: 60vh;
   display: flex;
   flex-direction: column;
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--input);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-md);
   overflow: hidden;
-  font-family: var(--font);
-  color: var(--text);
+  font-family: var(--font-sans);
+  color: var(--foreground);
 }
 .ddl-head {
   display: flex;
@@ -95,8 +93,8 @@ watch(
 .ddl-title {
   font-size: 12px;
   font-weight: 600;
-  color: var(--text-secondary);
-  font-family: var(--mono);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
 }
 .ddl-actions {
   margin-left: auto;
@@ -107,23 +105,23 @@ watch(
 .ddl-copy {
   border: 1px solid var(--border);
   background: transparent;
-  color: var(--text);
+  color: var(--foreground);
   font-size: 12px;
-  font-family: var(--font);
+  font-family: var(--font-sans);
   padding: 2px 8px;
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 .ddl-copy:hover {
-  background: var(--primary-weak);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
   border-color: var(--primary);
   color: var(--primary);
 }
 .ddl-close {
   border: none;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--muted-foreground);
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
@@ -131,20 +129,20 @@ watch(
   border-radius: 5px;
 }
 .ddl-close:hover {
-  background: var(--bg-hover);
-  color: var(--text);
+  background: var(--primary);
+  color: var(--foreground);
 }
 .ddl-state {
   padding: 12px;
   font-size: 13px;
-  color: var(--text-tertiary);
+  color: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
   flex: 1;
   min-height: 0;
 }
 .ddl-state.err {
-  background: var(--danger-soft);
-  color: var(--danger);
-  font-family: var(--mono);
+  background: color-mix(in srgb, var(--destructive) 12%, transparent);
+  color: var(--destructive);
+  font-family: var(--font-mono);
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
@@ -154,12 +152,12 @@ watch(
   margin: 0;
   padding: 10px 12px;
   overflow: auto;
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
-  color: var(--text);
+  color: var(--foreground);
   flex: 1;
   min-height: 0;
 }
