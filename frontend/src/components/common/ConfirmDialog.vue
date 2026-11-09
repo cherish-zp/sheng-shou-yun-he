@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { Button } from '@/components/ui/button'
+
 const props = withDefaults(
   defineProps<{
     show: boolean
@@ -29,53 +31,30 @@ function onConfirm(): void {
        the dialog to the scrolled sidebar box. Teleporting keeps the dialog
        viewport-centered no matter where the delete action was triggered. -->
   <Teleport to="body">
-    <div v-if="show" class="modal-backdrop" data-test="confirm-dialog" @click.self="close">
-      <div class="modal">
-        <div class="modal-header">
-          <span class="modal-title">确认操作</span>
-          <button class="modal-close" type="button" data-test="confirm-dialog-close" @click="close">✕</button>
+    <div v-if="show" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-[2px]" data-test="confirm-dialog" @click.self="close">
+      <div class="flex w-[380px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-lg">
+        <div class="flex items-center justify-between border-b border-border px-[18px] py-3.5">
+          <span class="text-sm font-semibold">确认操作</span>
+          <button class="rounded-md p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" type="button" data-test="confirm-dialog-close" @click="close">✕</button>
         </div>
-        <div class="modal-body">
-          <p class="message" data-test="confirm-dialog-message">{{ message }}</p>
+        <div class="px-[18px] py-[18px]">
+          <p class="m-0 whitespace-pre-wrap break-all text-[13px] leading-relaxed" data-test="confirm-dialog-message">{{ message }}</p>
         </div>
-        <div class="modal-footer">
-          <button class="btn ghost" type="button" data-test="confirm-dialog-cancel" @click="close">取消</button>
-          <button
-            class="btn primary"
-            :class="{ danger }"
+        <div class="flex justify-end gap-2 px-[18px] pb-4">
+          <Button variant="outline" type="button" data-test="confirm-dialog-cancel" @click="close">取消</Button>
+          <!-- danger 类保留:既有 spec 以 classList.contains('danger') 断言确认按钮样式。 -->
+          <Button
+            :variant="props.danger ? 'destructive' : 'default'"
+            :class="{ danger: props.danger }"
             type="button"
             data-test="confirm-dialog-ok"
             :disabled="props.confirmDisabled"
             @click="onConfirm"
           >
             {{ confirmText }}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
   </Teleport>
 </template>
-
-<style scoped>
-/* 遮罩/容器/按钮基座走全局 .modal-backdrop/.modal/.btn;这里只留差异:
-   确认框层级更低、轻模糊,按钮为加大号(9px 圆角、加粗)。 */
-.modal-backdrop {
-  z-index: 100;
-  -webkit-backdrop-filter: blur(2px);
-  backdrop-filter: blur(2px);
-}
-.modal {
-  width: 380px; max-width: calc(100vw - 48px);
-}
-.modal-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 18px; border-bottom: 1px solid var(--border);
-}
-.modal-title { font-size: 14px; font-weight: 600; }
-.modal-close { background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 14px; padding: 2px 4px; border-radius: 6px; }
-.modal-close:hover { color: var(--text); background: var(--bg-hover); }
-.modal-body { padding: 18px; }
-.message { font-size: 13px; color: var(--text); line-height: 1.6; margin: 0; white-space: pre-wrap; word-break: break-all; }
-.modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 0 18px 16px; }
-.btn { border-radius: 9px; padding: 8px 16px; font-weight: 500; }
-</style>

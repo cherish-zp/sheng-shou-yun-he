@@ -123,5 +123,5 @@ function pick(key: string): void {
 .context-separator { height: 1px; background: var(--border); margin: 4px 0; }
 .context-item.danger { color: var(--danger); }
 .context-item.danger:hover { background: var(--danger-soft); }
-.context-item:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+.context-item:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--primary); }
 </style>

@@ -221,12 +221,21 @@ watch([activeIndex, results, open], async () => {
        ancestors would confine position:fixed, and the palette must be able to
        overlay every workspace tab. -->
   <Teleport to="body">
-    <div v-if="open" class="palette-backdrop" data-test="command-palette" @click.self="close">
-      <div class="palette" data-test="palette-panel" @click.stop>
+    <div
+      v-if="open"
+      class="fixed inset-0 z-[1100] flex items-start justify-center bg-black/50 pt-[12vh] backdrop-blur-[2px]"
+      data-test="command-palette"
+      @click.self="close"
+    >
+      <div
+        class="flex max-h-[70vh] w-[560px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-lg"
+        data-test="palette-panel"
+        @click.stop
+      >
         <input
           ref="inputEl"
           v-model="query"
-          class="palette-input"
+          class="w-full border-b border-border bg-transparent px-4 py-3.5 text-[15px] text-foreground outline-none placeholder:text-muted-foreground/70"
           type="text"
           data-test="palette-input"
           placeholder="搜索 Topic / 消费组…"
@@ -236,11 +245,11 @@ watch([activeIndex, results, open], async () => {
           spellcheck="false"
           @keydown="onInputKeydown"
         />
-        <div ref="listEl" class="palette-list">
-          <div v-if="!hasQuery" class="palette-note muted" data-test="palette-empty">输入以搜索 Topic / 消费组</div>
+        <div ref="listEl" class="overflow-y-auto p-1.5">
+          <div v-if="!hasQuery" class="px-2.5 py-1.5 text-xs text-muted-foreground/70" data-test="palette-empty">输入以搜索 Topic / 消费组</div>
           <template v-for="conn in kafkaConns" :key="conn.id">
-            <div v-if="loadingByConn[conn.id]" class="palette-note" data-test="palette-loading">{{ conn.name }} 加载中…</div>
-            <div v-else-if="errorByConn[conn.id]" class="palette-note error" data-test="palette-error">
+            <div v-if="loadingByConn[conn.id]" class="px-2.5 py-1.5 text-xs text-muted-foreground" data-test="palette-loading">{{ conn.name }} 加载中…</div>
+            <div v-else-if="errorByConn[conn.id]" class="px-2.5 py-1.5 text-xs text-destructive" data-test="palette-error">
               {{ conn.name }}：{{ errorByConn[conn.id] }}
             </div>
           </template>
@@ -248,73 +257,26 @@ watch([activeIndex, results, open], async () => {
             <div
               v-for="(item, i) in visibleResults"
               :key="item.key"
-              class="palette-item"
-              :class="{ active: i === activeIndex }"
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-[7px] transition-colors hover:bg-muted"
+              :class="{ 'active bg-accent': i === activeIndex }"
               data-test="palette-item"
               @click="choose(item)"
               @mousemove="cursor = i"
             >
-              <span class="badge" :class="item.kind === 'topic' ? 'badge-topic' : 'badge-group'">
+              <span
+                class="flex-none rounded-[5px] px-[7px] py-px text-[10px] font-semibold tracking-wide"
+                :class="item.kind === 'topic' ? 'bg-info/15 text-info' : 'bg-success/15 text-success'"
+              >
                 {{ item.kind === 'topic' ? 'Topic' : 'Group' }}
               </span>
-              <span class="item-name">{{ item.name }}</span>
-              <span class="item-conn">{{ item.connName }}</span>
+              <span class="item-name min-w-0 flex-1 truncate text-[13px] text-foreground">{{ item.name }}</span>
+              <span class="max-w-[30%] flex-none truncate text-[11px] text-muted-foreground/70">{{ item.connName }}</span>
             </div>
-            <div v-if="visibleResults.length === 0" class="palette-note muted" data-test="palette-empty">无匹配结果</div>
-            <div v-if="remainingCount > 0" class="palette-note muted" data-test="palette-more">还有 {{ remainingCount }} 条…</div>
+            <div v-if="visibleResults.length === 0" class="px-2.5 py-1.5 text-xs text-muted-foreground/70" data-test="palette-empty">无匹配结果</div>
+            <div v-if="remainingCount > 0" class="px-2.5 py-1.5 text-xs text-muted-foreground/70" data-test="palette-more">还有 {{ remainingCount }} 条…</div>
           </template>
         </div>
       </div>
     </div>
   </Teleport>
 </template>
-
-<style scoped>
-.palette-backdrop {
-  /* Sits above every other overlay (drawers 1000, modals 900) so the palette
-     stays visible — and dismissible — even with a drawer or modal open. */
-  position: fixed; inset: 0; z-index: 1100;
-  background: var(--overlay);
-  -webkit-backdrop-filter: blur(2px);
-  backdrop-filter: blur(2px);
-  display: flex; align-items: flex-start; justify-content: center;
-  padding-top: 12vh;
-}
-.palette {
-  width: 560px; max-width: calc(100vw - 48px); max-height: 70vh;
-  display: flex; flex-direction: column;
-  background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
-  overflow: hidden;
-}
-.palette-input {
-  border: none; outline: none; background: transparent; color: var(--text);
-  font-size: 15px; padding: 14px 16px; border-bottom: 1px solid var(--border);
-  font-family: var(--font);
-}
-.palette-input::placeholder { color: var(--text-tertiary); }
-.palette-list { overflow-y: auto; padding: 6px; }
-.palette-note { font-size: 12px; color: var(--text-secondary); padding: 6px 10px; }
-.palette-note.muted { color: var(--text-tertiary); }
-.palette-note.error { color: var(--danger); }
-.palette-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 7px 10px; border-radius: 8px; cursor: pointer;
-  transition: background 0.12s ease;
-}
-.palette-item.active { background: var(--accent-soft); }
-.badge {
-  flex: none; font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
-  padding: 1px 7px; border-radius: 5px;
-}
-.badge-topic { color: var(--info); background: var(--info-soft); }
-.badge-group { color: var(--ok); background: var(--ok-soft); }
-.item-name {
-  flex: 1; min-width: 0; font-size: 13px; color: var(--text);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.item-conn {
-  flex: none; max-width: 30%; font-size: 11px; color: var(--text-tertiary);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-</style>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
+import { Button } from '@/components/ui/button'
 
 const props = withDefaults(
   defineProps<{
@@ -49,15 +50,19 @@ function onKeydown(e: KeyboardEvent): void {
 
 <template>
   <Teleport to="body">
-    <div v-if="show" class="overlay" data-test="prompt-overlay">
-      <div class="dialog" data-test="prompt-dialog">
-        <div class="title" data-test="prompt-title">{{ title }}</div>
-        <label class="field">
-          <span class="label">{{ label }}</span>
+    <!-- 遮罩不负责关闭(与设置面板同一规范):仅按钮与 Esc 取消。 -->
+    <div v-if="show" class="fixed inset-0 z-[1200] flex items-center justify-center bg-black/50" data-test="prompt-overlay">
+      <div
+        class="flex w-[320px] max-w-[calc(100vw-48px)] flex-col gap-3 rounded-lg border border-border bg-background p-4 text-foreground shadow-lg"
+        data-test="prompt-dialog"
+      >
+        <div class="text-sm font-semibold" data-test="prompt-title">{{ title }}</div>
+        <label class="flex flex-col gap-1">
+          <span class="text-xs text-muted-foreground">{{ label }}</span>
           <input
             ref="inputEl"
             v-model="draft"
-            class="input"
+            class="w-full rounded-md border border-input bg-transparent px-3 py-1.5 font-mono text-[13px] shadow-xs outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             type="text"
             data-test="prompt-input"
             autocapitalize="off"
@@ -67,51 +72,14 @@ function onKeydown(e: KeyboardEvent): void {
             @keydown="onKeydown"
           />
         </label>
-        <div v-if="hint" class="hint" data-test="prompt-hint">{{ hint }}</div>
-        <div class="actions">
-          <button class="btn ghost" type="button" data-test="prompt-cancel" @click="emit('cancel')">取消</button>
-          <button class="btn primary" type="button" data-test="prompt-confirm" :disabled="!canConfirm()" @click="confirm">
+        <div v-if="hint" class="text-xs text-muted-foreground/70" data-test="prompt-hint">{{ hint }}</div>
+        <div class="flex justify-end gap-2">
+          <Button variant="outline" size="sm" class="h-8" type="button" data-test="prompt-cancel" @click="emit('cancel')">取消</Button>
+          <Button size="sm" class="h-8" type="button" data-test="prompt-confirm" :disabled="!canConfirm()" @click="confirm">
             {{ confirmText }}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
   </Teleport>
 </template>
-
-<style scoped>
-.overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--overlay);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1200;
-  font-family: var(--font);
-  color: var(--text);
-}
-.dialog {
-  width: 320px;
-  max-width: calc(100vw - 48px);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.title { font-weight: 600; font-size: 14px; }
-.field { display: flex; flex-direction: column; gap: 5px; }
-.label { font-size: 12px; color: var(--text-secondary); }
-.input {
-  background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 6px 9px; font-size: 13px; font-family: var(--mono);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-.input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
-.hint { font-size: 12px; color: var(--text-tertiary); }
-.actions { display: flex; justify-content: flex-end; gap: 8px; }
-</style>
