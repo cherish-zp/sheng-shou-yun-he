@@ -611,6 +611,9 @@ func (s *Service) CHPreviewCellUpdate(ctx context.Context, id, database, table s
 
 // CHUpdateCell 执行单元格更新(危险操作,审计由 app 层落)。
 func (s *Service) CHUpdateCell(ctx context.Context, id, database, table string, set model.CHCellValue, where []model.CHCellValue) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	ch, err := s.ch(ctx, id)
 	if err != nil {
 		return err

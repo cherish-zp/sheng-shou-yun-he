@@ -11,6 +11,8 @@ export function AlterTopicPartitions(arg1:backend.AlterTopicPartitionsRequest):P
 
 export function ApplyUpdate(arg1:backend.ApplyUpdateRequest):Promise<void>;
 
+export function BuildResultXLSX(arg1:backend.BuildResultXLSXRequest):Promise<Array<number>>;
+
 export function CHDeleteRow(arg1:service.CHDeleteRowRequest):Promise<void>;
 
 export function CHExecute(arg1:backend.ExecuteRequest):Promise<Array<model.CHStatementResult>>;
@@ -90,6 +92,8 @@ export function EsDeleteIndex(arg1:backend.EsDeleteIndexRequest):Promise<void>;
 export function EsRefreshIndex(arg1:backend.EsRefreshIndexRequest):Promise<void>;
 
 export function EsUpdateIndexSettings(arg1:backend.EsUpdateIndexSettingsRequest):Promise<void>;
+
+export function GetAppSettings():Promise<backend.AppSettings>;
 
 export function GetConnection(arg1:string):Promise<model.Connection>;
 
@@ -253,23 +257,27 @@ export function ReorderConnections(arg1:Array<string>):Promise<void>;
 
 export function ResetConsumerGroupOffset(arg1:backend.ResetOffsetRequest):Promise<void>;
 
+export function SaveBinaryFile(arg1:backend.SaveBinaryFileRequest):Promise<string>;
+
 export function SaveSavedQuery(arg1:backend.SaveSavedQueryRequest):Promise<model.SavedQuery>;
 
 export function SaveTextFile(arg1:backend.SaveTextFileRequest):Promise<string>;
 
-export function TestCHConnection(arg1:model.ClickHouseConfig):Promise<void>;
+export function SetAppSettings(arg1:backend.SetAppSettingsRequest):Promise<backend.AppSettings>;
 
-export function TestConnection(arg1:model.KafkaConfig):Promise<void>;
+export function TestCHConnection(arg1:backend.TestCHConnectionRequest):Promise<void>;
 
-export function TestESConnection(arg1:model.EsConfig):Promise<void>;
+export function TestConnection(arg1:backend.TestConnectionRequest):Promise<void>;
 
-export function TestHiveConnection(arg1:model.HiveConfig):Promise<void>;
+export function TestESConnection(arg1:backend.TestESConnectionRequest):Promise<void>;
 
-export function TestMysqlConnection(arg1:model.MysqlConfig):Promise<void>;
+export function TestHiveConnection(arg1:backend.TestHiveConnectionRequest):Promise<void>;
 
-export function TestPostgresConnection(arg1:model.PostgresConfig):Promise<void>;
+export function TestMysqlConnection(arg1:backend.TestMysqlConnectionRequest):Promise<void>;
 
-export function TestRedisConnection(arg1:model.RedisConfig):Promise<void>;
+export function TestPostgresConnection(arg1:backend.TestPostgresConnectionRequest):Promise<void>;
+
+export function TestRedisConnection(arg1:backend.TestRedisConnectionRequest):Promise<void>;
 
 export function UpdateConnection(arg1:backend.UpdateConnectionRequest):Promise<model.Connection>;
 

@@ -129,3 +129,9 @@ func stdStatementReturnsRows(stmt string, extra ...string) bool {
 	}
 	return false
 }
+
+// esStatementReturnsRows 把 ES SQL 对齐到 std 判型:ES SQL 语法仅支持查询族,
+// 无方言扩展,走基础关键字集兜底(与其他方言的具名包装保持一致)。
+func esStatementReturnsRows(stmt string) bool {
+	return stdStatementReturnsRows(stmt)
+}

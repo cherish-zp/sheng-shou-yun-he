@@ -31,6 +31,8 @@ import type {
   ActiveConsumer,
   AuditEntry,
   SaveTextFileRequest,
+  SaveBinaryFileRequest,
+  BuildResultXLSXRequest,
   UpdateCheckRequest,
   UpdateCheckResult,
   UpdateDownloadRequest,
@@ -151,6 +153,8 @@ import type {
   EsPutTemplateRequest,
   EsClusterStatsRequest,
   EsClusterStats,
+  AppSettings,
+  SetAppSettingsRequest,
 } from './types'
 
 export interface Api {
@@ -191,6 +195,12 @@ export interface Api {
   produceMessages(req: BatchProduceRequest): Promise<ProduceResult[]>
   listAudit(limit?: number): Promise<AuditEntry[]>
   saveTextFile(req: SaveTextFileRequest): Promise<string>
+  // XLSX 导出系列:后端绑定尚未由 wails generate 生成,可选成员(既有 fake
+  // 零改动);调用方用可选链(?.)访问。buildResultXLSX 的 Go 返回类型是 []byte,
+  // 经 Wails JSON 传输为 base64 字符串(仓内首个 []byte 返回绑定,无 number[]
+  // 先例可循),因此声明为 Promise<string>,前端 atob 解码见 utils/export.ts。
+  buildResultXLSX?(req: BuildResultXLSXRequest): Promise<string>
+  saveBinaryFile?(req: SaveBinaryFileRequest): Promise<string>
   checkUpdate(req: UpdateCheckRequest): Promise<UpdateCheckResult>
   downloadUpdate(req: UpdateDownloadRequest): Promise<void>
   applyUpdate(req: ApplyUpdateRequest): Promise<void>
@@ -311,6 +321,10 @@ export interface Api {
   hiveTableColumns?(req: HiveTableColumnsRequest): Promise<HiveTableColumnsResult>
   hiveAlterTable?(req: HiveAlterTableRequest): Promise<void>
   hiveExportTable?(req: HiveExportTableRequest): Promise<HiveExportTableResult>
+  // 应用级设置(生产安全模式开关):后端绑定尚未由 wails generate 生成,
+  // 声明为可选成员(既有 fake 零改动);调用方用可选链(?.)访问。
+  getAppSettings?(): Promise<AppSettings>
+  setAppSettings?(req: SetAppSettingsRequest): Promise<AppSettings>
 }
 
 // WailsApi 所有方法的统一转发收口:全文件唯一的类型断言集中在这里。
@@ -375,6 +389,8 @@ export class WailsApi implements Api {
   produceMessages = (req: BatchProduceRequest): Promise<ProduceResult[]> => call('ProduceMessages', req)
   listAudit = (limit?: number): Promise<AuditEntry[]> => call('ListAudit', limit ?? 200)
   saveTextFile = (req: SaveTextFileRequest): Promise<string> => call('SaveTextFile', req)
+  buildResultXLSX = (req: BuildResultXLSXRequest): Promise<string> => call('BuildResultXLSX', req)
+  saveBinaryFile = (req: SaveBinaryFileRequest): Promise<string> => call('SaveBinaryFile', req)
   checkUpdate = (req: UpdateCheckRequest): Promise<UpdateCheckResult> => call('CheckUpdate', req)
   downloadUpdate = (req: UpdateDownloadRequest): Promise<void> => call('DownloadUpdate', req)
   applyUpdate = (req: ApplyUpdateRequest): Promise<void> => call('ApplyUpdate', req)
@@ -473,6 +489,8 @@ export class WailsApi implements Api {
   hiveTableColumns = (req: HiveTableColumnsRequest): Promise<HiveTableColumnsResult> => call('HiveTableColumns', req)
   hiveAlterTable = (req: HiveAlterTableRequest): Promise<void> => call('HiveAlterTable', req)
   hiveExportTable = (req: HiveExportTableRequest): Promise<HiveExportTableResult> => call('HiveExportTable', req)
+  getAppSettings = (): Promise<AppSettings> => call('GetAppSettings')
+  setAppSettings = (req: SetAppSettingsRequest): Promise<AppSettings> => call('SetAppSettings', req)
 }
 
 let current: Api = new WailsApi()

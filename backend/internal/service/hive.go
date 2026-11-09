@@ -1262,6 +1262,9 @@ func (s *Service) HivePageRows(ctx context.Context, id, database, table string, 
 // HiveExecute runs a SQL script statement by statement. limit>0 启用服务端
 // 分页(ROW_NUMBER 包装 + COUNT 计数,SHOW 类语句客户端截断)。
 func (s *Service) HiveExecute(ctx context.Context, id, database, sqlText string, limit, offset int) ([]model.HiveStatementResult, error) {
+	if err := s.ensureSQLReadOnlySafe(ctx, sqlText, hiveStatementReturnsRows); err != nil {
+		return nil, err
+	}
 	h, err := s.hive(ctx, id)
 	if err != nil {
 		return nil, err
@@ -1281,6 +1284,9 @@ func (s *Service) HivePreviewCellUpdate(ctx context.Context, id, database, table
 
 // HiveUpdateCell 执行 ACID 单元格更新(危险操作,审计由 app 层落)。
 func (s *Service) HiveUpdateCell(ctx context.Context, id, database, table string, set model.HiveCellRef, where []model.HiveCellRef) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	h, err := s.hive(ctx, id)
 	if err != nil {
 		return err
@@ -1300,6 +1306,9 @@ func (s *Service) HivePreviewDeleteRow(ctx context.Context, id, database, table 
 
 // HiveDeleteRow 执行按条件定位的 DELETE(危险操作,审计由 app 层落)。
 func (s *Service) HiveDeleteRow(ctx context.Context, id, database, table string, where []model.HiveCellRef) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	h, err := s.hive(ctx, id)
 	if err != nil {
 		return err

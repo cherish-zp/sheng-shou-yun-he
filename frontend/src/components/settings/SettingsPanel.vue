@@ -9,6 +9,7 @@ import { useToastStore } from '@/store/toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ (e: 'close'): void; (e: 'check-update'): void }>()
@@ -37,6 +38,40 @@ watch(queryDir, (dir) => setQueryDir(dir))
 
 function resetQueryDir(): void {
   queryDir.value = DEFAULT_QUERY_DIR
+}
+
+// --- 生产安全模式(全局只读) -------------------------------------------------
+// 开关状态在后端 SQLite 落盘:开启后所有改动外部系统状态的写操作被后端拒绝
+// (防误操作的最高保险丝),只读操作不受影响。绑定尚未由 wails generate
+// 生成,经可选链访问,失败时禁用开关并提示。
+
+const readonlyMode = ref(false)
+const readonlyLoading = ref(false)
+const readonlyError = ref(false)
+
+async function loadReadonlyMode(): Promise<void> {
+  readonlyLoading.value = true
+  readonlyError.value = false
+  try {
+    const settings = await getApi().getAppSettings?.()
+    readonlyMode.value = settings?.readonly_mode === true
+  } catch {
+    readonlyError.value = true
+  } finally {
+    readonlyLoading.value = false
+  }
+}
+
+// toggleReadonlyMode 把新开关状态提交后端;失败时回拨开关并 toast 提示,
+// 不做本地乐观持久化(以后端落盘为准)。
+async function toggleReadonlyMode(on: boolean): Promise<void> {
+  try {
+    const settings = await getApi().setAppSettings?.({ readonly_mode: on })
+    readonlyMode.value = settings?.readonly_mode === true
+  } catch (e) {
+    readonlyMode.value = !on
+    toast.show(`保存生产安全模式失败: ${e instanceof Error ? e.message : String(e)}`)
+  }
 }
 
 const AUDIT_LIMIT = 200
@@ -117,6 +152,7 @@ onMounted(() => {
   if (props.show) {
     void loadAudit()
     void loadDrivers()
+    void loadReadonlyMode()
   }
 })
 
@@ -128,6 +164,7 @@ watch(
     if (visible) {
       void loadAudit()
       void loadDrivers()
+      void loadReadonlyMode()
     }
   },
 )
@@ -216,6 +253,24 @@ async function checkForUpdate(): Promise<void> {
                 <Button variant="outline" size="sm" class="h-9 text-xs" data-test="btn-query-dir-reset" @click="resetQueryDir">恢复默认</Button>
               </div>
               <p class="mt-1 text-xs text-muted-foreground/70">SQL 控制台的保存查询将存放为 .sql 文件</p>
+            </div>
+            <div class="mb-3.5" data-test="readonly-section">
+              <div class="flex items-center justify-between">
+                <div class="min-w-0">
+                  <Label class="text-[13px] font-semibold">生产安全</Label>
+                  <p class="mt-0.5 text-xs text-muted-foreground/70">生产安全模式(只读):开启后所有写操作在后台被全局拒绝,浏览与查询不受影响</p>
+                </div>
+                <Switch
+                  :model-value="readonlyMode"
+                  :disabled="readonlyLoading || readonlyError"
+                  data-test="settings-readonly"
+                  @update:model-value="toggleReadonlyMode"
+                />
+              </div>
+              <p v-if="readonlyMode" class="mt-2 rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive" data-test="readonly-warning">
+                写操作已被全局拒绝:连接、Topic、库表、文档等一切变更类操作不可用,关闭开关后恢复
+              </p>
+              <p v-else-if="readonlyError" class="mt-2 text-xs text-muted-foreground/70" data-test="readonly-load-error">设置读取失败,开关暂不可用</p>
             </div>
           </div>
 

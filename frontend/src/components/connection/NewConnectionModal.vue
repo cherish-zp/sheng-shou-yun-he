@@ -2,7 +2,7 @@
 import { reactive, ref, computed, watch, type Component } from 'vue'
 import { getApi } from '@/api/client'
 import { useConnectionsStore, type NewConnectionInput } from '@/store/connections'
-import type { Connection, CHConfigShape, EsConfigShape, HiveConfigShape, KafkaConfig, MysqlConfigShape, PostgresConfigShape, RedisConfigShape, SASLConfig, TLSConfig } from '@/api/types'
+import type { Connection, CHConfigShape, EsConfigShape, HiveConfigShape, KafkaConfig, MysqlConfigShape, PostgresConfigShape, RedisConfigShape, SASLConfig, SSHTunnelConfigShape, TLSConfig } from '@/api/types'
 import PasswordInput from '@/components/common/PasswordInput.vue'
 // Dialog 原语:Root/Overlay/Content 直接取自 reka-ui(不经 ui/dialog 的
 // DialogContent——它内置 DialogPortal 会把内容 teleport 到 body,既有用例
@@ -13,8 +13,9 @@ import { DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/co
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { Braces, Database, Hexagon, Layers, Leaf, Loader2, Search, Table2, X, Zap } from 'lucide-vue-next'
+import { Braces, Database, Hexagon, Layers, Leaf, Loader2, Network, Search, Table2, X, Zap } from 'lucide-vue-next'
 
 const props = defineProps<{ show: boolean; connection?: Connection | null }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -103,6 +104,16 @@ function createDefaultForm() {
     hivePrincipal: '',
     hiveKeytab: '',
     hiveKrb5Conf: '',
+    // SSH 隧道跳板机:mysql/tidb 与 redis 共用(redis/tidb 转发目标见下);
+    // 关闭态字段保留输入但不随 config 提交。
+    sshEnabled: false,
+    sshHost: '',
+    sshPort: 22,
+    sshUsername: '',
+    sshAuthType: 'password' as SSHTunnelConfigShape['auth_type'],
+    sshPassword: '',
+    sshPrivateKey: '',
+    sshPassphrase: '',
   }
 }
 
@@ -156,6 +167,19 @@ function pickType(t: CardType): void {
   }
 }
 
+// fillSSHFrom 用已存连接的 ssh 配置回填跳板机表单(未配置时重置为默认值);
+// 敏感字段后端已脱敏为空串,回填空值后编辑留空 = 保持原密码(后端回填)。
+function fillSSHFrom(ssh?: SSHTunnelConfigShape): void {
+  form.sshEnabled = !!ssh?.enabled
+  form.sshHost = ssh?.host ?? ''
+  form.sshPort = ssh?.port ?? 22
+  form.sshUsername = ssh?.username ?? ''
+  form.sshAuthType = ssh?.auth_type ?? 'password'
+  form.sshPassword = ssh?.password ?? ''
+  form.sshPrivateKey = ssh?.private_key ?? ''
+  form.sshPassphrase = ssh?.passphrase ?? ''
+}
+
 // fillFrom 用已有连接预填表单。旧配置缺 security_protocol 时按
 // sasl/tls 布尔推导(sasl.enabled→SASL_PLAINTEXT, tls.enabled→SSL,
 // 两者→SASL_SSL, 否则 PLAINTEXT),与后端 EffectiveSecurityProtocol 一致。
@@ -168,6 +192,7 @@ function fillFrom(conn: Connection): void {
     form.redisPassword = cfg.password ?? ''
     form.redisDB = cfg.db ?? 0
     form.redisTLS = !!cfg.tls
+    fillSSHFrom(cfg.ssh)
     return
   }
   if (conn.type === 'clickhouse') {
@@ -192,6 +217,7 @@ function fillFrom(conn: Connection): void {
     form.mysqlDatabase = cfg.database
     // 旧配置缺省 tls_mode 时按 disabled 回填。
     form.mysqlTlsMode = cfg.tls_mode ?? 'disabled'
+    fillSSHFrom(cfg.ssh)
     return
   }
   if (conn.type === 'postgres') {
@@ -304,6 +330,22 @@ const tls = computed<TLSConfig | undefined>(() => {
   if (!isTLS.value && !form.caCert && !form.insecureSkipVerify) return undefined
   return { enabled: isTLS.value, ca_cert: form.caCert, insecure_skip_verify: form.insecureSkipVerify }
 })
+// sshAvailable:SSH 隧道表单区块只在 redis 与 mysql/tidb 类型下展示
+// (PG 走连接串,本轮不做;其他数据源隧道待后续)。
+const sshAvailable = computed(() => form.connType === 'redis' || form.connType === 'mysql' || form.connType === 'tidb')
+// sshPayload 从表单构造跳板机配置(仅启用时由 config 携带,关闭态省略键)。
+function sshPayload(): SSHTunnelConfigShape {
+  return {
+    enabled: true,
+    host: form.sshHost.trim(),
+    port: Number(form.sshPort) || 0,
+    username: form.sshUsername.trim(),
+    auth_type: form.sshAuthType,
+    password: form.sshPassword,
+    private_key: form.sshPrivateKey,
+    passphrase: form.sshPassphrase,
+  }
+}
 const config = computed<KafkaConfig | RedisConfigShape | CHConfigShape | MysqlConfigShape | EsConfigShape | PostgresConfigShape | HiveConfigShape>(() => {
   if (form.connType === 'redis') {
     return {
@@ -311,6 +353,7 @@ const config = computed<KafkaConfig | RedisConfigShape | CHConfigShape | MysqlCo
       password: form.redisPassword || undefined,
       db: form.redisDB,
       tls: form.redisTLS,
+      ...(form.sshEnabled ? { ssh: sshPayload() } : {}),
     }
   }
   if (form.connType === 'clickhouse') {
@@ -332,6 +375,7 @@ const config = computed<KafkaConfig | RedisConfigShape | CHConfigShape | MysqlCo
       password: form.mysqlPassword,
       database: form.mysqlDatabase,
       tls_mode: form.mysqlTlsMode,
+      ...(form.sshEnabled ? { ssh: sshPayload() } : {}),
     }
   }
   if (form.connType === 'postgres') {
@@ -392,6 +436,11 @@ const chHostsInvalid = computed(() => form.connType === 'clickhouse' && chHosts.
 const isMysqlFamily = computed(() => form.connType === 'mysql' || form.connType === 'tidb')
 const mysqlHostInvalid = computed(() => isMysqlFamily.value && form.mysqlHost.trim() === '')
 const mysqlPortInvalid = computed(() => isMysqlFamily.value && (Number(form.mysqlPort) < 1 || Number(form.mysqlPort) > 65535))
+// SSH 隧道启用态校验:跳板机 host/port/username 必填(与后端 Validate 对齐;
+// 私钥/口令留空交由后端认证报错,不拦保存)。
+const sshHostInvalid = computed(() => sshAvailable.value && form.sshEnabled && form.sshHost.trim() === '')
+const sshPortInvalid = computed(() => sshAvailable.value && form.sshEnabled && (Number(form.sshPort) < 1 || Number(form.sshPort) > 65535))
+const sshUsernameInvalid = computed(() => sshAvailable.value && form.sshEnabled && form.sshUsername.trim() === '')
 // ES 地址任一非空即可(逗号/空格不算有效地址)。
 const esHostsInvalid = computed(() => form.connType === 'es' && esHosts.value.length === 0)
 const pgHostInvalid = computed(() => form.connType === 'postgres' && form.pgHost.trim() === '')
@@ -404,9 +453,9 @@ const hivePortInvalid = computed(() => form.connType === 'hive' && (Number(form.
 const hiveUsernameInvalid = computed(() => form.connType === 'hive' && form.hiveAuthMode === 'ldap' && form.hiveUsername.trim() === '')
 const hivePrincipalInvalid = computed(() => form.connType === 'hive' && form.hiveAuthMode === 'kerberos' && form.hivePrincipal.trim() === '')
 const hiveKeytabInvalid = computed(() => form.connType === 'hive' && form.hiveAuthMode === 'kerberos' && form.hiveKeytab.trim() === '')
-const saveInvalid = computed(() => nameInvalid.value || brokersInvalid.value || addrInvalid.value || chHostsInvalid.value || mysqlHostInvalid.value || mysqlPortInvalid.value || esHostsInvalid.value || pgHostInvalid.value || pgPortInvalid.value || pgDatabaseInvalid.value || hiveHostInvalid.value || hivePortInvalid.value || hiveUsernameInvalid.value || hivePrincipalInvalid.value || hiveKeytabInvalid.value)
+const saveInvalid = computed(() => nameInvalid.value || brokersInvalid.value || addrInvalid.value || chHostsInvalid.value || mysqlHostInvalid.value || mysqlPortInvalid.value || esHostsInvalid.value || pgHostInvalid.value || pgPortInvalid.value || pgDatabaseInvalid.value || hiveHostInvalid.value || hivePortInvalid.value || hiveUsernameInvalid.value || hivePrincipalInvalid.value || hiveKeytabInvalid.value || sshHostInvalid.value || sshPortInvalid.value || sshUsernameInvalid.value)
 // 测试连接不需要名称,只校验目标地址。
-const targetInvalid = computed(() => brokersInvalid.value || addrInvalid.value || chHostsInvalid.value || mysqlHostInvalid.value || mysqlPortInvalid.value || esHostsInvalid.value || pgHostInvalid.value || pgPortInvalid.value || pgDatabaseInvalid.value || hiveHostInvalid.value || hivePortInvalid.value || hiveUsernameInvalid.value || hivePrincipalInvalid.value || hiveKeytabInvalid.value)
+const targetInvalid = computed(() => brokersInvalid.value || addrInvalid.value || chHostsInvalid.value || mysqlHostInvalid.value || mysqlPortInvalid.value || esHostsInvalid.value || pgHostInvalid.value || pgPortInvalid.value || pgDatabaseInvalid.value || hiveHostInvalid.value || hivePortInvalid.value || hiveUsernameInvalid.value || hivePrincipalInvalid.value || hiveKeytabInvalid.value || sshHostInvalid.value || sshPortInvalid.value || sshUsernameInvalid.value)
 
 async function runTest(): Promise<void> {
   if (targetInvalid.value) return
@@ -819,6 +868,60 @@ function close(): void {
               </label>
             </div>
           </template>
+          </template>
+
+          <!-- SSH 隧道(仅 redis 与 mysql/tidb):跳板机本地端口转发,启用后
+               客户端经跳板机连数据库真实 host:port。凭据字段遵循「留空=
+               保持原密码」(后端 RestoreSecrets 回填)。 -->
+          <template v-if="sshAvailable">
+            <div class="field col-span-2 flex items-center justify-between rounded-md border border-border bg-muted/40 px-2.5 py-2">
+              <label class="flex items-center gap-2 text-[13px]">
+                <Network class="size-4 text-muted-foreground" aria-hidden="true" />
+                SSH 隧道(经跳板机连接)
+              </label>
+              <Switch v-model="form.sshEnabled" data-test="ssh-toggle" />
+            </div>
+            <template v-if="form.sshEnabled">
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">跳板机地址 <span class="req text-destructive">*</span></Label>
+                <Input :value="form.sshHost" @input="form.sshHost = ($event.target as HTMLInputElement).value" data-test="input-ssh-host" class="h-8 text-[13px]" placeholder="jump.example.com" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+                <span v-if="sshHostInvalid" class="err text-xs text-destructive">跳板机地址不能为空</span>
+              </div>
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">跳板机端口</Label>
+                <Input :value="form.sshPort" @input="form.sshPort = Number(($event.target as HTMLInputElement).value)" data-test="input-ssh-port" class="h-8 text-[13px]" type="number" min="1" max="65535" />
+                <span v-if="sshPortInvalid" class="err text-xs text-destructive">端口需为 1-65535</span>
+                <span class="hint text-xs text-muted-foreground">SSH 默认 22</span>
+              </div>
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">用户名 <span class="req text-destructive">*</span></Label>
+                <Input :value="form.sshUsername" @input="form.sshUsername = ($event.target as HTMLInputElement).value" data-test="input-ssh-username" class="h-8 text-[13px]" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+                <span v-if="sshUsernameInvalid" class="err text-xs text-destructive">跳板机用户名不能为空</span>
+              </div>
+              <div class="field flex flex-col gap-1.5">
+                <Label class="text-xs font-medium text-muted-foreground">认证方式</Label>
+                <select v-model="form.sshAuthType" :class="SELECT_CLS" data-test="input-ssh-auth-type">
+                  <option value="password">密码</option>
+                  <option value="private_key">私钥</option>
+                </select>
+              </div>
+              <template v-if="form.sshAuthType === 'password'">
+                <div class="field col-span-2 flex flex-col gap-1.5">
+                  <Label class="text-xs font-medium text-muted-foreground">跳板机密码</Label>
+                  <PasswordInput v-model="form.sshPassword" data-test="input-ssh-password" toggle-testid="toggle-password-ssh" :placeholder="secretPlaceholder" />
+                </div>
+              </template>
+              <template v-else>
+                <div class="field col-span-2 flex flex-col gap-1.5">
+                  <Label class="text-xs font-medium text-muted-foreground">私钥(PEM 全文)</Label>
+                  <Textarea :value="form.sshPrivateKey" @input="form.sshPrivateKey = ($event.target as HTMLTextAreaElement).value" data-test="input-ssh-private-key" class="min-h-16 resize-y text-[13px]" :placeholder="secretPlaceholder ?? '-----BEGIN OPENSSH PRIVATE KEY-----'" rows="3" />
+                </div>
+                <div class="field col-span-2 flex flex-col gap-1.5">
+                  <Label class="text-xs font-medium text-muted-foreground">私钥口令(可选)</Label>
+                  <PasswordInput v-model="form.sshPassphrase" data-test="input-ssh-passphrase" toggle-testid="toggle-password-ssh-passphrase" :placeholder="secretPlaceholder" />
+                </div>
+              </template>
+            </template>
           </template>
 
           <div v-if="tested" class="msg ok col-span-2 rounded-md bg-success/10 px-2.5 py-2 text-[13px] text-success" data-test="test-ok">连接测试成功</div>

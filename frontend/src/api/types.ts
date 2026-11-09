@@ -294,6 +294,24 @@ export interface SaveTextFileRequest {
   mime?: string
 }
 
+// One binary file to store through the same native save dialog (mirrors the
+// backend SaveBinaryFileRequest). content_base64 carries the exact bytes —
+// text JSON strings are UTF-8 encoded on the wire, which corrupts binary.
+export interface SaveBinaryFileRequest {
+  filename: string
+  content_base64: string
+  mime?: string
+}
+
+// One query result set to render as a single-sheet XLSX workbook (mirrors the
+// backend BuildResultXLSXRequest). rows 单元格 null = 空单元格,与 CSV 导出的
+// null 语义一致;只导调用方传入的行(分页场景即当前已拉取的行)。
+export interface BuildResultXLSXRequest {
+  columns: string[]
+  rows: (string | null)[][]
+  sheet_name: string
+}
+
 // --- 应用更新(镜像 backend/update.go) ---
 
 export interface UpdateCheckRequest {
@@ -360,11 +378,28 @@ export interface AuditEntry {
 
 // --- Redis(镜像 backend/model/redis.go) ---
 
+// SSH 隧道(跳板机本地端口转发,镜像 model.SSHTunnelConfig):应用连跳板机,
+// 本地随机端口转发到数据库真实 host:port。password/private_key/passphrase
+// 为敏感凭据:后端加密落盘,回传脱敏为空串(编辑留空 = 保持原值)。
+export interface SSHTunnelConfigShape {
+  enabled: boolean
+  host: string
+  port: number
+  username: string
+  // password=口令认证;private_key=PEM 私钥认证(可带 passphrase)。
+  auth_type: 'password' | 'private_key'
+  password?: string
+  private_key?: string
+  passphrase?: string
+}
+
 export type RedisConfigShape = {
   addr: string
   password?: string
   db: number
   tls?: boolean
+  // 启用 SSH 隧道时转发目标取 addr 首个地址,客户端只连本地转发地址。
+  ssh?: SSHTunnelConfigShape
 }
 
 export interface RedisDBInfo {
@@ -642,6 +677,8 @@ export interface CHStatementResult {
 // --- MySQL / TiDB(镜像 backend/model/mysql.go) ---
 
 // mysql 与 tidb 共用同一连接配置形状;port 由前端按类型预填(3306/4000)。
+// ssh 为可选跳板机隧道配置(镜像 model.MysqlConfig.SSH),启用时 DB 驱动
+// 拨号本地转发地址,转发目标是本配置的 host:port。
 export interface MysqlConfigShape {
   host: string
   port: number
@@ -650,6 +687,7 @@ export interface MysqlConfigShape {
   database: string
   // disabled=明文;skip-verify=TLS 但跳过证书校验;verify-full=TLS + 校验。
   tls_mode: 'disabled' | 'skip-verify' | 'verify-full'
+  ssh?: SSHTunnelConfigShape
 }
 
 // 列头:列名 + 列类型(如 bigint / varchar(255),SQL 结果里可能为空);
@@ -1455,4 +1493,15 @@ export interface HiveExportTableRequest {
 export interface HiveExportTableResult {
   filename: string
   content: string
+}
+
+// 应用级设置(镜像 backend.AppSettings):当前仅承载「生产安全模式(全局
+// 只读)」开关。readonly_mode 为 true 时,后端拒绝一切改动外部系统状态的
+// 写操作(含 SQL 控制台的非查询语句与 ES DSL 控制台的非 GET/HEAD 请求)。
+export interface AppSettings {
+  readonly_mode: boolean
+}
+
+export interface SetAppSettingsRequest {
+  readonly_mode: boolean
 }

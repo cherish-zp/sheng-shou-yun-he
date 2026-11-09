@@ -15,6 +15,10 @@ type RedisConfig struct {
 	Password string `json:"password,omitempty"`
 	DB       int    `json:"db"`
 	TLS      bool   `json:"tls,omitempty"`
+	// SSH 为可选的跳板机隧道配置(nil/Enabled=false 直连)。启用时取 Addr
+	// 首个地址作为转发目标,客户端只连本地转发地址(多节点集群经隧道仅能
+	// 覆盖首个种子,官方集群拓扑直连不在隧道范围)。
+	SSH *SSHTunnelConfig `json:"ssh,omitempty"`
 }
 
 // Validate checks the Redis configuration for obvious errors.
@@ -30,6 +34,11 @@ func (c RedisConfig) Validate() error {
 	}
 	if c.DB < 0 {
 		return errors.New("redis DB must be >= 0")
+	}
+	if c.SSH != nil {
+		if err := c.SSH.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

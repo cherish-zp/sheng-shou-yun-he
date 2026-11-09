@@ -1709,7 +1709,11 @@ func (c *EsClient) DSL(ctx context.Context, method, path, body string) (model.Es
 
 // EsDsl runs one raw DSL console request over the pooled Elasticsearch client
 // (same pool/auto-connect path as EsExecute; audited by the app layer).
+// 只读模式下仅放行 GET/HEAD(闸门见 ensureESDSLReadOnlySafe)。
 func (s *Service) EsDsl(ctx context.Context, id, method, path, body string) (model.EsDslResult, error) {
+	if err := s.ensureESDSLReadOnlySafe(ctx, method); err != nil {
+		return model.EsDslResult{}, err
+	}
 	e, err := s.es(ctx, id)
 	if err != nil {
 		return model.EsDslResult{}, err

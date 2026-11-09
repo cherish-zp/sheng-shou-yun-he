@@ -21,7 +21,7 @@ func strPtrOf(s string) *string { return &s }
 // --- 纯函数:DSN 构造 ---
 
 func TestBuildMysqlDSN_Basics(t *testing.T) {
-	dsn, err := buildMysqlDSN(model.MysqlConfig{Host: "127.0.0.1", Port: 4000, Username: "root", Password: "pw", Database: "app"})
+	dsn, err := buildMysqlDSN(model.MysqlConfig{Host: "127.0.0.1", Port: 4000, Username: "root", Password: "pw", Database: "app"}, "")
 	if err != nil {
 		t.Fatalf("buildMysqlDSN: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestBuildMysqlDSN_Basics(t *testing.T) {
 }
 
 func TestBuildMysqlDSN_DefaultPort(t *testing.T) {
-	dsn, err := buildMysqlDSN(model.MysqlConfig{Host: "h"})
+	dsn, err := buildMysqlDSN(model.MysqlConfig{Host: "h"}, "")
 	if err != nil {
 		t.Fatalf("buildMysqlDSN: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestBuildMysqlDSN_DefaultPort(t *testing.T) {
 }
 
 func TestBuildMysqlDSN_TLSModes(t *testing.T) {
-	dsn, err := buildMysqlDSN(model.MysqlConfig{Host: "h", TLSMode: model.MysqlTLSSkipVerify})
+	dsn, err := buildMysqlDSN(model.MysqlConfig{Host: "h", TLSMode: model.MysqlTLSSkipVerify}, "")
 	if err != nil {
 		t.Fatalf("buildMysqlDSN: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestBuildMysqlDSN_TLSModes(t *testing.T) {
 		t.Fatalf("skip-verify must map to tls=skip-verify, got %s", dsn)
 	}
 
-	dsn, err = buildMysqlDSN(model.MysqlConfig{Host: "h", TLSMode: model.MysqlTLSVerifyFull})
+	dsn, err = buildMysqlDSN(model.MysqlConfig{Host: "h", TLSMode: model.MysqlTLSVerifyFull}, "")
 	if err != nil {
 		t.Fatalf("buildMysqlDSN: %v", err)
 	}
@@ -68,14 +68,14 @@ func TestBuildMysqlDSN_TLSModes(t *testing.T) {
 		t.Fatalf("verify-full must register a custom tls name, want %q in %s", want, dsn)
 	}
 	// 同一 host 重复注册必须幂等(不报错、名字稳定)。
-	dsn2, err := buildMysqlDSN(model.MysqlConfig{Host: "h", TLSMode: model.MysqlTLSVerifyFull})
+	dsn2, err := buildMysqlDSN(model.MysqlConfig{Host: "h", TLSMode: model.MysqlTLSVerifyFull}, "")
 	if err != nil || dsn2 != dsn {
 		t.Fatalf("verify-full registration must be idempotent: %v %s vs %s", err, dsn2, dsn)
 	}
 }
 
 func TestBuildMysqlDSN_EscapesCredentials(t *testing.T) {
-	dsn, err := buildMysqlDSN(model.MysqlConfig{Host: "h", Username: "u@ser", Password: "p@ss'w/rd"})
+	dsn, err := buildMysqlDSN(model.MysqlConfig{Host: "h", Username: "u@ser", Password: "p@ss'w/rd"}, "")
 	if err != nil {
 		t.Fatalf("buildMysqlDSN: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestBuildMysqlDSN_EscapesCredentials(t *testing.T) {
 }
 
 func TestBuildMysqlDSN_RejectsInvalidConfig(t *testing.T) {
-	if _, err := buildMysqlDSN(model.MysqlConfig{}); err == nil {
+	if _, err := buildMysqlDSN(model.MysqlConfig{}, ""); err == nil {
 		t.Fatal("empty host must be rejected before dialing")
 	}
 }

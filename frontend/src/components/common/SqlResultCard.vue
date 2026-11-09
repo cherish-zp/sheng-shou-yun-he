@@ -4,7 +4,7 @@ import { ChevronDown, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { useToastStore } from '@/store/toast'
 import { buildInsertStatement, type InsertTarget } from '@/utils/insertSql'
-import { CSV_MIME, JSONL_MIME, exportCsv, exportJsonl, saveFile } from '@/utils/export'
+import { CSV_MIME, JSONL_MIME, exportCsv, exportJsonl, exportResultXlsx, saveFile } from '@/utils/export'
 
 export interface ResultColumn {
   name: string
@@ -228,6 +228,22 @@ async function onExportJsonl(): Promise<void> {
   await saveFile(props.exportName, exportJsonl(jsonlRows), JSONL_MIME)
 }
 
+async function onExportXlsx(): Promise<void> {
+  try {
+    // 分页导出语义与 CSV/JSONL 一致:只导当前已拉取的 rows;工作簿由后端
+    // BuildResultXLSX 生成([]byte 经桥传输为 base64,见 utils/export.ts),
+    // 经原生保存对话框落盘,失败(如纯浏览器 dev)才回退锚点下载。
+    await exportResultXlsx({
+      columns: props.columns.map((col) => col.name),
+      rows: props.rows,
+      sheetName: props.exportName,
+      filename: props.exportName,
+    })
+  } catch (err) {
+    toast.show(`导出 XLSX 失败：${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
 // —— 单元格编辑 ——
 
 function isEditing(row: number, col: number): boolean {
@@ -368,6 +384,9 @@ function onRowDelete(rowIndex: number): void {
         </Button>
         <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" data-test="result-export-jsonl" title="导出 JSONL 文件" @click="onExportJsonl">
           导出 JSONL
+        </Button>
+        <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" data-test="result-export-xlsx" title="导出 XLSX 文件" @click="onExportXlsx">
+          导出 XLSX
         </Button>
       </div>
     </div>

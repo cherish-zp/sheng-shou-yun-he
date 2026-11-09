@@ -66,6 +66,18 @@ export namespace backend {
 	        this.partitions = source["partitions"];
 	    }
 	}
+	export class AppSettings {
+	    readonly_mode: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AppSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.readonly_mode = source["readonly_mode"];
+	    }
+	}
 	export class ApplyUpdateRequest {
 	
 	
@@ -113,6 +125,22 @@ export namespace backend {
 		    }
 		    return a;
 		}
+	}
+	export class BuildResultXLSXRequest {
+	    columns: string[];
+	    rows: string[][];
+	    sheet_name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BuildResultXLSXRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.columns = source["columns"];
+	        this.rows = source["rows"];
+	        this.sheet_name = source["sheet_name"];
+	    }
 	}
 	export class CHTablesRequest {
 	    connection_id: string;
@@ -1326,6 +1354,22 @@ export namespace backend {
 	        this.per_partition_offsets = source["per_partition_offsets"];
 	    }
 	}
+	export class SaveBinaryFileRequest {
+	    filename: string;
+	    content_base64: string;
+	    mime?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SaveBinaryFileRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.filename = source["filename"];
+	        this.content_base64 = source["content_base64"];
+	        this.mime = source["mime"];
+	    }
+	}
 	export class SaveSavedQueryRequest {
 	    name: string;
 	    console_type: string;
@@ -1359,6 +1403,242 @@ export namespace backend {
 	        this.content = source["content"];
 	        this.mime = source["mime"];
 	    }
+	}
+	export class SetAppSettingsRequest {
+	    readonly_mode: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new SetAppSettingsRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.readonly_mode = source["readonly_mode"];
+	    }
+	}
+	export class TestCHConnectionRequest {
+	    connection_id?: string;
+	    config: model.ClickHouseConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new TestCHConnectionRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connection_id = source["connection_id"];
+	        this.config = this.convertValues(source["config"], model.ClickHouseConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TestConnectionRequest {
+	    connection_id?: string;
+	    config: model.KafkaConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new TestConnectionRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connection_id = source["connection_id"];
+	        this.config = this.convertValues(source["config"], model.KafkaConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TestESConnectionRequest {
+	    connection_id?: string;
+	    config: model.EsConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new TestESConnectionRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connection_id = source["connection_id"];
+	        this.config = this.convertValues(source["config"], model.EsConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TestHiveConnectionRequest {
+	    connection_id?: string;
+	    config: model.HiveConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new TestHiveConnectionRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connection_id = source["connection_id"];
+	        this.config = this.convertValues(source["config"], model.HiveConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TestMysqlConnectionRequest {
+	    connection_id?: string;
+	    config: model.MysqlConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new TestMysqlConnectionRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connection_id = source["connection_id"];
+	        this.config = this.convertValues(source["config"], model.MysqlConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TestPostgresConnectionRequest {
+	    connection_id?: string;
+	    config: model.PostgresConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new TestPostgresConnectionRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connection_id = source["connection_id"];
+	        this.config = this.convertValues(source["config"], model.PostgresConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TestRedisConnectionRequest {
+	    connection_id?: string;
+	    config: model.RedisConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new TestRedisConnectionRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connection_id = source["connection_id"];
+	        this.config = this.convertValues(source["config"], model.RedisConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class UpdateCheckResult {
 	    has_update: boolean;
@@ -2700,6 +2980,32 @@ export namespace model {
 	        this.is_in_primary_key = source["is_in_primary_key"];
 	    }
 	}
+	export class SSHTunnelConfig {
+	    enabled: boolean;
+	    host: string;
+	    port: number;
+	    username: string;
+	    auth_type?: string;
+	    password?: string;
+	    private_key?: string;
+	    passphrase?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SSHTunnelConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.host = source["host"];
+	        this.port = source["port"];
+	        this.username = source["username"];
+	        this.auth_type = source["auth_type"];
+	        this.password = source["password"];
+	        this.private_key = source["private_key"];
+	        this.passphrase = source["passphrase"];
+	    }
+	}
 	export class MysqlConfig {
 	    host: string;
 	    port: number;
@@ -2707,6 +3013,7 @@ export namespace model {
 	    password?: string;
 	    database: string;
 	    tls_mode?: string;
+	    ssh?: SSHTunnelConfig;
 	
 	    static createFrom(source: any = {}) {
 	        return new MysqlConfig(source);
@@ -2720,7 +3027,26 @@ export namespace model {
 	        this.password = source["password"];
 	        this.database = source["database"];
 	        this.tls_mode = source["tls_mode"];
+	        this.ssh = this.convertValues(source["ssh"], SSHTunnelConfig);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class MysqlPageRowsResult {
 	    columns: MysqlColumn[];
@@ -3114,6 +3440,7 @@ export namespace model {
 	    password?: string;
 	    db: number;
 	    tls?: boolean;
+	    ssh?: SSHTunnelConfig;
 	
 	    static createFrom(source: any = {}) {
 	        return new RedisConfig(source);
@@ -3125,7 +3452,26 @@ export namespace model {
 	        this.password = source["password"];
 	        this.db = source["db"];
 	        this.tls = source["tls"];
+	        this.ssh = this.convertValues(source["ssh"], SSHTunnelConfig);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class RedisDBInfo {
 	    index: number;
@@ -3277,6 +3623,7 @@ export namespace model {
 		    return a;
 		}
 	}
+	
 	
 	export class SavedQuery {
 	    id: string;

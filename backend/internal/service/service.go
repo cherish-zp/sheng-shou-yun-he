@@ -80,7 +80,8 @@ func (s *Service) UpdateConnection(ctx context.Context, c *model.Connection) err
 //
 // 敏感字段清单与 store 落盘加密、App 层 maskConnectionSecrets 的脱敏一致:
 // kafka 为 sasl.password;redis/clickhouse/mysql/tidb/postgres/hive 为
-// password;es 为 password + api_key。任一 config 不是 JSON 对象时原样
+// password;es 为 password + api_key;mysql/tidb/redis 另有 ssh 子对象的
+// password/private_key/passphrase 三字段。任一 config 不是 JSON 对象时原样
 // 返回 next。CreateConnection 不调用本函数(新建空密码就是空密码)。
 func RestoreSecrets(connType model.ConnectionType, prev, next json.RawMessage) json.RawMessage {
 	if len(prev) == 0 || len(next) == 0 {
@@ -138,6 +139,23 @@ func RestoreSecrets(connType model.ConnectionType, prev, next json.RawMessage) j
 		restore(nextRoot, prevRoot, "password")
 		if connType == model.ConnectionTypeES {
 			restore(nextRoot, prevRoot, "api_key")
+		}
+		// SSH 隧道凭据(mysql/tidb/redis 的 ssh 子对象):编辑时留空的
+		// 密码/私钥/私钥口令同样按「留空=不变」回填。next 无 ssh 键(未
+		// 配置隧道或本轮关闭)时不动,prev 的隧道凭据不会被复活。
+		if sshRaw, ok := nextRoot["ssh"]; ok {
+			var nextSSH map[string]json.RawMessage
+			if json.Unmarshal(sshRaw, &nextSSH) == nil {
+				if prevSSHRaw, ok := prevRoot["ssh"]; ok {
+					var prevSSH map[string]json.RawMessage
+					if json.Unmarshal(prevSSHRaw, &prevSSH) == nil {
+						restore(nextSSH, prevSSH, "password")
+						restore(nextSSH, prevSSH, "private_key")
+						restore(nextSSH, prevSSH, "passphrase")
+						nextRoot["ssh"] = model.MustConfigJSON(nextSSH)
+					}
+				}
+			}
 		}
 	}
 	if !changed {
@@ -450,6 +468,9 @@ func (s *Service) RedisGetKey(ctx context.Context, id string, db int, key string
 
 // RedisRenameKey renames a key.
 func (s *Service) RedisRenameKey(ctx context.Context, id string, db int, from, to string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	rds, err := s.redis(ctx, id)
 	if err != nil {
 		return err
@@ -459,6 +480,9 @@ func (s *Service) RedisRenameKey(ctx context.Context, id string, db int, from, t
 
 // RedisDeleteKeys deletes keys and returns the removal count.
 func (s *Service) RedisDeleteKeys(ctx context.Context, id string, db int, keys []string) (int64, error) {
+	if err := s.ensureWritable(ctx); err != nil {
+		return 0, err
+	}
 	rds, err := s.redis(ctx, id)
 	if err != nil {
 		return 0, err
@@ -468,6 +492,9 @@ func (s *Service) RedisDeleteKeys(ctx context.Context, id string, db int, keys [
 
 // RedisSetTTL applies or removes a key expiry.
 func (s *Service) RedisSetTTL(ctx context.Context, id string, db int, key string, ttlSeconds int64) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	rds, err := s.redis(ctx, id)
 	if err != nil {
 		return err
@@ -477,6 +504,9 @@ func (s *Service) RedisSetTTL(ctx context.Context, id string, db int, key string
 
 // RedisSetString writes a string key.
 func (s *Service) RedisSetString(ctx context.Context, id string, db int, key, value string, ttlSeconds int64) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	rds, err := s.redis(ctx, id)
 	if err != nil {
 		return err
@@ -486,6 +516,9 @@ func (s *Service) RedisSetString(ctx context.Context, id string, db int, key, va
 
 // RedisHashSetField writes one field of a hash key.
 func (s *Service) RedisHashSetField(ctx context.Context, id string, db int, key, field, value string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	rds, err := s.redis(ctx, id)
 	if err != nil {
 		return err
@@ -495,6 +528,9 @@ func (s *Service) RedisHashSetField(ctx context.Context, id string, db int, key,
 
 // RedisHashDeleteField removes one field from a hash key.
 func (s *Service) RedisHashDeleteField(ctx context.Context, id string, db int, key, field string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	rds, err := s.redis(ctx, id)
 	if err != nil {
 		return err
@@ -504,6 +540,9 @@ func (s *Service) RedisHashDeleteField(ctx context.Context, id string, db int, k
 
 // RedisListSetIndex overwrites the element at the given list index.
 func (s *Service) RedisListSetIndex(ctx context.Context, id string, db int, key string, index int64, value string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	rds, err := s.redis(ctx, id)
 	if err != nil {
 		return err
@@ -513,6 +552,9 @@ func (s *Service) RedisListSetIndex(ctx context.Context, id string, db int, key 
 
 // RedisListPush prepends or appends one element of a list.
 func (s *Service) RedisListPush(ctx context.Context, id string, db int, key, value string, atHead bool) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	rds, err := s.redis(ctx, id)
 	if err != nil {
 		return err
@@ -522,6 +564,9 @@ func (s *Service) RedisListPush(ctx context.Context, id string, db int, key, val
 
 // RedisListDeleteIndex removes the element at the given list index.
 func (s *Service) RedisListDeleteIndex(ctx context.Context, id string, db int, key string, index int64) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	rds, err := s.redis(ctx, id)
 	if err != nil {
 		return err
@@ -531,6 +576,9 @@ func (s *Service) RedisListDeleteIndex(ctx context.Context, id string, db int, k
 
 // RedisSetAdd inserts a member into a set.
 func (s *Service) RedisSetAdd(ctx context.Context, id string, db int, key, member string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	rds, err := s.redis(ctx, id)
 	if err != nil {
 		return err
@@ -540,6 +588,9 @@ func (s *Service) RedisSetAdd(ctx context.Context, id string, db int, key, membe
 
 // RedisSetRemove deletes a member from a set.
 func (s *Service) RedisSetRemove(ctx context.Context, id string, db int, key, member string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	rds, err := s.redis(ctx, id)
 	if err != nil {
 		return err
@@ -549,6 +600,9 @@ func (s *Service) RedisSetRemove(ctx context.Context, id string, db int, key, me
 
 // RedisZSetAdd inserts a sorted-set member or updates its score.
 func (s *Service) RedisZSetAdd(ctx context.Context, id string, db int, key, member string, score float64) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	rds, err := s.redis(ctx, id)
 	if err != nil {
 		return err
@@ -558,6 +612,9 @@ func (s *Service) RedisZSetAdd(ctx context.Context, id string, db int, key, memb
 
 // RedisZSetRemove deletes a member from a sorted set.
 func (s *Service) RedisZSetRemove(ctx context.Context, id string, db int, key, member string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	rds, err := s.redis(ctx, id)
 	if err != nil {
 		return err
@@ -567,6 +624,9 @@ func (s *Service) RedisZSetRemove(ctx context.Context, id string, db int, key, m
 
 // RedisFlushDB empties the given DB (dangerous, audited by the caller).
 func (s *Service) RedisFlushDB(ctx context.Context, id string, db int) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	rds, err := s.redis(ctx, id)
 	if err != nil {
 		return err
@@ -576,6 +636,9 @@ func (s *Service) RedisFlushDB(ctx context.Context, id string, db int) error {
 
 // RedisFlushAll empties the whole instance/cluster (dangerous, audited).
 func (s *Service) RedisFlushAll(ctx context.Context, id string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	rds, err := s.redis(ctx, id)
 	if err != nil {
 		return err
@@ -633,6 +696,9 @@ func (s *Service) CHPageRows(ctx context.Context, id, database, table, where, or
 
 // CHTruncateTable empties a table (dangerous, audited by the caller).
 func (s *Service) CHTruncateTable(ctx context.Context, id, database, table string, onCluster bool) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	ch, err := s.ch(ctx, id)
 	if err != nil {
 		return err
@@ -641,8 +707,12 @@ func (s *Service) CHTruncateTable(ctx context.Context, id, database, table strin
 }
 
 // CHExecute runs a SQL script statement by statement. limit>0 启用服务端分页
-// (包装查询 + count() 计数,SHOW 类语句客户端截断)。
+// (包装查询 + count() 计数,SHOW 类语句客户端截断)。只读模式下拒绝非查询
+// 语句(闸门见 ensureSQLReadOnlySafe)。
 func (s *Service) CHExecute(ctx context.Context, id, sqlText string, limit, offset int) ([]model.CHStatementResult, error) {
+	if err := s.ensureSQLReadOnlySafe(ctx, sqlText, chStatementReturnsRows); err != nil {
+		return nil, err
+	}
 	ch, err := s.ch(ctx, id)
 	if err != nil {
 		return nil, err
@@ -711,6 +781,9 @@ func (s *Service) EsGetDoc(ctx context.Context, id, index, docID string) (string
 
 // EsPutDoc replaces one document (dangerous, audited by the app layer).
 func (s *Service) EsPutDoc(ctx context.Context, id, index, docID, docJSON string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	e, err := s.es(ctx, id)
 	if err != nil {
 		return err
@@ -724,6 +797,9 @@ func (s *Service) EsPutDoc(ctx context.Context, id, index, docID, docJSON string
 // carries the _id resolved from the response and the request docJSON verbatim
 // as source.
 func (s *Service) EsCreateDoc(ctx context.Context, id, index, docID, docJSON string) (model.EsDoc, error) {
+	if err := s.ensureWritable(ctx); err != nil {
+		return model.EsDoc{}, err
+	}
 	e, err := s.es(ctx, id)
 	if err != nil {
 		return model.EsDoc{}, err
@@ -737,6 +813,9 @@ func (s *Service) EsCreateDoc(ctx context.Context, id, index, docID, docJSON str
 
 // EsUpdateCell patches one document field (dangerous, audited by the app layer).
 func (s *Service) EsUpdateCell(ctx context.Context, id, index, docID, column string, value *string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	e, err := s.es(ctx, id)
 	if err != nil {
 		return err
@@ -746,6 +825,9 @@ func (s *Service) EsUpdateCell(ctx context.Context, id, index, docID, column str
 
 // EsDeleteDoc removes one document (dangerous, audited by the app layer).
 func (s *Service) EsDeleteDoc(ctx context.Context, id, index, docID string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	e, err := s.es(ctx, id)
 	if err != nil {
 		return err
@@ -756,6 +838,9 @@ func (s *Service) EsDeleteDoc(ctx context.Context, id, index, docID string) erro
 // EsDeleteByQuery deletes documents matching the DSL query (dangerous, audited
 // by the app layer) and returns the removed count.
 func (s *Service) EsDeleteByQuery(ctx context.Context, id, index, query string) (int64, error) {
+	if err := s.ensureWritable(ctx); err != nil {
+		return 0, err
+	}
 	e, err := s.es(ctx, id)
 	if err != nil {
 		return 0, err
@@ -765,7 +850,12 @@ func (s *Service) EsDeleteByQuery(ctx context.Context, id, index, query string) 
 
 // EsExecute runs a SQL script statement by statement over the probed endpoint.
 // limit>0 启用服务端分页(本地翻译 select 映射 size/from,其余客户端截断)。
+// 只读模式下拒绝非查询语句(闸门见 ensureSQLReadOnlySafe;ES SQL 语法本身
+// 仅支持查询族,此处按 std 判型兜底防透传类扩展)。
 func (s *Service) EsExecute(ctx context.Context, id, sqlText string, limit, offset int) ([]model.EsStatementResult, error) {
+	if err := s.ensureSQLReadOnlySafe(ctx, sqlText, esStatementReturnsRows); err != nil {
+		return nil, err
+	}
 	e, err := s.es(ctx, id)
 	if err != nil {
 		return nil, err
@@ -776,6 +866,9 @@ func (s *Service) EsExecute(ctx context.Context, id, sqlText string, limit, offs
 // EsRefreshIndex forces the index's shards to refresh (near-immediate search
 // visibility of recently indexed documents).
 func (s *Service) EsRefreshIndex(ctx context.Context, id, index string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	e, err := s.es(ctx, id)
 	if err != nil {
 		return err
@@ -804,6 +897,9 @@ func (s *Service) EsGetTemplate(ctx context.Context, id, name string) (string, e
 // EsPutTemplate creates or replaces the legacy index template (dangerous,
 // audited by the app layer).
 func (s *Service) EsPutTemplate(ctx context.Context, id, name, templateJSON string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	e, err := s.es(ctx, id)
 	if err != nil {
 		return err
@@ -814,6 +910,9 @@ func (s *Service) EsPutTemplate(ctx context.Context, id, name, templateJSON stri
 // EsDeleteTemplate removes the legacy index template (dangerous, audited by
 // the app layer).
 func (s *Service) EsDeleteTemplate(ctx context.Context, id, name string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	e, err := s.es(ctx, id)
 	if err != nil {
 		return err
@@ -824,6 +923,9 @@ func (s *Service) EsDeleteTemplate(ctx context.Context, id, name string) error {
 // EsCreateIndex creates the index with shard/replica settings (dangerous,
 // audited by the app layer).
 func (s *Service) EsCreateIndex(ctx context.Context, id, index string, shards, replicas int64) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	e, err := s.es(ctx, id)
 	if err != nil {
 		return err
@@ -833,6 +935,9 @@ func (s *Service) EsCreateIndex(ctx context.Context, id, index string, shards, r
 
 // EsDeleteIndex removes the index (dangerous, audited by the app layer).
 func (s *Service) EsDeleteIndex(ctx context.Context, id, index string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	e, err := s.es(ctx, id)
 	if err != nil {
 		return err
@@ -843,6 +948,9 @@ func (s *Service) EsDeleteIndex(ctx context.Context, id, index string) error {
 // EsUpdateIndexSettings applies index-level settings (dangerous, audited by
 // the app layer).
 func (s *Service) EsUpdateIndexSettings(ctx context.Context, id, index, settingsJSON string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	e, err := s.es(ctx, id)
 	if err != nil {
 		return err
@@ -915,6 +1023,9 @@ func (s *Service) PostgresPageRows(ctx context.Context, id, database, schema, re
 // PostgresExecute runs a SQL script statement by statement. limit>0 启用服务
 // 端分页(包装查询 + COUNT 计数,EXPLAIN/SHOW 类语句客户端截断)。
 func (s *Service) PostgresExecute(ctx context.Context, id, database, schema, sqlText string, limit, offset int) ([]model.PostgresStatementResult, error) {
+	if err := s.ensureSQLReadOnlySafe(ctx, sqlText, postgresStatementReturnsRows); err != nil {
+		return nil, err
+	}
 	pg, err := s.postgres(ctx, id)
 	if err != nil {
 		return nil, err
@@ -924,6 +1035,9 @@ func (s *Service) PostgresExecute(ctx context.Context, id, database, schema, sql
 
 // PostgresTruncateTable empties an ordinary table (audited upstream).
 func (s *Service) PostgresTruncateTable(ctx context.Context, id, database, schema, relation, relationKind string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	pg, err := s.postgres(ctx, id)
 	if err != nil {
 		return err
@@ -942,6 +1056,9 @@ func (s *Service) PostgresPreviewCellUpdate(ctx context.Context, req model.Postg
 
 // PostgresUpdateCell executes a parameterized primary-key update.
 func (s *Service) PostgresUpdateCell(ctx context.Context, req model.PostgresCellUpdateRequest) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	pg, err := s.postgres(ctx, req.ConnectionID)
 	if err != nil {
 		return err
@@ -981,6 +1098,9 @@ func (s *Service) DeleteConnection(ctx context.Context, id string) error {
 
 // CreateTopic creates a topic on the connection's cluster.
 func (s *Service) CreateTopic(ctx context.Context, id, name string, partitions int32, replicationFactor int16) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	d, err := s.kafka(ctx, id)
 	if err != nil {
 		return err
@@ -990,6 +1110,9 @@ func (s *Service) CreateTopic(ctx context.Context, id, name string, partitions i
 
 // DeleteTopic removes a topic from the connection's cluster.
 func (s *Service) DeleteTopic(ctx context.Context, id, name string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	d, err := s.kafka(ctx, id)
 	if err != nil {
 		return err
@@ -1000,6 +1123,9 @@ func (s *Service) DeleteTopic(ctx context.Context, id, name string) error {
 // DeleteTopics removes several topics from the connection's cluster and
 // returns one result per topic.
 func (s *Service) DeleteTopics(ctx context.Context, id string, names []string) ([]*model.TopicDeleteResult, error) {
+	if err := s.ensureWritable(ctx); err != nil {
+		return nil, err
+	}
 	d, err := s.kafka(ctx, id)
 	if err != nil {
 		return nil, err
@@ -1009,6 +1135,9 @@ func (s *Service) DeleteTopics(ctx context.Context, id string, names []string) (
 
 // DeleteConsumerGroup removes an empty consumer group from the connection's cluster.
 func (s *Service) DeleteConsumerGroup(ctx context.Context, id, name string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	d, err := s.kafka(ctx, id)
 	if err != nil {
 		return err
@@ -1038,6 +1167,9 @@ func (s *Service) DescribeTopic(ctx context.Context, id, name string) (*model.To
 // AlterTopicConfig applies whitelisted topic config values on the connection's
 // cluster, auto-connecting if needed.
 func (s *Service) AlterTopicConfig(ctx context.Context, id, topic string, entries []model.TopicConfigEntry) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	d, err := s.kafka(ctx, id)
 	if err != nil {
 		return err
@@ -1048,6 +1180,9 @@ func (s *Service) AlterTopicConfig(ctx context.Context, id, topic string, entrie
 // AlterTopicPartitions grows the topic to the requested final partition count
 // on the connection's cluster, auto-connecting if needed.
 func (s *Service) AlterTopicPartitions(ctx context.Context, id, topic string, target int32) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	d, err := s.kafka(ctx, id)
 	if err != nil {
 		return err
@@ -1141,6 +1276,9 @@ func (s *Service) ListActiveConsumers(ctx context.Context, id, group, topic stri
 
 // ResetConsumerGroupOffset resets a consumer group offset.
 func (s *Service) ResetConsumerGroupOffset(ctx context.Context, id, group, topic string, mode model.ResetOffsetMode, timestampMS int64, offsets map[int32]int64) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	kds, err := s.kafka(ctx, id)
 	if err != nil {
 		return err
@@ -1160,6 +1298,9 @@ func (s *Service) PreviewResetOffset(ctx context.Context, id, topic string, mode
 
 // ProduceMessage publishes a record to the connection.
 func (s *Service) ProduceMessage(ctx context.Context, id, topic string, partition int32, key, value []byte) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	kds, err := s.kafka(ctx, id)
 	if err != nil {
 		return err
@@ -1170,6 +1311,9 @@ func (s *Service) ProduceMessage(ctx context.Context, id, topic string, partitio
 // ProduceMessages publishes a batch of records to the connection and returns
 // one result per message.
 func (s *Service) ProduceMessages(ctx context.Context, id, topic string, partition int32, messages []model.BatchProduceMessage) ([]*model.ProduceResult, error) {
+	if err := s.ensureWritable(ctx); err != nil {
+		return nil, err
+	}
 	kds, err := s.kafka(ctx, id)
 	if err != nil {
 		return nil, err

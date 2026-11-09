@@ -375,6 +375,9 @@ func (c *HiveClient) ExportTable(ctx context.Context, database, table string) (H
 // HiveTruncateTable empties an internal table (dangerous, audited by the
 // caller).
 func (s *Service) HiveTruncateTable(ctx context.Context, id, database, table string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	h, err := s.hive(ctx, id)
 	if err != nil {
 		return err
@@ -384,6 +387,9 @@ func (s *Service) HiveTruncateTable(ctx context.Context, id, database, table str
 
 // HiveDropTable drops the table (dangerous, audited by the caller).
 func (s *Service) HiveDropTable(ctx context.Context, id, database, table string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	h, err := s.hive(ctx, id)
 	if err != nil {
 		return err
@@ -394,6 +400,9 @@ func (s *Service) HiveDropTable(ctx context.Context, id, database, table string)
 // HiveAlterTable applies the structure changes (dangerous, audited by the
 // caller).
 func (s *Service) HiveAlterTable(ctx context.Context, id string, spec HiveAlterTableSpec) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	h, err := s.hive(ctx, id)
 	if err != nil {
 		return err

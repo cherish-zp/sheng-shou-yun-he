@@ -113,6 +113,9 @@ func (s *Service) CHPreviewDeleteRow(ctx context.Context, id, database, table st
 
 // CHDeleteRow 执行按条件定位的 DELETE mutation(危险操作,审计由 app 层落)。
 func (s *Service) CHDeleteRow(ctx context.Context, id, database, table string, where []model.CHCellValue) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	ch, err := s.ch(ctx, id)
 	if err != nil {
 		return err

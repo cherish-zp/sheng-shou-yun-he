@@ -5,7 +5,7 @@ import type { MessageQuery } from '@/store/browse'
 import { OffsetEarliest, OffsetLatest } from '@/api/types'
 import type { Message } from '@/api/types'
 import { formatTime, truncateCell } from '@/utils/format'
-import { CSV_MIME, JSONL_MIME, MESSAGE_EXPORT_COLUMNS, exportCsv, exportJsonl, saveFile } from '@/utils/export'
+import { CSV_MIME, JSONL_MIME, MESSAGE_EXPORT_COLUMNS, exportCsv, exportJsonl, exportResultXlsx, saveFile } from '@/utils/export'
 import ExportDropdown from '@/components/common/ExportDropdown.vue'
 import MessageDetailDrawer from './MessageDetailDrawer.vue'
 import { Button } from '@/components/ui/button'
@@ -165,14 +165,23 @@ function closeDetail(): void {
   store.select(props.tabId, null)
 }
 
-// exportAs stores the loaded messages in the picked format via the native
-// save dialog. The dropdown component owns its open state and outside-click
+// exportAs stores the loaded messages in the picked format — CSV/JSONL via
+// the native save dialog, XLSX via the backend builder binding + binary save
+// dialog. The dropdown component owns its open state and outside-click
 // closing.
-function exportAs(format: 'csv' | 'jsonl'): void {
+function exportAs(format: 'csv' | 'jsonl' | 'xlsx'): void {
   if (format === 'csv') {
     void saveFile(`messages-${props.topic}`, exportCsv(st.value.messages, MESSAGE_EXPORT_COLUMNS), CSV_MIME)
-  } else {
+  } else if (format === 'jsonl') {
     void saveFile(`messages-${props.topic}`, exportJsonl(st.value.messages), JSONL_MIME)
+  } else {
+    // 与 CSV 同语义:只导当前已拉取的消息;sheet 名复用文件名,由后端清洗。
+    void exportResultXlsx({
+      columns: MESSAGE_EXPORT_COLUMNS.map((c) => c.label),
+      rows: st.value.messages.map((m) => MESSAGE_EXPORT_COLUMNS.map((c) => c.value(m))),
+      sheetName: `messages-${props.topic}`,
+      filename: `messages-${props.topic}`,
+    })
   }
 }
 

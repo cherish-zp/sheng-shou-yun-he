@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { setApi } from '@/api/client'
 import type { Api } from '@/api/client'
 import type { Message } from '@/api/types'
-import { CSV_MIME, JSONL_MIME, MESSAGE_EXPORT_COLUMNS, exportCsv, exportJsonl, saveFile } from '@/utils/export'
+import { CSV_MIME, JSONL_MIME, MESSAGE_EXPORT_COLUMNS, XLSX_MIME, exportCsv, exportJsonl, saveFile } from '@/utils/export'
 import MessageBrowser from './MessageBrowser.vue'
 
 // Stub the DOM download trigger but keep the real CSV/JSONL builders, so the
@@ -385,6 +385,34 @@ describe('MessageBrowser', () => {
       exportJsonl(messages),
       JSONL_MIME,
     )
+  })
+
+  it('exports loaded messages as XLSX via the builder binding and binary save', async () => {
+    const messages: Message[] = [msg(0), msg(1)]
+    // XLSX 不走文本版 saveFile:buildResultXLSX 产出字节([]byte 经桥传输为
+    // base64),saveBinaryFile 经原生对话框落盘;断言到两次 API 调用为止。
+    const buildXlsx = vi.fn(async () => 'QUJD')
+    const saveBinary = vi.fn(async () => '/tmp/out.xlsx')
+    const { wrapper } = mountBrowser({
+      consumeMessages: vi.fn(async () => messages),
+      buildResultXLSX: buildXlsx,
+      saveBinaryFile: saveBinary,
+    })
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('[data-test="message-row"]')).toHaveLength(2)
+    })
+    await wrapper.find('[data-test="export-toggle"]').trigger('click')
+    await wrapper.find('[data-test="result-export-xlsx"]').trigger('click')
+    expect(buildXlsx).toHaveBeenCalledWith({
+      columns: MESSAGE_EXPORT_COLUMNS.map((c) => c.label),
+      rows: messages.map((m) => MESSAGE_EXPORT_COLUMNS.map((c) => c.value(m))),
+      sheet_name: 'messages-events',
+    })
+    expect(saveBinary).toHaveBeenCalledWith({
+      filename: 'messages-events',
+      content_base64: 'QUJD',
+      mime: XLSX_MIME,
+    })
   })
 
   it('renders the jump offset input and a disabled jump button when empty', async () => {

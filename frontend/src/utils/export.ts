@@ -13,12 +13,14 @@ export interface ExportColumn<T> {
 
 export const CSV_MIME = 'text/csv'
 export const JSONL_MIME = 'application/x-ndjson'
+export const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
 // EXT_BY_MIME maps the supported download mimes to file extensions; unknown
 // mimes fall back to .txt.
 const EXT_BY_MIME: Record<string, string> = {
   [CSV_MIME]: 'csv',
   [JSONL_MIME]: 'jsonl',
+  [XLSX_MIME]: 'xlsx',
 }
 
 // csvField quotes a field when it contains a comma, double quote, newline or
@@ -75,6 +77,64 @@ export async function saveFile(filename: string, content: string, mime: string):
   } catch {
     downloadFile(filename, content, mime)
   }
+}
+
+// base64ToBytes decodes a base64 string into raw bytes. Wails bindings cannot
+// return Go []byte as JSON arrays over the bridge — the transport delivers
+// them as base64 strings (BuildResultXLSX is the first []byte-return binding
+// in the repo), so every binary payload goes through here.
+export function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
+  const bin = atob(base64)
+  const bytes = new Uint8Array(new ArrayBuffer(bin.length))
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return bytes
+}
+
+// downloadBinaryFile is the anchor-download twin of downloadFile for binary
+// payloads: bytes arrive base64-encoded (see base64ToBytes), become a Blob of
+// the given mime and trigger a[download] with the mime-derived extension.
+export function downloadBinaryFile(filename: string, base64: string, mime: string): void {
+  const url = URL.createObjectURL(new Blob([base64ToBytes(base64)], { type: mime }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${filename}.${EXT_BY_MIME[mime] ?? 'txt'}`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  // Defer the revoke to the next tick: WKWebView can abort a download if the
+  // object URL is revoked before the fetch has started.
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+// saveBinaryFile stores a binary export (e.g. XLSX) via the backend's native
+// save dialog, same contract as saveFile: cancelled dialog (empty path) is a
+// no-op, a missing binding or failed call (plain-browser dev) falls back to
+// the anchor download. base64 travels verbatim — SaveTextFile cannot carry
+// binary because a JS→Go JSON string is UTF-8 encoded on the wire.
+export async function saveBinaryFile(filename: string, base64: string, mime: string): Promise<void> {
+  const path = await getApi().saveBinaryFile?.({ filename, content_base64: base64, mime })
+  // undefined = 绑定不可用(纯浏览器 dev)→ 锚点下载兜底;'' = 用户取消对话框
+  // → 静默 no-op;非空路径 = 已写盘,无事可做。
+  if (path === undefined) downloadBinaryFile(filename, base64, mime)
+}
+
+// exportResultXlsx renders a result set as a single-sheet XLSX workbook via
+// the backend binding and saves it. 分页导出语义与 CSV/JSONL 一致:只导调用方
+// 传入的 rows(分页场景即当前已拉取的行);sheetName 交给后端按 excelize 规则
+// 清洗(非法字符/长度)。绑定缺失或构建失败时抛出,由调用方决定提示方式。
+export async function exportResultXlsx(req: {
+  columns: string[]
+  rows: (string | null)[][]
+  sheetName: string
+  filename: string
+}): Promise<void> {
+  const base64 = await getApi().buildResultXLSX?.({
+    columns: req.columns,
+    rows: req.rows,
+    sheet_name: req.sheetName,
+  })
+  if (base64 == null) throw new Error('XLSX 导出绑定不可用')
+  await saveBinaryFile(req.filename, base64, XLSX_MIME)
 }
 
 // MESSAGE_EXPORT_COLUMNS is the column set shared by the message browse table

@@ -756,6 +756,85 @@ func TestRestoreSecretsMysql(t *testing.T) {
 	}
 }
 
+// TestRestoreSecretsSSHTunnel 覆盖 mysql/tidb/redis 的 ssh 子对象凭据回填:
+// 留空的 password/private_key/passphrase 按已存值回填;next 未配置隧道(无
+// ssh 键)时不复活 prev 的隧道凭据。
+func TestRestoreSecretsSSHTunnel(t *testing.T) {
+	prevSSH := model.SSHTunnelConfig{
+		Enabled: true, Host: "jump", Port: 22, Username: "jumper",
+		AuthType: model.SSHAuthPrivateKey,
+		Password: "old-ssh-pass", PrivateKey: "old-key-pem", Passphrase: "old-key-pass",
+	}
+	prev := model.MustConfigJSON(model.MysqlConfig{
+		Host: "db", Port: 3306, Username: "root", Password: "old-db-pass",
+		SSH: &prevSSH,
+	})
+
+	// 编辑后 ssh 三凭据全部留空 → 全部回填;host/port/username 等 next 值保留。
+	next := model.MustConfigJSON(model.MysqlConfig{
+		Host: "db2", Port: 3307, Username: "root2", Password: "",
+		SSH: &model.SSHTunnelConfig{
+			Enabled: true, Host: "jump2", Port: 2222, Username: "jumper2",
+			AuthType: model.SSHAuthPrivateKey,
+		},
+	})
+	var cfg model.MysqlConfig
+	if err := json.Unmarshal(RestoreSecrets(model.ConnectionTypeMySQL, prev, next), &cfg); err != nil {
+		t.Fatalf("decode restored: %v", err)
+	}
+	if cfg.SSH == nil || cfg.SSH.Password != "old-ssh-pass" || cfg.SSH.PrivateKey != "old-key-pem" || cfg.SSH.Passphrase != "old-key-pass" {
+		t.Fatalf("ssh 留空凭据应回填已存值: %+v", cfg.SSH)
+	}
+	if cfg.Host != "db2" || cfg.SSH.Host != "jump2" || cfg.SSH.Username != "jumper2" {
+		t.Fatalf("非凭据字段必须保留 next 新值: %+v", cfg)
+	}
+
+	// next 单字段给新值:非空保留,其余回填。
+	next = model.MustConfigJSON(model.MysqlConfig{
+		Host: "db", Port: 3306, Username: "root",
+		SSH: &model.SSHTunnelConfig{
+			Enabled: true, Host: "jump", Port: 22, Username: "jumper",
+			AuthType: model.SSHAuthPrivateKey, Password: "new-ssh-pass",
+		},
+	})
+	if err := json.Unmarshal(RestoreSecrets(model.ConnectionTypeMySQL, prev, next), &cfg); err != nil {
+		t.Fatalf("decode restored: %v", err)
+	}
+	if cfg.SSH.Password != "new-ssh-pass" || cfg.SSH.PrivateKey != "old-key-pem" {
+		t.Fatalf("非空值保留 next、空值回填 prev: %+v", cfg.SSH)
+	}
+
+	// next 关闭隧道但键仍在(ssh.enabled=false):回填照常,凭据不丢,
+	// 重新启用后无需重输。
+	nextOff := model.MustConfigJSON(model.MysqlConfig{
+		Host: "db", Port: 3306, Username: "root",
+		SSH: &model.SSHTunnelConfig{Enabled: false},
+	})
+	if err := json.Unmarshal(RestoreSecrets(model.ConnectionTypeMySQL, prev, nextOff), &cfg); err != nil {
+		t.Fatalf("decode restored: %v", err)
+	}
+	if cfg.SSH == nil || cfg.SSH.Enabled {
+		t.Fatalf("ssh 键必须保留(关闭态): %+v", cfg.SSH)
+	}
+	if cfg.SSH.PrivateKey != "old-key-pem" {
+		t.Fatalf("关闭态凭据仍应回填以备重新启用: %+v", cfg.SSH)
+	}
+
+	// next 未配置隧道(无 ssh 键):prev 的隧道凭据不复活,顶层密码照常回填。
+	// (每轮用全新 cfg:json.Unmarshal 不重置输入中缺失的字段。)
+	nextNoSSH := model.MustConfigJSON(model.MysqlConfig{Host: "db", Port: 3306, Username: "root", Password: ""})
+	var fresh model.MysqlConfig
+	if err := json.Unmarshal(RestoreSecrets(model.ConnectionTypeMySQL, prev, nextNoSSH), &fresh); err != nil {
+		t.Fatalf("decode restored: %v", err)
+	}
+	if fresh.SSH != nil {
+		t.Fatalf("next 无 ssh 键时不得复活隧道配置: %+v", fresh.SSH)
+	}
+	if fresh.Password != "old-db-pass" {
+		t.Fatalf("顶层密码回填不受影响: %+v", fresh)
+	}
+}
+
 func TestRestoreSecretsRedisMissingKey(t *testing.T) {
 	// 前端 redis 空密码会省略 password 键(PasswordInput 留空 → undefined),
 	// 回填必须覆盖「键缺失」而不只是空串。

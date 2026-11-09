@@ -173,6 +173,9 @@ func (s *Service) PostgresPreviewDeleteRow(ctx context.Context, req PostgresDele
 
 // PostgresDeleteRow 执行按主键定位的 DELETE(危险操作,审计由 app 层落)。
 func (s *Service) PostgresDeleteRow(ctx context.Context, req PostgresDeleteRowRequest) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	pg, err := s.postgres(ctx, req.ConnectionID)
 	if err != nil {
 		return err

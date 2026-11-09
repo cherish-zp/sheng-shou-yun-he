@@ -288,7 +288,8 @@ func (a *App) DeleteConsumerGroup(req DeleteConsumerGroupRequest) error {
 // maskConnectionSecrets 返回 c 的浅拷贝,并把 config JSON 中的敏感凭据字段
 // 替换为空串(纯函数:入参不修改)。敏感字段清单与 store 落盘加密、service
 // 层 RestoreSecrets 的回填一致:kafka 为 sasl.password;redis/clickhouse/
-// mysql/tidb/postgres/hive 为 password;es 为 password + api_key。App 层
+// mysql/tidb/postgres/hive 为 password;es 为 password + api_key;mysql/
+// tidb/redis 另有 ssh 子对象的 password/private_key/passphrase。App 层
 // 回传 WebView 的出口(List/Get/Create/Update)统一调用:明文密码只留在
 // 后端进程内,连接池与内部逻辑仍用真实值。
 func maskConnectionSecrets(c *model.Connection) *model.Connection {
@@ -330,6 +331,17 @@ func maskConnectionSecrets(c *model.Connection) *model.Connection {
 		blank(root, "api_key")
 	default:
 		blank(root, "password")
+		// SSH 隧道凭据(mysql/tidb/redis):三个敏感字段一并脱敏,前端
+		// 编辑时留空即由 RestoreSecrets 按「留空=不变」回填。
+		if sshRaw, ok := root["ssh"]; ok {
+			var sshCfg map[string]json.RawMessage
+			if json.Unmarshal(sshRaw, &sshCfg) == nil {
+				blank(sshCfg, "password")
+				blank(sshCfg, "private_key")
+				blank(sshCfg, "passphrase")
+				root["ssh"] = model.MustConfigJSON(sshCfg)
+			}
+		}
 	}
 	if changed {
 		masked.Config = model.MustConfigJSON(root)

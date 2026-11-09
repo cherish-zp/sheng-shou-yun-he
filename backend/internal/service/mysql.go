@@ -54,6 +54,9 @@ type MysqlClient struct {
 	connType model.ConnectionType
 	// defaultDB 是连接配置的默认库:请求未显式指定库名时兜底使用。
 	defaultDB string
+	// tunnel 是配置启用 SSH 隧道时创建的本地转发器;随客户端生命周期关闭
+	// (Close 先关连接池,再关隧道)。
+	tunnel *sshTunnel
 
 	// 浏览性能缓存:表元数据(engine/列/主键)、行数计数与建表语句,TTL 内
 	// 被翻页、SQL 控制台与建表语句查询复用,写路径按表失效。零值即可用,
@@ -74,11 +77,44 @@ func NewMysqlClient(cfg model.MysqlConfig) (*MysqlClient, error) {
 
 // NewMysqlClientOfType builds a client tagged with the real connection type
 // (mysql or tidb) and verifies reachability with a Ping before returning.
+// 配置启用 SSH 隧道时,先校验 SSH 配置并起跳板机隧道,再把拨号地址替换为
+// 本地转发地址(转发目标 = 配置的 host:port);并发冷建由上层 connectOnce
+// 单飞保护,隧道在构造内创建即可。verify-full TLS 的证书名校验仍用真实
+// 主机名(本地回环地址不能作为 SNI)。
 func NewMysqlClientOfType(cfg model.MysqlConfig, connType model.ConnectionType) (*MysqlClient, error) {
 	if connType != model.ConnectionTypeMySQL && connType != model.ConnectionTypeTiDB {
 		return nil, fmt.Errorf("connection type %q is not a MySQL/TiDB source", connType)
 	}
-	dsn, err := buildMysqlDSN(cfg)
+
+	// SSH 隧道:构造失败路径由 tunnelMoved defer 回收;成功路径随
+	// client.Close 关闭。
+	var tunnel *sshTunnel
+	tunnelMoved := true
+	tlsServerName := ""
+	if cfg.SSH != nil && cfg.SSH.Enabled {
+		if err := cfg.SSH.Validate(); err != nil {
+			return nil, err
+		}
+		tn, err := startSSHTunnel(context.Background(), cfg.SSH, cfg.Host, cfg.Port)
+		if err != nil {
+			return nil, fmt.Errorf("ssh tunnel: %w", err)
+		}
+		tunnel = tn
+		tunnelMoved = false
+		defer func() {
+			if !tunnelMoved {
+				_ = tn.Close()
+			}
+		}()
+		tlsServerName = cfg.Host
+		localHost, localPort, err := splitSeedHostPort(tn.localAddr())
+		if err != nil {
+			return nil, fmt.Errorf("ssh tunnel local addr: %w", err)
+		}
+		cfg.Host, cfg.Port = localHost, localPort
+	}
+
+	dsn, err := buildMysqlDSN(cfg, tlsServerName)
 	if err != nil {
 		return nil, err
 	}
@@ -92,17 +128,23 @@ func NewMysqlClientOfType(cfg model.MysqlConfig, connType model.ConnectionType) 
 		_ = db.Close()
 		return nil, wrapMysqlPingError(err)
 	}
-	return &MysqlClient{db: db, connType: connType, defaultDB: cfg.Database}, nil
+	tunnelMoved = true
+	return &MysqlClient{db: db, connType: connType, defaultDB: cfg.Database, tunnel: tunnel}, nil
 }
 
 // buildMysqlDSN renders the driver DSN:
 // user:pass@tcp(host:port)/db?charset=utf8mb4&parseTime=true&loc=Local, with
 // the tls parameter added per TLSMode (skip-verify builtin name or a custom
 // verify-full registration). Values go through FormatDSN so credentials with
-// special characters cannot break the DSN structure.
-func buildMysqlDSN(cfg model.MysqlConfig) (string, error) {
+// special characters cannot break the DSN structure. tlsServerName 为空时
+// 取 cfg.Host;SSH 隧道下传入真实目标主机名,verify-full 的证书名校验不
+// 会误用本地回环拨号地址。
+func buildMysqlDSN(cfg model.MysqlConfig, tlsServerName string) (string, error) {
 	if err := cfg.Validate(); err != nil {
 		return "", err
+	}
+	if tlsServerName == "" {
+		tlsServerName = cfg.Host
 	}
 	d := mysql.NewConfig()
 	d.User = cfg.Username
@@ -117,7 +159,7 @@ func buildMysqlDSN(cfg model.MysqlConfig) (string, error) {
 	case model.MysqlTLSSkipVerify:
 		d.TLSConfig = model.MysqlTLSSkipVerify
 	case model.MysqlTLSVerifyFull:
-		name, err := registerMysqlVerifyFullTLS(cfg.Host)
+		name, err := registerMysqlVerifyFullTLS(tlsServerName)
 		if err != nil {
 			return "", err
 		}
@@ -198,8 +240,17 @@ func (c *MysqlClient) Ping(ctx context.Context) error {
 	return c.db.PingContext(ctx)
 }
 
-// Close releases the underlying connection pool.
-func (c *MysqlClient) Close() error { return c.db.Close() }
+// Close releases the underlying connection pool. 启用 SSH 隧道时先关连接
+// 池,再关隧道(隧道关闭会立刻断开所有经转发的在途连接)。
+func (c *MysqlClient) Close() error {
+	err := c.db.Close()
+	if c.tunnel != nil {
+		if terr := c.tunnel.Close(); err == nil {
+			err = terr
+		}
+	}
+	return err
+}
 
 // Databases lists user schemas, excluding the four built-in system schemas,
 // ordered by name.
@@ -1268,6 +1319,9 @@ func (s *Service) MysqlPageRows(ctx context.Context, id, database, table, where,
 
 // MysqlTruncateTable empties a table (dangerous, audited by the caller).
 func (s *Service) MysqlTruncateTable(ctx context.Context, id, database, table string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	m, err := s.mysql(ctx, id)
 	if err != nil {
 		return err
@@ -1277,8 +1331,12 @@ func (s *Service) MysqlTruncateTable(ctx context.Context, id, database, table st
 
 // MysqlExecute runs a SQL script statement by statement; database 非空时全部
 // 语句固定在一条 USE 过的专用连接上执行,为空时走连接池。limit>0 启用服务端
-// 分页(包装查询 + COUNT 计数,SHOW 类语句客户端截断)。
+// 分页(包装查询 + COUNT 计数,SHOW 类语句客户端截断)。只读模式下拒绝非
+// 查询语句(闸门见 ensureSQLReadOnlySafe)。
 func (s *Service) MysqlExecute(ctx context.Context, id, database, sqlText string, limit, offset int) ([]model.MysqlStatementResult, error) {
+	if err := s.ensureSQLReadOnlySafe(ctx, sqlText, mysqlStatementReturnsRows); err != nil {
+		return nil, err
+	}
 	m, err := s.mysql(ctx, id)
 	if err != nil {
 		return nil, err
@@ -1298,6 +1356,9 @@ func (s *Service) MysqlPreviewCellUpdate(ctx context.Context, id, database, tabl
 
 // MysqlUpdateCell 执行参数化单元格更新(危险操作,审计由 app 层落)。
 func (s *Service) MysqlUpdateCell(ctx context.Context, id, database, table string, set model.MysqlCellValue, where []model.MysqlCellValue) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	m, err := s.mysql(ctx, id)
 	if err != nil {
 		return err

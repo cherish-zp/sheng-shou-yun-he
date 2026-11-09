@@ -639,6 +639,9 @@ func (s *Service) mysqlClient(ctx context.Context, id string) (*MysqlClient, err
 
 // MysqlDropTable drops the table (dangerous, audited by the caller).
 func (s *Service) MysqlDropTable(ctx context.Context, id, database, table string) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	m, err := s.mysqlClient(ctx, id)
 	if err != nil {
 		return err
@@ -666,6 +669,9 @@ func (s *Service) MysqlTableCreateSQL(ctx context.Context, id, database, table s
 
 // MysqlAlterTable applies the ADD → MODIFY → DROP structure changes.
 func (s *Service) MysqlAlterTable(ctx context.Context, id string, spec MysqlAlterTableSpec) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	m, err := s.mysqlClient(ctx, id)
 	if err != nil {
 		return err

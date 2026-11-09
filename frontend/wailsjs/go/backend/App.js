@@ -14,6 +14,10 @@ export function ApplyUpdate(arg1) {
   return window['go']['backend']['App']['ApplyUpdate'](arg1);
 }
 
+export function BuildResultXLSX(arg1) {
+  return window['go']['backend']['App']['BuildResultXLSX'](arg1);
+}
+
 export function CHDeleteRow(arg1) {
   return window['go']['backend']['App']['CHDeleteRow'](arg1);
 }
@@ -172,6 +176,10 @@ export function EsRefreshIndex(arg1) {
 
 export function EsUpdateIndexSettings(arg1) {
   return window['go']['backend']['App']['EsUpdateIndexSettings'](arg1);
+}
+
+export function GetAppSettings() {
+  return window['go']['backend']['App']['GetAppSettings']();
 }
 
 export function GetConnection(arg1) {
@@ -498,12 +506,20 @@ export function ResetConsumerGroupOffset(arg1) {
   return window['go']['backend']['App']['ResetConsumerGroupOffset'](arg1);
 }
 
+export function SaveBinaryFile(arg1) {
+  return window['go']['backend']['App']['SaveBinaryFile'](arg1);
+}
+
 export function SaveSavedQuery(arg1) {
   return window['go']['backend']['App']['SaveSavedQuery'](arg1);
 }
 
 export function SaveTextFile(arg1) {
   return window['go']['backend']['App']['SaveTextFile'](arg1);
+}
+
+export function SetAppSettings(arg1) {
+  return window['go']['backend']['App']['SetAppSettings'](arg1);
 }
 
 export function TestCHConnection(arg1) {

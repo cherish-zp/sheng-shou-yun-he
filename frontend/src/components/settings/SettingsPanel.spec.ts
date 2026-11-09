@@ -89,6 +89,8 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
     redisServerInfo: vi.fn(async () => ({ mode: 'standalone' as const, used_memory_human: '', connected_clients: 0, total_keys: 0 })),
     saveTextFile: vi.fn(async () => ''),
     updateConnection: vi.fn(async () => ({}) as never),
+    getAppSettings: vi.fn(async () => ({ readonly_mode: false })),
+    setAppSettings: vi.fn(async (req: { readonly_mode: boolean }) => ({ readonly_mode: req.readonly_mode })),
     ...overrides,
   }
 }
@@ -443,5 +445,74 @@ describe('SettingsPanel', () => {
     await wrapper.find('[data-test="btn-query-dir-reset"]').trigger('click')
     expect((wrapper.find('[data-test="input-query-dir"]').element as HTMLInputElement).value).toBe(DEFAULT_QUERY_DIR)
     expect(localStorage.getItem(QUERY_DIR_KEY)).toBe(DEFAULT_QUERY_DIR)
+  })
+
+  // --- 通用 tab:生产安全模式(全局只读) --------------------------------------
+
+  it('shows the readonly section with the switch reflecting the backend state', async () => {
+    ;(api.getAppSettings as ReturnType<typeof vi.fn>).mockResolvedValue({ readonly_mode: false })
+    const wrapper = mountPanel()
+    await vi.waitFor(() => {
+      expect(api.getAppSettings).toHaveBeenCalled()
+    })
+    const section = wrapper.find('[data-test="readonly-section"]')
+    expect(section.exists()).toBe(true)
+    expect(section.text()).toContain('生产安全')
+    // 关闭态:无警示文案。
+    expect(wrapper.find('[data-test="settings-readonly"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="readonly-warning"]').exists()).toBe(false)
+  })
+
+  it('turning the switch on persists readonly_mode and shows the global warning', async () => {
+    ;(api.getAppSettings as ReturnType<typeof vi.fn>).mockResolvedValue({ readonly_mode: false })
+    ;(api.setAppSettings as ReturnType<typeof vi.fn>).mockImplementation(async (req: { readonly_mode: boolean }) => ({ readonly_mode: req.readonly_mode }))
+    const wrapper = mountPanel()
+    await vi.waitFor(() => {
+      expect(api.getAppSettings).toHaveBeenCalled()
+    })
+    // 等待加载态结束(开关从 disabled 变为可用)再点击。
+    await vi.waitFor(() => {
+      expect((wrapper.find('[data-test="settings-readonly"]').element as HTMLButtonElement).disabled).toBe(false)
+    })
+    await wrapper.find('[data-test="settings-readonly"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(api.setAppSettings).toHaveBeenCalledWith({ readonly_mode: true })
+    })
+    // 后端确认开启后展示全局警示文案。
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="readonly-warning"]').text()).toContain('写操作已被全局拒绝')
+    })
+  })
+
+  it('renders the switch as on when the backend already has readonly mode enabled', async () => {
+    ;(api.getAppSettings as ReturnType<typeof vi.fn>).mockResolvedValue({ readonly_mode: true })
+    const wrapper = mountPanel()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="readonly-warning"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-test="readonly-warning"]').text()).toContain('写操作已被全局拒绝')
+  })
+
+  it('reverts the switch and toasts when saving fails', async () => {
+    ;(api.getAppSettings as ReturnType<typeof vi.fn>).mockResolvedValue({ readonly_mode: false })
+    ;(api.setAppSettings as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('disk full'))
+    const wrapper = mountPanel()
+    await vi.waitFor(() => {
+      expect(api.getAppSettings).toHaveBeenCalled()
+    })
+    await vi.waitFor(() => {
+      expect((wrapper.find('[data-test="settings-readonly"]').element as HTMLButtonElement).disabled).toBe(false)
+    })
+    await wrapper.find('[data-test="settings-readonly"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(api.setAppSettings).toHaveBeenCalledWith({ readonly_mode: true })
+    })
+    const toast = useToastStore()
+    await vi.waitFor(() => {
+      expect(toast.message).toContain('保存生产安全模式失败')
+      expect(toast.message).toContain('disk full')
+    })
+    // 保存失败:回拨为关闭,不展示警示文案。
+    expect(wrapper.find('[data-test="readonly-warning"]').exists()).toBe(false)
   })
 })

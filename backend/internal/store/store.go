@@ -47,6 +47,10 @@ CREATE TABLE IF NOT EXISTS saved_queries (
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS app_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 `
 
 // auditDefaultLimit caps unqualified audit listings.
@@ -305,6 +309,9 @@ func (s *Store) marshalConfig(typ model.ConnectionType, raw json.RawMessage) (st
 			}
 			cfg.Password = enc
 		}
+		if err := s.encryptSSHConfig(cfg.SSH); err != nil {
+			return "", err
+		}
 		b, err := json.Marshal(cfg)
 		if err != nil {
 			return "", fmt.Errorf("marshal config: %w", err)
@@ -323,6 +330,9 @@ func (s *Store) marshalConfig(typ model.ConnectionType, raw json.RawMessage) (st
 				return "", fmt.Errorf("encrypt password: %w", err)
 			}
 			cfg.Password = enc
+		}
+		if err := s.encryptSSHConfig(cfg.SSH); err != nil {
+			return "", err
 		}
 		b, err := json.Marshal(cfg)
 		if err != nil {
@@ -441,6 +451,9 @@ func (s *Store) unmarshalConfig(typ string, raw string) (json.RawMessage, error)
 			}
 			cfg.Password = dec
 		}
+		if err := s.decryptSSHConfig(cfg.SSH); err != nil {
+			return nil, err
+		}
 		b, err := json.Marshal(cfg)
 		if err != nil {
 			return nil, err
@@ -457,6 +470,9 @@ func (s *Store) unmarshalConfig(typ string, raw string) (json.RawMessage, error)
 				return nil, fmt.Errorf("decrypt password: %w", err)
 			}
 			cfg.Password = dec
+		}
+		if err := s.decryptSSHConfig(cfg.SSH); err != nil {
+			return nil, err
 		}
 		b, err := json.Marshal(cfg)
 		if err != nil {
@@ -572,6 +588,46 @@ func cloneConfig(cfg model.KafkaConfig) model.KafkaConfig {
 		out.TLS = &t
 	}
 	return out
+}
+
+// encryptSSHConfig encrypts the three sensitive SSH tunnel credential fields
+// (password/private_key/passphrase) in place, mirroring the treatment of
+// top-level passwords: the stored JSON never contains plaintext secrets.
+func (s *Store) encryptSSHConfig(cfg *model.SSHTunnelConfig) error {
+	if cfg == nil {
+		return nil
+	}
+	for _, f := range []*string{&cfg.Password, &cfg.PrivateKey, &cfg.Passphrase} {
+		if *f == "" {
+			continue
+		}
+		enc, err := s.crypto.Encrypt(*f)
+		if err != nil {
+			return fmt.Errorf("encrypt ssh credential: %w", err)
+		}
+		*f = enc
+	}
+	return nil
+}
+
+// decryptSSHConfig reverses encryptSSHConfig for the stored prefixes;
+// 非 enc: 前缀的值(历史明文/未来格式)原样保留,由调用方按需处理。
+func (s *Store) decryptSSHConfig(cfg *model.SSHTunnelConfig) error {
+	if cfg == nil {
+		return nil
+	}
+	prefix := encPrefix + cryptoVersion + ":"
+	for _, f := range []*string{&cfg.Password, &cfg.PrivateKey, &cfg.Passphrase} {
+		if *f == "" || !strings.HasPrefix(*f, prefix) {
+			continue
+		}
+		dec, err := s.crypto.Decrypt(*f)
+		if err != nil {
+			return fmt.Errorf("decrypt ssh credential: %w", err)
+		}
+		*f = dec
+	}
+	return nil
 }
 
 // RecordAudit appends an audit entry for a dangerous operation. A zero

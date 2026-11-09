@@ -78,4 +78,15 @@ describe('StatusBar', () => {
     expect(wrapper.find('[data-test="status-count"]').text()).toBe('连接 2 · 在线 1')
     expect(wrapper.find('[data-test="status-error"]').exists()).toBe(false)
   })
+
+  // --- 生产安全模式(只读)标识 ---------------------------------------------------
+
+  it('hides the readonly badge by default and shows it only when readonly is passed', async () => {
+    const wrapper = mount(StatusBar)
+    expect(wrapper.find('[data-test="status-readonly"]').exists()).toBe(false)
+    const readonlyWrapper = mount(StatusBar, { props: { readonly: true } })
+    const badge = readonlyWrapper.find('[data-test="status-readonly"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toBe('只读')
+  })
 })

@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { CSV_MIME, JSONL_MIME } from '@/utils/export'
+import { CSV_MIME, JSONL_MIME, XLSX_MIME } from '@/utils/export'
+import { setApi, type Api } from '@/api/client'
 import { type InsertTarget } from '@/utils/insertSql'
 import { useToastStore } from '@/store/toast'
 import SqlResultCard from './SqlResultCard.vue'
@@ -171,6 +172,47 @@ describe('SqlResultCard', () => {
       .map((o) => JSON.stringify(o))
       .join('\n')
     expect(saveFileMock).toHaveBeenCalledWith('query-result', expected, JSONL_MIME)
+  })
+
+  it('导出 XLSX:buildResultXLSX(列名/行/表名) 后 saveBinaryFile(exportName, base64, xlsx mime),null 行原样上送', async () => {
+    // 'ABC' 的 base64;[]byte 绑定经 Wails JSON 传输为 base64 字符串。
+    const buildXlsx = vi.fn(async () => 'QUJD')
+    const saveBinary = vi.fn(async () => '/tmp/out.xlsx')
+    setApi({ buildResultXLSX: buildXlsx, saveBinaryFile: saveBinary } as unknown as Api)
+    const wrapper = mountCard()
+    await wrapper.find('[data-test="result-export-xlsx"]').trigger('click')
+    await flushPromises()
+    // Blob/下载在 jsdom 不可断言,断言到两次 API 调用为止;rows 只含当前
+    // 已拉取的行(分页导出语义与 CSV 相同)。
+    expect(buildXlsx).toHaveBeenCalledTimes(1)
+    expect(buildXlsx).toHaveBeenCalledWith({
+      columns: ['id', 'name'],
+      rows: [
+        ['1', 'a'],
+        [null, "O'Brien"],
+      ],
+      sheet_name: 'query-result',
+    })
+    expect(saveBinary).toHaveBeenCalledTimes(1)
+    expect(saveBinary).toHaveBeenCalledWith({
+      filename: 'query-result',
+      content_base64: 'QUJD',
+      mime: XLSX_MIME,
+    })
+    // 保存走后端二进制对话框,不经过文本版 saveFile。
+    expect(saveFileMock).not.toHaveBeenCalled()
+  })
+
+  it('导出 XLSX 失败(buildResultXLSX 拒绝):toast 提示,不触发保存', async () => {
+    setApi({
+      buildResultXLSX: vi.fn(async () => {
+        throw new Error('boom')
+      }),
+    } as unknown as Api)
+    const wrapper = mountCard()
+    await wrapper.find('[data-test="result-export-xlsx"]').trigger('click')
+    await flushPromises()
+    expect(useToastStore().message).toContain('导出 XLSX 失败')
   })
 
   it('表格:行号 1 起、单元格悬浮全文、NULL 显示为空', () => {

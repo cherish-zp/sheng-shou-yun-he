@@ -151,6 +151,9 @@ func (s *Service) MysqlPreviewDeleteRow(ctx context.Context, req MysqlDeleteRowR
 
 // MysqlDeleteRow 执行按主键定位的 DELETE(危险操作,审计由 app 层落)。
 func (s *Service) MysqlDeleteRow(ctx context.Context, req MysqlDeleteRowRequest) error {
+	if err := s.ensureWritable(ctx); err != nil {
+		return err
+	}
 	m, err := s.mysqlClient(ctx, req.ConnectionID)
 	if err != nil {
 		return err

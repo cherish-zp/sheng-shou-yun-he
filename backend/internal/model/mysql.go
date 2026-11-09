@@ -27,6 +27,9 @@ type MysqlConfig struct {
 	// TLSMode is one of disabled/skip-verify/verify-full ("" normalizes to
 	// disabled during Validate).
 	TLSMode string `json:"tls_mode,omitempty"`
+	// SSH 为可选的跳板机隧道配置(nil/Enabled=false 直连)。启用时 DB 驱动
+	// 拨号地址替换为本地转发地址,转发目标是本配置的 host:port。
+	SSH *SSHTunnelConfig `json:"ssh,omitempty"`
 }
 
 // Validate checks the MySQL configuration and normalizes it in place: the
@@ -52,6 +55,11 @@ func (c *MysqlConfig) Validate() error {
 		c.TLSMode = m
 	default:
 		return fmt.Errorf("不支持的 TLS 模式 %q(仅支持 disabled/skip-verify/verify-full)", c.TLSMode)
+	}
+	if c.SSH != nil {
+		if err := c.SSH.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

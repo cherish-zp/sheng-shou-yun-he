@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,13 +28,18 @@ type RedisClient struct {
 	baseOpts  *redis.Options
 	dbMu      sync.Mutex
 	dbClients map[int]redis.UniversalClient
+	// tunnel 是配置启用 SSH 隧道时创建的本地转发器;随客户端生命周期关闭
+	// (Close 先断 Redis 连接,再关隧道)。
+	tunnel *sshTunnel
 }
 
 // NewRedisClient builds the client, auto-detecting native clusters via
 // INFO cluster_enabled on the first seed, and verifies reachability with a
-// PING before returning.
+// PING before returning. 配置启用 SSH 隧道时,先起跳板机隧道,再让客户端连
+// 本地转发地址(转发目标 = 地址首个 seed);TLS SNI 保持真实主机名,不使用
+// 本地回环地址。并发冷建由上层 connectOnce 单飞保护,隧道在构造内创建即可。
 func NewRedisClient(cfg model.RedisConfig) (*RedisClient, error) {
-	var seeds []string
+	seeds := []string{}
 	for _, a := range strings.Split(cfg.Addr, ",") {
 		a = strings.TrimSpace(a)
 		if a != "" {
@@ -44,12 +50,42 @@ func NewRedisClient(cfg model.RedisConfig) (*RedisClient, error) {
 		return nil, fmt.Errorf("redis addr must not be empty")
 	}
 
+	// SSH 隧道:校验 SSH 配置 → 起隧道 → 客户端只连本地转发地址。
+	// tunnelMoved 标记隧道是否已随成功构造的 client 移交;构造失败时由
+	// defer 回收,成功路径随 client.Close 关闭。
+	var tunnel *sshTunnel
+	tunnelMoved := true
+	tlsHost := ""
+	if cfg.SSH != nil && cfg.SSH.Enabled {
+		if err := cfg.SSH.Validate(); err != nil {
+			return nil, err
+		}
+		host, port, err := splitSeedHostPort(seeds[0])
+		if err != nil {
+			return nil, fmt.Errorf("redis addr %q: %w", seeds[0], err)
+		}
+		tn, err := startSSHTunnel(context.Background(), cfg.SSH, host, port)
+		if err != nil {
+			return nil, fmt.Errorf("ssh tunnel: %w", err)
+		}
+		tunnel = tn
+		tunnelMoved = false
+		defer func() {
+			if !tunnelMoved {
+				_ = tn.Close()
+			}
+		}()
+		tlsHost = host
+		seeds = []string{tn.localAddr()}
+		cfg.Addr = seeds[0]
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// 用单机协议探测首个种子:cluster_enabled:1 → 原生集群。
 	probe := redis.NewClient(&redis.Options{
-		Addr: seeds[0], Password: cfg.Password, TLSConfig: tlsConfigFor(seeds[0], cfg.TLS),
+		Addr: seeds[0], Password: cfg.Password, TLSConfig: tlsConfigForHost(tlsHost, seeds[0], cfg.TLS),
 	})
 	cluster := false
 	if info, err := probe.Info(ctx, "cluster_enabled").Result(); err == nil && strings.Contains(info, "cluster_enabled:1") {
@@ -60,38 +96,63 @@ func NewRedisClient(cfg model.RedisConfig) (*RedisClient, error) {
 	if cluster {
 		cl := redis.NewClusterClient(&redis.ClusterOptions{
 			Addrs: seeds, Password: cfg.Password,
-			TLSConfig: tlsConfigFor(seeds[0], cfg.TLS),
+			TLSConfig: tlsConfigForHost(tlsHost, seeds[0], cfg.TLS),
 		})
 		if err := cl.Ping(ctx).Err(); err != nil {
 			cl.Close()
 			return nil, fmt.Errorf("redis cluster ping: %w", err)
 		}
-		return &RedisClient{client: cl, cluster: true}, nil
+		tunnelMoved = true
+		return &RedisClient{client: cl, cluster: true, tunnel: tunnel}, nil
 	}
 
 	base := &redis.Options{
 		Addr: seeds[0], Password: cfg.Password, DB: cfg.DB,
-		TLSConfig: tlsConfigFor(seeds[0], cfg.TLS),
+		TLSConfig: tlsConfigForHost(tlsHost, seeds[0], cfg.TLS),
 	}
 	cl := redis.NewClient(base)
 	if err := cl.Ping(ctx).Err(); err != nil {
 		cl.Close()
 		return nil, fmt.Errorf("redis ping: %w", err)
 	}
-	return &RedisClient{client: cl, cluster: false, baseOpts: base}, nil
+	tunnelMoved = true
+	return &RedisClient{client: cl, cluster: false, baseOpts: base, tunnel: tunnel}, nil
+}
+
+// splitSeedHostPort splits a host:port seed into host and numeric port.
+func splitSeedHostPort(seed string) (string, int, error) {
+	host, portStr, err := net.SplitHostPort(seed)
+	if err != nil {
+		return "", 0, err
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return "", 0, fmt.Errorf("parse port %q: %w", portStr, err)
+	}
+	return host, port, nil
 }
 
 // tlsConfigFor returns the TLS config when enabled; ServerName is derived
 // from the host so name verification works with host:port addresses.
 func tlsConfigFor(addr string, enabled bool) *tls.Config {
+	return tlsConfigForHost("", addr, enabled)
+}
+
+// tlsConfigForHost is tlsConfigFor with an explicit ServerName override:
+// SSH 隧道下拨号地址是本地回环,证书名校验必须用真实目标主机名(tlsHost,
+// 空串时回退从 addr 解析)。
+func tlsConfigForHost(tlsHost, addr string, enabled bool) *tls.Config {
 	if !enabled {
 		return nil
 	}
-	host := addr
-	if i := strings.LastIndex(addr, ":"); i > 0 {
-		host = addr[:i]
+	if tlsHost == "" {
+		host := addr
+		if i := strings.LastIndex(addr, ":"); i > 0 {
+			host = addr[:i]
+		}
+		tlsHost = host
 	}
-	return &tls.Config{ServerName: host}
+	return &tls.Config{ServerName: tlsHost}
 }
 
 // forDB returns the client bound to the given logical DB. Clusters always
@@ -126,7 +187,8 @@ func (c *RedisClient) Connect(ctx context.Context) error {
 	return c.Ping(ctx)
 }
 
-// Close releases the underlying connections.
+// Close releases the underlying connections. 启用 SSH 隧道时先断 Redis,
+// 再关隧道(先关隧道会中断在途 Redis 连接的优雅收尾)。
 func (c *RedisClient) Close() error {
 	c.dbMu.Lock()
 	for _, cl := range c.dbClients {
@@ -134,7 +196,13 @@ func (c *RedisClient) Close() error {
 	}
 	c.dbClients = nil
 	c.dbMu.Unlock()
-	return c.client.Close()
+	err := c.client.Close()
+	if c.tunnel != nil {
+		if terr := c.tunnel.Close(); err == nil {
+			err = terr
+		}
+	}
+	return err
 }
 
 // Ping verifies reachability.

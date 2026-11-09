@@ -56,6 +56,20 @@ const emit = defineEmits<{
 const tabs = useTabsStore()
 const connectionsStore = useConnectionsStore()
 
+// --- 生产安全模式(只读)标识 -------------------------------------------------
+// 启动时读一次 App 设置;设置面板关闭后重读一次,保证开关改动即时反映到
+// 状态栏 Badge。读取失败按未开启处理(后端为最终裁决,前端仅作提醒)。
+const readonlyMode = ref(false)
+
+async function loadReadonlyMode(): Promise<void> {
+  try {
+    const settings = await getApi().getAppSettings?.()
+    readonlyMode.value = settings?.readonly_mode === true
+  } catch {
+    readonlyMode.value = false
+  }
+}
+
 // reorderConnections 接住连接树的排序 emit,转调 connections store 持久化
 // (组件只 emit,store 调用收敛在 Layout,与 tabs 打开逻辑同层)。
 function reorderConnections(ids: string[]): void {
@@ -576,6 +590,8 @@ onMounted(() => {
   // 首次静默探测新版本,之后定时重查;失败已在 pollUpdate 内静默。
   void pollUpdate()
   updateTimer = window.setInterval(() => void pollUpdate(), UPDATE_CHECK_INTERVAL_MS)
+  // 只读模式标识:启动加载一次。
+  void loadReadonlyMode()
 })
 
 onBeforeUnmount(() => {
@@ -856,7 +872,7 @@ function onTabDragEnd(): void {
       </aside>
     </div>
 
-    <StatusBar />
+    <StatusBar :readonly="readonlyMode" />
 
     <!-- 全局轻提示浮层:由 toast store 驱动,底部居中,自动消失在 store 内定时。 -->
     <div
@@ -876,7 +892,7 @@ function onTabDragEnd(): void {
       @close="showProducer = false"
     />
     <!-- 设置面板「关于」页点检查更新:沿用已有 UpdateDialog,避免重复弹窗。 -->
-    <SettingsPanel :show="showSettings" @close="showSettings = false" @check-update="showUpdate = true" />
+    <SettingsPanel :show="showSettings" @close="showSettings = false; loadReadonlyMode()" @check-update="showUpdate = true" />
     <UpdateDialog :show="showUpdate" @close="showUpdate = false" />
     <DocsDialog :show="showDocs" @close="showDocs = false" />
     <CommandPalette ref="paletteRef" />

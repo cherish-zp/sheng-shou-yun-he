@@ -1136,6 +1136,193 @@ describe('NewConnectionModal', () => {
       )
     })
   })
+
+  // --- SSH 隧道(redis 与 mysql/tidb 的跳板机表单) ---
+
+  it('mysql 选中时展示 SSH 隧道开关,展开跳板机字段且默认关闭', async () => {
+    const wrapper = mountModal()
+    await wrapper.find('[data-test="type-card-mysql"]').trigger('click')
+    const toggle = wrapper.find('[data-test="ssh-toggle"]')
+    expect(toggle.exists()).toBe(true)
+    // 关闭态:展开字段不渲染。
+    expect((toggle.element as HTMLButtonElement).getAttribute('data-state')).toBe('unchecked')
+    expect(wrapper.find('[data-test="input-ssh-host"]').exists()).toBe(false)
+    await toggle.trigger('click')
+    expect((toggle.element as HTMLButtonElement).getAttribute('data-state')).toBe('checked')
+    expect((wrapper.find('[data-test="input-ssh-host"]').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.find('[data-test="input-ssh-port"]').element as HTMLInputElement).value).toBe('22')
+    expect((wrapper.find('[data-test="input-ssh-auth-type"]').element as HTMLSelectElement).value).toBe('password')
+    expect(wrapper.find('[data-test="input-ssh-password"]').exists()).toBe(true)
+    // 默认密码认证:私钥字段不渲染;切换后出现私钥与口令、隐藏密码框。
+    expect(wrapper.find('[data-test="input-ssh-private-key"]').exists()).toBe(false)
+    await wrapper.find('[data-test="input-ssh-auth-type"]').setValue('private_key')
+    expect(wrapper.find('[data-test="input-ssh-password"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="input-ssh-private-key"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="input-ssh-passphrase"]').exists()).toBe(true)
+  })
+
+  it('提交 mysql 连接时携带启用态的 ssh 隧道配置,关闭态省略 ssh 键', async () => {
+    const wrapper = mountModal()
+    await wrapper.find('[data-test="type-card-mysql"]').trigger('click')
+    await wrapper.find('[data-test="input-name"]').setValue('my-jump')
+    await wrapper.find('[data-test="input-mysql-host"]').setValue('db.internal')
+    // 关闭态提交:config 不含 ssh 键。
+    await wrapper.find('[data-test="btn-save"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(api.createConnection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'mysql',
+          config: expect.not.objectContaining({ ssh: expect.anything() }),
+        }),
+      )
+    })
+
+    // 启用 SSH(密码认证)再提交:ssh 子对象随 config 携带。
+    await wrapper.find('[data-test="ssh-toggle"]').trigger('click')
+    await wrapper.find('[data-test="input-ssh-host"]').setValue('jump.internal')
+    await wrapper.find('[data-test="input-ssh-port"]').setValue('2222')
+    await wrapper.find('[data-test="input-ssh-username"]').setValue('jumper')
+    await wrapper.find('[data-test="input-ssh-password"]').setValue('jump-pw')
+    await wrapper.find('[data-test="btn-save"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(api.createConnection).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          name: 'my-jump',
+          type: 'mysql',
+          config: expect.objectContaining({
+            host: 'db.internal',
+            ssh: {
+              enabled: true,
+              host: 'jump.internal',
+              port: 2222,
+              username: 'jumper',
+              auth_type: 'password',
+              password: 'jump-pw',
+              private_key: '',
+              passphrase: '',
+            },
+          }),
+        }),
+      )
+    })
+  })
+
+  it('redis 连接启用 SSH(私钥+口令)时 config 携带 ssh 配置', async () => {
+    const wrapper = mountModal()
+    await wrapper.find('[data-test="type-card-redis"]').trigger('click')
+    await wrapper.find('[data-test="input-name"]').setValue('redis-jump')
+    await wrapper.find('[data-test="input-addr"]').setValue('10.0.0.5:6379')
+    await wrapper.find('[data-test="ssh-toggle"]').trigger('click')
+    await wrapper.find('[data-test="input-ssh-host"]').setValue('jump.internal')
+    await wrapper.find('[data-test="input-ssh-username"]').setValue('jumper')
+    await wrapper.find('[data-test="input-ssh-auth-type"]').setValue('private_key')
+    await wrapper.find('[data-test="input-ssh-private-key"]').setValue('-----BEGIN OPENSSH PRIVATE KEY-----')
+    await wrapper.find('[data-test="input-ssh-passphrase"]').setValue('key-pass')
+    await wrapper.find('[data-test="btn-save"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(api.createConnection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'redis',
+          config: expect.objectContaining({
+            addr: '10.0.0.5:6379',
+            ssh: expect.objectContaining({
+              enabled: true,
+              host: 'jump.internal',
+              port: 22,
+              username: 'jumper',
+              auth_type: 'private_key',
+              private_key: '-----BEGIN OPENSSH PRIVATE KEY-----',
+              passphrase: 'key-pass',
+            }),
+          }),
+        }),
+      )
+    })
+  })
+
+  it('SSH 隧道启用态必填校验:跳板机地址为空时保存禁用', async () => {
+    const wrapper = mountModal()
+    await wrapper.find('[data-test="type-card-mysql"]').trigger('click')
+    await wrapper.find('[data-test="input-name"]').setValue('my')
+    await wrapper.find('[data-test="input-mysql-host"]').setValue('db.internal')
+    await wrapper.find('[data-test="ssh-toggle"]').trigger('click')
+    // 跳板机地址/用户名留空:保存与测试按钮禁用。
+    expect((wrapper.find('[data-test="btn-save"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect((wrapper.find('[data-test="btn-test"]').element as HTMLButtonElement).disabled).toBe(true)
+    await wrapper.find('[data-test="input-ssh-host"]').setValue('jump.internal')
+    await wrapper.find('[data-test="input-ssh-username"]').setValue('jumper')
+    expect((wrapper.find('[data-test="btn-save"]').element as HTMLButtonElement).disabled).toBe(false)
+    expect((wrapper.find('[data-test="btn-test"]').element as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('编辑既有连接时回填 SSH 隧道配置(凭据已脱敏为空串)', async () => {
+    const conn: Connection = {
+      id: 'my-ssh',
+      name: 'my-old',
+      type: 'mysql',
+      config: {
+        host: 'db.internal', port: 3306, username: 'root', password: '', database: '',
+        tls_mode: 'disabled',
+        ssh: {
+          enabled: true, host: 'jump.internal', port: 2222, username: 'jumper',
+          auth_type: 'private_key', password: '', private_key: '', passphrase: '',
+        },
+      },
+      sort_order: 0,
+      created_at: 1,
+      updated_at: 1,
+    }
+    const wrapper = mount(NewConnectionModal, { props: { show: true, connection: conn } })
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-test="ssh-toggle"]').exists()).toBe(true)
+    })
+    // 开关为开启态,展开字段可见。
+    expect((wrapper.find('[data-test="ssh-toggle"]').element as HTMLButtonElement).getAttribute('data-state')).toBe('checked')
+    expect((wrapper.find('[data-test="input-ssh-host"]').element as HTMLInputElement).value).toBe('jump.internal')
+    expect((wrapper.find('[data-test="input-ssh-port"]').element as HTMLInputElement).value).toBe('2222')
+    expect((wrapper.find('[data-test="input-ssh-username"]').element as HTMLInputElement).value).toBe('jumper')
+    expect((wrapper.find('[data-test="input-ssh-auth-type"]').element as HTMLSelectElement).value).toBe('private_key')
+    // 保存:启用态 ssh 配置原样回传(空凭据由后端按「留空=不变」回填)。
+    await wrapper.find('[data-test="input-name"]').setValue('my-new')
+    await wrapper.find('[data-test="btn-save"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(api.updateConnection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'my-ssh',
+          type: 'mysql',
+          config: expect.objectContaining({
+            ssh: expect.objectContaining({ enabled: true, host: 'jump.internal', port: 2222 }),
+          }),
+        }),
+      )
+    })
+  })
+
+  it('编辑无 SSH 配置的既有连接时开关为关闭态', async () => {
+    const conn: Connection = {
+      id: 'my-plain',
+      name: 'my-old',
+      type: 'mysql',
+      config: { host: 'db.internal', port: 3306, username: 'root', password: '', database: '', tls_mode: 'disabled' },
+      sort_order: 0,
+      created_at: 1,
+      updated_at: 1,
+    }
+    const wrapper = mount(NewConnectionModal, { props: { show: true, connection: conn } })
+    await vi.waitFor(() => {
+      expect((wrapper.find('[data-test="input-mysql-host"]').element as HTMLInputElement).value).toBe('db.internal')
+    })
+    expect((wrapper.find('[data-test="ssh-toggle"]').element as HTMLButtonElement).getAttribute('data-state')).toBe('unchecked')
+    expect(wrapper.find('[data-test="input-ssh-host"]').exists()).toBe(false)
+  })
+
+  it('kafka/clickhouse 等类型不展示 SSH 隧道区块', async () => {
+    const wrapper = mountModal()
+    expect(wrapper.find('[data-test="ssh-toggle"]').exists()).toBe(false)
+    await wrapper.find('[data-test="type-card-clickhouse"]').trigger('click')
+    await wrapper.find('[data-test="input-ch-hosts"]').setValue('n1:9000')
+    expect(wrapper.find('[data-test="ssh-toggle"]').exists()).toBe(false)
+  })
 })
 
 describe('PostgreSQL 连接卡片', () => {
@@ -1417,4 +1604,5 @@ describe('Hive 连接卡片', () => {
     expect(api2.testConnection).not.toHaveBeenCalled()
     expect(wrapper.find('[data-test="test-ok"]').exists()).toBe(true)
   })
+
 })
