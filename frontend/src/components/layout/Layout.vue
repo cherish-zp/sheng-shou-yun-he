@@ -5,6 +5,10 @@ import type { Connection } from '@/api/types'
 import ConnectionTree from '@/components/common/ConnectionTree.vue'
 import CommandPalette from '@/components/common/CommandPalette.vue'
 import BrandLogo from '@/components/common/BrandLogo.vue'
+// 壳层 DBX 化:顶栏按钮统一走 shadcn Button(ghost/sm 与 ghost/icon),
+// 图标统一 lucide-vue-next,替换手写 SVG 与全局 .btn 基类。
+import { Button } from '@/components/ui/button'
+import { ArrowDownToLine, BookOpen, FilePlus, FileText, RefreshCw, Settings, X } from 'lucide-vue-next'
 // tab 级重量视图统一异步分包:首屏只保留连接树/欢迎页等必需内容,以下面板
 // 在对应 tab 首次打开时按需加载(props/事件接线与静态导入完全一致)。
 import MessageBrowser from '@/components/kafka/MessageBrowser.vue'
@@ -644,71 +648,117 @@ function onTabDragEnd(): void {
 </script>
 
 <template>
-  <div class="layout" :class="{ resizing, 'files-resizing': filesResizing }" data-test="layout">
+  <div
+    class="layout flex h-screen flex-col bg-background text-foreground"
+    :class="[
+      { resizing, 'files-resizing': filesResizing },
+      resizing || filesResizing ? 'cursor-col-resize select-none' : '',
+    ]"
+    data-test="layout"
+  >
     <!-- 标题栏双栏合一:topbar 整行可拖动窗口(--wails-draggable 是 Wails v2 的
-         窗口拖拽 CSS 契约),交互按钮逐个降级为 no-drag 保证可点击。 -->
-    <header class="topbar" data-test="topbar" style="--wails-draggable: drag">
-      <div class="brand" data-test="brand">
-        <BrandLogo class="brand-logo" />
-        <span>圣手运河</span>
+         窗口拖拽 CSS 契约),交互按钮逐个降级为 no-drag 保证可点击。
+         定高 40px 与 macOS 标题栏视觉融合;padding-left 78px 给左上角红绿灯
+         留位(标准位三枚按钮约 60px 宽,余量让品牌标识与红绿灯不贴)。 -->
+    <header
+      class="z-10 flex h-10 flex-none items-center gap-1 border-b border-border bg-background pr-3 pl-[78px]"
+      data-test="topbar"
+      style="--wails-draggable: drag"
+    >
+      <div class="flex flex-none items-center gap-1.5" data-test="brand">
+        <BrandLogo class="size-4.5 flex-none text-foreground" />
+        <span class="text-[13px] font-semibold tracking-tight">圣手运河</span>
       </div>
-      <div class="spacer"></div>
-      <button
-        class="btn ghost"
+      <div class="flex-1"></div>
+      <Button
+        variant="ghost"
+        size="sm"
         type="button"
+        class="cursor-pointer text-[13px]"
         data-test="btn-refresh-active"
         style="--wails-draggable: no-drag"
         :disabled="!active || active.kind === 'sql' || active.kind === 'ch-sql' || active.kind === 'mysql-sql' || active.kind === 'es-sql' || active.kind === 'hive-sql'"
         @click="refreshActive"
       >
+        <RefreshCw class="size-3.5" />
         刷新
-      </button>
-      <button
-        class="btn ghost icon-btn"
-        :class="{ 'has-update': updateAvailable }"
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
         type="button"
+        class="relative size-7 cursor-pointer"
+        :class="updateAvailable ? 'has-update' : ''"
         data-test="btn-update"
         style="--wails-draggable: no-drag"
         :title="updateAvailable ? `发现新版本 ${latestVersion}，点击查看` : '检查更新'"
         @click="openUpdate"
       >
-        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-          <path d="M8 2.5v7.2M8 2.5 5.4 5.1M8 2.5l2.6 2.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-          <path d="M3 10.5v1.8c0 .7.5 1.2 1.2 1.2h7.6c.7 0 1.2-.5 1.2-1.2v-1.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-        </svg>
-        <span v-if="updateAvailable" class="update-dot" data-test="update-dot"></span>
-      </button>
-      <button
-        class="btn ghost"
+        <ArrowDownToLine class="size-4" />
+        <span
+          v-if="updateAvailable"
+          class="update-dot absolute top-[3px] right-[3px] size-2 rounded-full bg-destructive ring-2 ring-background"
+          data-test="update-dot"
+        ></span>
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
         type="button"
+        class="cursor-pointer text-[13px]"
         data-test="btn-new-query"
         style="--wails-draggable: no-drag"
         :disabled="!canNewQuery"
         :title="canNewQuery ? '新建查询' : '请先打开 Kafka/ClickHouse 连接的标签页'"
         @click="openNewQuery"
       >
+        <FilePlus class="size-3.5" />
         新建查询
-      </button>
-      <button class="btn ghost" type="button" data-test="btn-settings" style="--wails-draggable: no-drag" @click="showSettings = true">设置</button>
-      <button class="btn ghost" type="button" data-test="btn-docs-open" style="--wails-draggable: no-drag" @click="showDocs = true">文档</button>
-      <button
-        class="btn ghost icon-btn"
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
         type="button"
+        class="cursor-pointer text-[13px]"
+        data-test="btn-settings"
+        style="--wails-draggable: no-drag"
+        @click="showSettings = true"
+      >
+        <Settings class="size-3.5" />
+        设置
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        type="button"
+        class="cursor-pointer text-[13px]"
+        data-test="btn-docs-open"
+        style="--wails-draggable: no-drag"
+        @click="showDocs = true"
+      >
+        <BookOpen class="size-3.5" />
+        文档
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        type="button"
+        class="size-7 cursor-pointer"
         data-test="btn-sql-files"
         style="--wails-draggable: no-drag"
         title="SQL文件"
         @click="toggleFilesPanel"
       >
-        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-          <path d="M4 1.5h5.2l3.3 3.3v9.7a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
-          <path d="M9.2 1.5v3.3h3.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
-          <path d="M5 8h5.4M5 10.5h4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-        </svg>
-      </button>
+        <FileText class="size-4" />
+      </Button>
     </header>
 
-    <div class="body">
-      <aside class="sidebar" :style="{ width: `${sidebarWidth}px` }" data-test="sidebar">
+    <div class="flex min-h-0 flex-1">
+      <aside
+        class="sidebar flex-none overflow-auto bg-sidebar text-sidebar-foreground"
+        :style="{ width: `${sidebarWidth}px` }"
+        data-test="sidebar"
+      >
         <ConnectionTree
           :connections="props.connections"
           @open-topic="openTopic"
@@ -732,19 +782,27 @@ function onTabDragEnd(): void {
       </aside>
 
       <div
-        class="sidebar-resizer"
+        class="sidebar-resizer relative z-[5] w-[5px] flex-none cursor-col-resize transition-colors hover:bg-border"
+        :class="resizing ? 'bg-border' : 'bg-transparent'"
         data-test="sidebar-resizer"
         title="拖动调整侧边栏宽度"
         @mousedown.prevent="startResize"
       ></div>
 
-      <main class="workspace">
-        <div v-if="tabs.openTabs.length" class="tabbar">
+      <main class="flex min-w-0 flex-1 flex-col">
+        <!-- DBX 风格 tab 条:底部贯通分隔线,激活项 bg-accent + 上/侧边框与
+             内容区相连;关闭钮 lucide X(12px),非激活 tab 悬停才出现。 -->
+        <div v-if="tabs.openTabs.length" class="flex flex-none items-end gap-1 border-b border-border px-2 pt-1">
           <div
             v-for="(t, i) in tabs.openTabs"
             :key="t.id"
-            class="tab"
-            :class="{ active: t.id === tabs.activeTabId, dragging: dragFrom === i }"
+            class="group flex h-8 max-w-[200px] cursor-pointer items-center gap-1.5 rounded-t-md border border-b-0 px-2.5 text-[13px] whitespace-nowrap transition-colors"
+            :class="[
+              t.id === tabs.activeTabId
+                ? 'active border-border bg-accent text-foreground'
+                : 'border-transparent text-muted-foreground hover:bg-accent/60 hover:text-foreground',
+              dragFrom === i ? 'dragging opacity-50' : '',
+            ]"
             data-test="tab"
             draggable="true"
             @click="tabs.setActive(t.id)"
@@ -754,12 +812,20 @@ function onTabDragEnd(): void {
             @drop.prevent="onTabDrop($event, i)"
             @dragend="onTabDragEnd"
           >
-            <span class="tab-title" data-test="tab-title">{{ t.title }}</span>
-            <button class="tab-close" type="button" data-test="tab-close" @click.stop="tabs.closeTab(t.id)">✕</button>
+            <span class="min-w-0 truncate" data-test="tab-title">{{ t.title }}</span>
+            <button
+              type="button"
+              class="cursor-pointer rounded-sm border-none bg-transparent p-0.5 leading-none text-muted-foreground transition-opacity hover:text-destructive"
+              :class="t.id === tabs.activeTabId ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'"
+              data-test="tab-close"
+              @click.stop="tabs.closeTab(t.id)"
+            >
+              <X class="size-3" />
+            </button>
           </div>
         </div>
 
-        <div class="workspace-body">
+        <div class="min-h-0 flex-1 overflow-auto">
           <HomeView v-if="!active" />
           <!-- 单点动态组件 + KeepAlive:缓存键 = tab id(同类多 tab 实例隔离),
                切走缓存切回复用;max 为 LRU 上限兜底内存,全部 tab 关闭时随
@@ -773,7 +839,8 @@ function onTabDragEnd(): void {
 
       <div
         v-if="filesOpen"
-        class="files-resizer"
+        class="files-resizer relative z-[5] w-[5px] flex-none cursor-col-resize transition-colors hover:bg-border"
+        :class="filesResizing ? 'bg-border' : 'bg-transparent'"
         data-test="files-resizer"
         title="拖动调整 SQL文件栏宽度"
         @mousedown.prevent="startFilesResize"
@@ -781,7 +848,7 @@ function onTabDragEnd(): void {
 
       <aside
         v-if="filesOpen"
-        class="files-sidebar"
+        class="files-sidebar flex-none overflow-auto border-l border-border bg-sidebar text-sidebar-foreground"
         :style="{ width: `${filesWidth}px` }"
         data-test="files-sidebar"
       >
@@ -792,7 +859,13 @@ function onTabDragEnd(): void {
     <StatusBar />
 
     <!-- 全局轻提示浮层:由 toast store 驱动,底部居中,自动消失在 store 内定时。 -->
-    <div v-if="toast.message" class="toast" data-test="toast">{{ toast.message }}</div>
+    <div
+      v-if="toast.message"
+      class="pointer-events-none fixed bottom-[46px] left-1/2 z-[1500] max-w-[70vw] -translate-x-1/2 rounded-md border border-border bg-popover px-4 py-2 text-[13px] text-foreground shadow-md"
+      data-test="toast"
+    >
+      {{ toast.message }}
+    </div>
 
     <ProducerPanel
       v-if="activeTopic"
@@ -817,20 +890,39 @@ function onTabDragEnd(): void {
       <div
         v-if="contextTab"
         ref="contextMenuEl"
-        class="tab-context-menu"
+        class="fixed z-[1200] flex min-w-[130px] flex-col rounded-md border border-border bg-popover p-1 shadow-md"
         data-test="tab-context-menu"
         :style="{ left: `${contextX}px`, top: `${contextY}px` }"
         @click.stop
         @contextmenu.prevent.stop
       >
-        <button class="context-item" type="button" data-test="context-close" @click="contextClose">关闭</button>
-        <button class="context-item" type="button" data-test="context-close-others" @click="contextCloseOthers">
+        <button
+          class="cursor-pointer rounded-sm px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-accent"
+          type="button"
+          data-test="context-close"
+          @click="contextClose"
+        >
+          关闭
+        </button>
+        <button
+          class="cursor-pointer rounded-sm px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-accent"
+          type="button"
+          data-test="context-close-others"
+          @click="contextCloseOthers"
+        >
           关闭其他
         </button>
-        <button class="context-item" type="button" data-test="context-close-all" @click="contextCloseAll">关闭全部</button>
+        <button
+          class="cursor-pointer rounded-sm px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-accent"
+          type="button"
+          data-test="context-close-all"
+          @click="contextCloseAll"
+        >
+          关闭全部
+        </button>
         <button
           v-if="contextTab.kind !== 'sql' && contextTab.kind !== 'ch-sql' && contextTab.kind !== 'mysql-sql' && contextTab.kind !== 'postgres-sql' && contextTab.kind !== 'es-sql' && contextTab.kind !== 'hive-sql'"
-          class="context-item"
+          class="cursor-pointer rounded-sm px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-accent"
           type="button"
           data-test="context-refresh"
           @click="contextRefresh"
@@ -843,169 +935,14 @@ function onTabDragEnd(): void {
 </template>
 
 <style scoped>
-.layout {
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-  background: transparent;
-  color: var(--text);
-  font-family: var(--font);
-}
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  /* 标题栏双栏合一:定高 40px 与 macOS 标题栏视觉融合,内容垂直居中;
-     padding-left 78px 给左上角红绿灯留位(标准位三枚按钮约 60px 宽,
-     余量让品牌标识与红绿灯不贴)。flex:none 防止极矮窗口被压缩。 */
-  height: 40px;
-  flex: none;
-  padding: 0 16px 0 78px;
-  border-bottom: 1px solid var(--border);
-  background: var(--topbar-bg);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
-  z-index: 10;
-}
-.brand { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
-.brand-logo { width: 18px; height: 18px; color: var(--accent); flex-shrink: 0; }
-.spacer { flex: 1; }
-/* .btn 基座/变体走全局基类;这里只留顶栏图标的局部修饰。 */
-.icon-btn { display: inline-flex; align-items: center; justify-content: center; padding: 6px 8px; position: relative; }
-/* 更新红点:8px 圆点叠在图标右上角,2px 描边与底色同色用于分隔,pulse 克制(缩放+微降透明度)。 */
-.icon-btn.has-update .update-dot {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--danger);
-  box-shadow: 0 0 0 2px var(--bg);
+/* 迁移保留:更新红点的脉冲动画依赖 @keyframes 声明,无法用单一工具类表达
+   (keyframes 需落在本组件 scoped 层);红点的定位/底色/描边环已全部改用
+   Tailwind 工具类(见模板 .update-dot 上的类)。 */
+.update-dot {
   animation: update-dot-pulse 2s ease-in-out infinite;
 }
 @keyframes update-dot-pulse {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(0.82); opacity: 0.55; }
 }
-.body { flex: 1; display: flex; min-height: 0; }
-.sidebar {
-  width: 336px;
-  border-right: none;
-  overflow: auto;
-  background: var(--sidebar-bg);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
-  flex: none;
-}
-.sidebar-resizer {
-  width: 5px;
-  flex: none;
-  cursor: col-resize;
-  background: transparent;
-  transition: background 0.15s ease;
-  position: relative;
-  z-index: 5;
-}
-.sidebar-resizer:hover,
-.layout.resizing .sidebar-resizer {
-  background: var(--accent-soft);
-}
-.layout.resizing,
-.layout.files-resizing {
-  cursor: col-resize;
-  user-select: none;
-  -webkit-user-select: none;
-}
-.files-resizer {
-  width: 5px;
-  flex: none;
-  cursor: col-resize;
-  background: transparent;
-  transition: background 0.15s ease;
-  position: relative;
-  z-index: 5;
-}
-.files-resizer:hover,
-.layout.files-resizing .files-resizer {
-  background: var(--accent-soft);
-}
-.files-sidebar {
-  border-left: 1px solid var(--border);
-  overflow: auto;
-  background: var(--sidebar-bg);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
-  flex: none;
-}
-.toast {
-  position: fixed;
-  left: 50%;
-  bottom: 46px;
-  transform: translateX(-50%);
-  z-index: 1500;
-  max-width: 70vw;
-  padding: 8px 16px;
-  font-size: 13px;
-  color: var(--text);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
-  pointer-events: none;
-}
-.workspace { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.tabbar { display: flex; align-items: flex-end; gap: 4px; padding: 8px 12px 0; }
-.tab {
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 12px;
-  border-radius: 9px 9px 0 0;
-  cursor: pointer; font-size: 13px; color: var(--text-secondary);
-  border: 1px solid transparent; border-bottom: none; max-width: 200px;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-.tab:hover { background: var(--bg-hover); color: var(--text); }
-.tab.active {
-  background: var(--bg-elevated);
-  color: var(--text);
-  border-color: var(--border);
-  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.04);
-}
-.tab-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tab-close {
-  background: none; border: none; color: var(--text-tertiary);
-  cursor: pointer; font-size: 12px; border-radius: 4px; line-height: 1;
-  padding: 1px 3px;
-}
-.tab-close:hover { color: var(--danger); }
-.tab.dragging {
-  opacity: 0.5;
-  border-color: var(--accent);
-}
-.tab-context-menu {
-  position: fixed;
-  z-index: 1200;
-  min-width: 130px;
-  display: flex;
-  flex-direction: column;
-  padding: 4px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
-}
-.context-item {
-  text-align: left;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  color: var(--text);
-  font-size: 13px;
-  font-family: var(--font);
-  padding: 7px 10px;
-  border-radius: var(--radius-sm);
-  transition: background 0.1s ease;
-}
-.context-item:hover { background: var(--bg-hover); }
-.workspace-body { flex: 1; min-height: 0; overflow: auto; }
 </style>

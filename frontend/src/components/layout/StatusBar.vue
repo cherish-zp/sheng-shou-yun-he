@@ -17,46 +17,17 @@ const online = computed(() => Object.values(store.statusById).filter((s) => s ==
 </script>
 
 <template>
-  <footer class="statusbar" data-test="status-bar">
-    <span class="statusbar-count" data-test="status-count">连接 {{ total }} · 在线 {{ online }}</span>
-    <span class="statusbar-right">
-      <span class="statusbar-version" data-test="status-version">v{{ APP_VERSION }}</span>
-      <span class="statusbar-author" data-test="status-author">By Mr Zp</span>
+  <!-- DBX 化:flat 底(bg-muted/30)+ 语义 token 文字,数字列用 tabular-nums
+       对齐;错误消息截断展示,版本/署名恒定不换行。 -->
+  <footer
+    class="flex flex-none items-center justify-between gap-4 border-t border-border bg-muted/30 px-4 py-1 text-xs text-muted-foreground"
+    data-test="status-bar"
+  >
+    <span class="tabular-nums whitespace-nowrap" data-test="status-count">连接 {{ total }} · 在线 {{ online }}</span>
+    <span class="flex min-w-0 items-center gap-2">
+      <span v-if="store.error" class="min-w-0 truncate text-destructive" data-test="status-error">最近错误：{{ store.error }}</span>
+      <span class="tabular-nums whitespace-nowrap text-muted-foreground/70" data-test="status-version">v{{ APP_VERSION }}</span>
+      <span class="whitespace-nowrap text-muted-foreground/70" data-test="status-author">By Mr Zp</span>
     </span>
-    <span v-if="store.error" class="statusbar-error" data-test="status-error">最近错误：{{ store.error }}</span>
   </footer>
 </template>
-
-<style scoped>
-.statusbar {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-height: 0;
-  padding: 5px 16px;
-  border-top: 1px solid var(--border);
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-family: var(--font);
-}
-.statusbar-count { white-space: nowrap; }
-.statusbar-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.statusbar-version,
-.statusbar-author { white-space: nowrap; color: var(--text-tertiary); }
-.statusbar-error {
-  min-width: 0;
-  color: var(--danger);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-</style>

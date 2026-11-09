@@ -12,6 +12,8 @@ export interface SqlConsoleApi {
 
 <script setup lang="ts">
 import { onMounted } from 'vue'
+import { FileText, Save, SaveAll, Trash2 } from 'lucide-vue-next'
+import { Button } from '@/components/ui/button'
 import type { ConnectionType } from '@/api/types'
 import { useConnectionsStore } from '@/store/connections'
 import { useQueryFiles } from '@/composables/queryFiles'
@@ -78,144 +80,80 @@ function onDelete(): void {
 </script>
 
 <template>
-  <div class="files-panel" data-test="files-panel">
-    <div class="panel-head">SQL文件</div>
+  <div class="flex h-full flex-col text-[13px]" data-test="files-panel">
+    <div class="flex flex-none items-center gap-1.5 px-3 pt-3 pb-2 font-semibold text-foreground">
+      <FileText class="size-3.5 text-muted-foreground" />
+      SQL文件
+    </div>
 
-    <div class="toolbar">
-      <button class="tool-btn" type="button" data-test="files-save" :disabled="!consoleApi" @click="onSave">
-        保存
-      </button>
-      <button class="tool-btn" type="button" data-test="files-save-as" :disabled="!consoleApi" @click="onSaveAs">
-        另存为
-      </button>
-      <button
-        class="tool-btn"
+    <div class="flex flex-none gap-1.5 px-3 pb-2">
+      <Button
+        variant="outline"
+        size="sm"
         type="button"
+        class="h-7 flex-1 cursor-pointer text-xs"
+        data-test="files-save"
+        :disabled="!consoleApi"
+        @click="onSave"
+      >
+        <Save class="size-3" />
+        保存
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        type="button"
+        class="h-7 flex-1 cursor-pointer text-xs"
+        data-test="files-save-as"
+        :disabled="!consoleApi"
+        @click="onSaveAs"
+      >
+        <SaveAll class="size-3" />
+        另存为
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        type="button"
+        class="h-7 flex-1 cursor-pointer text-xs"
         data-test="files-file-delete"
         :disabled="!consoleApi"
         @click="onDelete"
       >
+        <Trash2 class="size-3" />
         删除
-      </button>
+      </Button>
     </div>
 
-    <div v-if="fileError" class="error" data-test="files-error">{{ fileError }}</div>
+    <div v-if="fileError" class="mx-3 mb-2 flex-none rounded-md bg-destructive/10 px-2 py-1.5 text-xs break-all text-destructive" data-test="files-error">
+      {{ fileError }}
+    </div>
 
-    <div class="list">
+    <div class="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2 pb-2.5">
+      <!-- 文件名与归属行两个 span 必须保持相邻行书写:Vue 模板空白压缩会把
+           换行空白节点移除,条目 text() 才能是「文件名+归属」连续文本。 -->
       <button
         v-for="(f, i) in files"
         :key="f.name"
-        class="file-item"
-        :class="{ active: consoleApi?.currentFile() === f.name }"
         type="button"
+        class="flex w-full flex-none cursor-pointer flex-col items-start gap-px rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent"
+        :class="
+          consoleApi?.currentFile() === f.name
+            ? 'active bg-accent font-medium text-foreground'
+            : 'text-muted-foreground hover:text-foreground'
+        "
         :data-test="`files-item-${i}`"
         :title="connLabel(f.connection_id)"
         @click="onItemSelect(f.name, f.connection_id)"
       >
-        <span class="file-name">{{ f.name }}</span>
-        <span class="file-meta" :data-test="`files-meta-${i}`">{{ connLabel(f.connection_id) }}</span>
+        <span class="w-full truncate">{{ f.name }}</span>
+        <span
+          class="w-full truncate text-[11px]"
+          :class="consoleApi?.currentFile() === f.name ? 'text-foreground/70' : 'text-muted-foreground/80'"
+          :data-test="`files-meta-${i}`"
+        >{{ connLabel(f.connection_id) }}</span>
       </button>
-      <div v-if="!files.length" class="empty" data-test="files-empty">暂无查询文件</div>
+      <div v-if="!files.length" class="flex-none px-2 py-3.5 text-center text-xs text-muted-foreground" data-test="files-empty">暂无查询文件</div>
     </div>
   </div>
 </template>
-
-<style scoped>
-.files-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  font-size: 13px;
-}
-.panel-head {
-  padding: 10px 12px 6px;
-  font-weight: 600;
-  color: var(--text);
-}
-.toolbar {
-  display: flex;
-  gap: 6px;
-  padding: 0 12px 8px;
-}
-.tool-btn {
-  flex: 1;
-  padding: 4px 0;
-  font-size: 12px;
-  font-family: var(--font);
-  color: var(--text);
-  background: transparent;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.15s ease, opacity 0.15s ease;
-}
-.tool-btn:hover:not(:disabled) { background: var(--bg-hover); }
-.tool-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.error {
-  margin: 0 12px 8px;
-  padding: 6px 8px;
-  font-size: 12px;
-  color: var(--danger);
-  background: var(--danger-soft);
-  border-radius: 6px;
-  word-break: break-all;
-}
-.hint {
-  margin: 0 12px 8px;
-  padding: 6px 8px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  background: var(--bg-hover);
-  border-radius: 6px;
-}
-.list {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 0 8px 10px;
-}
-.file-item {
-  text-align: left;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 5px 8px;
-  font-size: 12px;
-  font-family: var(--font);
-  color: var(--text-secondary);
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.1s ease, color 0.1s ease;
-}
-.file-name {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.file-meta {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.file-item:hover { background: var(--bg-hover); color: var(--text); }
-.file-item:hover .file-meta { color: var(--text-secondary); }
-.file-item.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 500;
-}
-.file-item.active .file-meta { color: var(--accent); opacity: 0.75; }
-.empty {
-  padding: 14px 8px;
-  font-size: 12px;
-  color: var(--text-tertiary);
-  text-align: center;
-}
-</style>
